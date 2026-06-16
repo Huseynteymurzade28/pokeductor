@@ -4,11 +4,11 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus};
-use crate::i18n::Strings;
+use crate::i18n::{Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
 
@@ -43,6 +43,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(cols[1]);
     render_details(frame, app, &strings, right[0]);
     render_evolution(frame, app, &strings, right[1]);
+
+    // The language picker floats above everything when open.
+    if app.language_picker {
+        render_language_picker(frame, app, &strings, area);
+    }
 }
 
 fn render_header(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -375,7 +380,12 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         return;
     };
 
-    let current = app.selected_name.as_deref();
+    // Highlight the chain node matching the displayed species (forms like
+    // "raichu-alola" map back to their base "raichu" node).
+    let current = app
+        .selected_detail()
+        .map(|d| d.species.as_str())
+        .or(app.selected_name.as_deref());
     // Only when focused does the cursor highlight a specific member.
     let cursor_name = if focused {
         app.chain_names().get(app.evo_cursor).cloned()
@@ -415,13 +425,15 @@ fn panel_block(title: &'static str, focused: bool) -> Block<'static> {
 }
 
 fn panel_block_owned(title: String, focused: bool) -> Block<'static> {
-    let (border, text) = if focused {
-        (theme::MAUVE, theme::MAUVE)
+    // Focused panels glow warm yellow with a heavier double rule; resting panels
+    // recede to a thin indigo frame — a retro DOS-panel feel.
+    let (border, text, border_type) = if focused {
+        (theme::MAUVE, theme::MAUVE, BorderType::Double)
     } else {
-        (theme::OVERLAY, theme::SUBTEXT)
+        (theme::OVERLAY, theme::SUBTEXT, BorderType::Plain)
     };
     Block::bordered()
-        .border_type(BorderType::Rounded)
+        .border_type(border_type)
         .border_style(Style::default().fg(border))
         .title(Span::styled(
             title,
@@ -751,5 +763,67 @@ fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
     }
     if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(x, y)) {
         cell.set_symbol(symbol).set_fg(color);
+    }
+}
+
+// --- Language picker ------------------------------------------------------
+
+/// Draws the little modal card for switching interface language.
+fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = 26u16;
+    let height = Language::ALL.len() as u16 + 4; // borders + title pad + hint
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.language_title,
+            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+
+    let mut lines: Vec<Line> = Vec::with_capacity(Language::ALL.len());
+    for (i, lang) in Language::ALL.iter().enumerate() {
+        let selected = i == app.lang_cursor;
+        let active = *lang == app.language;
+        let marker = if active { "●" } else { "○" };
+        let label = format!(" {marker} {:<10} {} ", lang.label(), lang.tag());
+        let style = if selected {
+            Style::default()
+                .fg(theme::BASE)
+                .bg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD)
+        } else if active {
+            Style::default().fg(theme::MAUVE)
+        } else {
+            Style::default().fg(theme::TEXT)
+        };
+        lines.push(Line::from(Span::styled(label, style)));
+    }
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        "↑/↓ · Enter · Esc",
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
+/// A fixed-size `Rect` centred within `area` (clamped to fit).
+fn centered_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
     }
 }

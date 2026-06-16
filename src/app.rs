@@ -18,7 +18,10 @@ use crate::api;
 use crate::i18n::Language;
 use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 
-/// Messages sent from background fetch tasks to the UI loop.
+/// Messages sent from background fetch tasks to the UI loop. The payloads are
+/// large but short-lived and low-frequency, so the size difference between
+/// variants isn't worth boxing around.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Message {
     /// The master Pokemon list finished loading.
@@ -69,6 +72,9 @@ pub struct App {
     /// Cursor into the evolution chain (depth-first order) while the evolution
     /// panel is focused.
     pub evo_cursor: usize,
+    /// Whether the language-picker card is open, and which row it highlights.
+    pub language_picker: bool,
+    pub lang_cursor: usize,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
     /// Name currently being fetched, if any (drives the detail spinner).
@@ -101,6 +107,8 @@ impl App {
             sprites: HashMap::new(),
             sprite_loading: HashSet::new(),
             evo_cursor: 0,
+            language_picker: false,
+            lang_cursor: 0,
             selected_name: None,
             loading_detail: None,
             list_loading: false,
@@ -298,10 +306,39 @@ impl App {
             self.should_quit = true;
             return;
         }
+        // The language picker is modal: it grabs all input while open.
+        if self.language_picker {
+            self.handle_language_key(key);
+            return;
+        }
         match self.focus {
             Focus::List => self.handle_list_key(key),
             Focus::Search => self.handle_search_key(key),
             Focus::Evolution => self.handle_evolution_key(key),
+        }
+    }
+
+    /// Opens the language picker, parking the cursor on the active language.
+    fn open_language_picker(&mut self) {
+        self.lang_cursor = self.language.index();
+        self.language_picker = true;
+    }
+
+    fn handle_language_key(&mut self, key: KeyEvent) {
+        let len = Language::ALL.len();
+        match key.code {
+            KeyCode::Esc => self.language_picker = false,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.lang_cursor = (self.lang_cursor + len - 1) % len;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.lang_cursor = (self.lang_cursor + 1) % len;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Char('L') => {
+                self.language = Language::ALL[self.lang_cursor];
+                self.language_picker = false;
+            }
+            _ => {}
         }
     }
 
@@ -315,7 +352,7 @@ impl App {
             KeyCode::Enter => self.request_selected(),
             KeyCode::Char('e') | KeyCode::Char('E') => self.focus_evolution(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
-            KeyCode::Char('l') | KeyCode::Char('L') => self.language = self.language.next(),
+            KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
             _ => {}
         }
     }

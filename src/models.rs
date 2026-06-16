@@ -63,6 +63,10 @@ pub struct PokemonDetail {
     pub id: u32,
     /// Raw API name (lowercase). Use [`title_case`] for display.
     pub name: String,
+    /// Base species slug, which can differ from `name` for alternate forms
+    /// (e.g. `name = "raichu-alola"` but `species = "raichu"`). This is the key
+    /// the species and evolution endpoints expect.
+    pub species: String,
     pub types: Vec<String>,
     pub stats: Vec<Stat>,
     /// Height in decimetres, as returned by the API.

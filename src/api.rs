@@ -53,8 +53,10 @@ pub async fn fetch_pokemon_bundle(
     let mut detail = fetch_detail(client, name).await?;
 
     // The species record carries both the evolution chain *and* the Pokedex
-    // blurb shown on the info card, so we fetch it once and read both out.
-    let species = fetch_species(client, &detail.name).await?;
+    // blurb shown on the info card, so we fetch it once and read both out. We
+    // key it on the *base species* (not `detail.name`) so alternate forms like
+    // `raichu-alola` resolve instead of 404-ing.
+    let species = fetch_species(client, &detail.species).await?;
     detail.genus = species.genus;
     detail.flavor = species.flavor;
     let evolution = fetch_chain(client, &species.chain_url).await?;
@@ -117,6 +119,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
     Ok(PokemonDetail {
         id: raw.id,
         name: raw.name,
+        species: raw.species.name,
         types: types.into_iter().map(|(_, name)| name).collect(),
         stats,
         height: raw.height,
@@ -204,6 +207,7 @@ struct RawPokemon {
     types: Vec<RawTypeSlot>,
     stats: Vec<RawStatSlot>,
     sprites: RawSprites,
+    species: NamedResource,
 }
 
 #[derive(serde::Deserialize)]

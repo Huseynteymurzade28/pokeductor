@@ -15,12 +15,20 @@ pub enum Language {
 }
 
 impl Language {
-    /// Cycles to the next language (wraps around). Bound to `L`.
-    pub fn next(self) -> Self {
+    /// Every supported language, in picker order.
+    pub const ALL: [Language; 3] = [Language::English, Language::Turkish, Language::German];
+
+    /// Position of this language within [`Language::ALL`].
+    pub fn index(self) -> usize {
+        Language::ALL.iter().position(|&l| l == self).unwrap_or(0)
+    }
+
+    /// Endonym shown in the language picker, e.g. `"Türkçe"`.
+    pub fn label(self) -> &'static str {
         match self {
-            Language::English => Language::Turkish,
-            Language::Turkish => Language::German,
-            Language::German => Language::English,
+            Language::English => "English",
+            Language::Turkish => "Türkçe",
+            Language::German => "Deutsch",
         }
     }
 
@@ -88,6 +96,8 @@ pub struct Strings {
     pub evo_nav_hint: &'static str,
     /// Placeholder under a chain member whose sprite is still loading.
     pub sprite_loading: &'static str,
+    /// Title of the language-picker card.
+    pub language_title: &'static str,
 }
 
 impl Strings {
@@ -118,6 +128,7 @@ impl Strings {
             expand_hint: "Press E to browse evolutions",
             evo_nav_hint: "←/→ Select · Enter Jump · Esc Back",
             sprite_loading: "loading…",
+            language_title: " Language ",
         }
     }
 
@@ -148,6 +159,7 @@ impl Strings {
             expand_hint: "Evrimlere göz atmak için E'ye basın",
             evo_nav_hint: "←/→ Seç · Enter Git · Esc Geri",
             sprite_loading: "yükleniyor…",
+            language_title: " Dil ",
         }
     }
 
@@ -178,6 +190,7 @@ impl Strings {
             expand_hint: "Drücke E für die Entwicklungsreihe",
             evo_nav_hint: "←/→ Wählen · Enter Springen · Esc Zurück",
             sprite_loading: "lädt…",
+            language_title: " Sprache ",
         }
     }
 }
