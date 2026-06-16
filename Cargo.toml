@@ -3,6 +3,14 @@ name = "pokeductor"
 version = "0.1.0"
 edition = "2021"
 description = "A terminal-based Pokedex and Evolution Analyzer powered by PokeAPI"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Huseynteymurzade28/pokeductor"
+homepage = "https://github.com/Huseynteymurzade28/pokeductor"
+keywords = ["pokemon", "pokedex", "tui", "ratatui", "cli"]
+categories = ["command-line-utilities"]
+authors = ["Huseyn Teymurzade <huseynteymurrr74@gmail.com>"]
+exclude = ["assets/", ".github/"]
 
 [dependencies]
 ratatui = "0.29"

@@ -43,17 +43,17 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
 <table>
   <tr>  
     <td align="center">
-      <img src="assets/screenshot-main.png" alt="Main view" width="420"><br>
+      <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/screenshot-main.png" alt="Main view" width="420"><br>
       <sub>Main view — list, details & info card</sub>
     </td>
     <td align="center">
-      <img src="assets/screenshot-search.png" alt="Evolution graph" width="420"><br>
+      <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/screenshot-search.png" alt="Evolution graph" width="420"><br>
       <sub>Search Menu</sub>
     </td>
   </tr>
   <tr>
     <td align="center" colspan="2">
-      <img src="assets/demo.gif" alt="Demo" width="420"><br>
+      <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/demo.gif" alt="Demo" width="420"><br>
       <sub>Quick demo</sub>
     </td>
   </tr>
