@@ -184,7 +184,10 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
                 .fg(theme::MAUVE)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("   #{:04}", detail.id), Style::default().fg(theme::OVERLAY)),
+        Span::styled(
+            format!("   #{:04}", detail.dex_number),
+            Style::default().fg(theme::OVERLAY),
+        ),
     ]));
 
     // Pokedex genus, e.g. "Seed Pokémon" — the headline of the info card, in the
@@ -195,6 +198,29 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
             genus.to_string(),
             Style::default().fg(theme::PEACH).add_modifier(Modifier::ITALIC),
         )));
+    }
+
+    // Special-category badges (Legendary / Mythical / Baby), as little chips.
+    let mut badges: Vec<(&str, ratatui::style::Color)> = Vec::new();
+    if detail.is_legendary {
+        badges.push((s.legendary_label, theme::YELLOW));
+    }
+    if detail.is_mythical {
+        badges.push((s.mythical_label, theme::PINK));
+    }
+    if detail.is_baby {
+        badges.push((s.baby_label, theme::TEAL));
+    }
+    if !badges.is_empty() {
+        let mut spans = Vec::new();
+        for (label, color) in badges {
+            spans.push(Span::styled(
+                format!(" ✦ {label} "),
+                Style::default().fg(theme::BASE).bg(color).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+        }
+        lines.push(Line::from(spans));
     }
 
     // Type chips.
@@ -245,8 +271,17 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     // When there's a flavor blurb and room to show it, split a small card off
     // the bottom of the info column for it; otherwise the stats use all of it.
+    // Prefer PokeAPI's native blurb, then a cached machine translation, then the
+    // English original as a last resort.
+    let flavor = detail
+        .flavors
+        .get(lang_code)
+        .map(String::as_str)
+        .or_else(|| app.translation_for(&detail.name, lang_code))
+        .or_else(|| detail.flavors.get("en").map(String::as_str));
+
     let flavor_rows = 4;
-    match detail.flavor_for(lang_code) {
+    match flavor {
         Some(flavor) if info.height as usize > lines.len() + flavor_rows => {
             let split = Layout::vertical([Constraint::Min(0), Constraint::Length(flavor_rows as u16)])
                 .split(info);

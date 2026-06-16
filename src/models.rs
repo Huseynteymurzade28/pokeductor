@@ -62,13 +62,19 @@ pub struct Stat {
 /// Fully resolved details for one Pokemon, ready to render.
 #[derive(Debug, Clone)]
 pub struct PokemonDetail {
-    pub id: u32,
     /// Raw API name (lowercase). Use [`title_case`] for display.
     pub name: String,
     /// Base species slug, which can differ from `name` for alternate forms
     /// (e.g. `name = "raichu-alola"` but `species = "raichu"`). This is the key
     /// the species and evolution endpoints expect.
     pub species: String,
+    /// National Pokedex number (from the species record), which is stable across
+    /// a species' alternate forms — unlike [`id`](Self::id).
+    pub dex_number: u32,
+    /// Whether the species is flagged Legendary / Mythical / a baby Pokemon.
+    pub is_legendary: bool,
+    pub is_mythical: bool,
+    pub is_baby: bool,
     pub types: Vec<String>,
     pub stats: Vec<Stat>,
     /// Height in decimetres, as returned by the API.
@@ -96,14 +102,6 @@ impl PokemonDetail {
         self.genera
             .get(code)
             .or_else(|| self.genera.get("en"))
-            .map(String::as_str)
-    }
-
-    /// Flavor blurb in the requested language, with the same English fallback.
-    pub fn flavor_for(&self, code: &str) -> Option<&str> {
-        self.flavors
-            .get(code)
-            .or_else(|| self.flavors.get("en"))
             .map(String::as_str)
     }
 }

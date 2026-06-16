@@ -131,6 +131,10 @@ pub struct Strings {
     pub sprite_loading: &'static str,
     /// Title of the language-picker card.
     pub language_title: &'static str,
+    /// Badge labels for special species categories.
+    pub legendary_label: &'static str,
+    pub mythical_label: &'static str,
+    pub baby_label: &'static str,
 }
 
 impl Strings {
@@ -162,6 +166,9 @@ impl Strings {
             evo_nav_hint: "←/→ Select · Enter Jump · Esc Back",
             sprite_loading: "loading…",
             language_title: " Language ",
+            legendary_label: "Legendary",
+            mythical_label: "Mythical",
+            baby_label: "Baby",
         }
     }
 
@@ -193,6 +200,9 @@ impl Strings {
             evo_nav_hint: "←/→ Seç · Enter Git · Esc Geri",
             sprite_loading: "yükleniyor…",
             language_title: " Dil ",
+            legendary_label: "Efsanevi",
+            mythical_label: "Mitik",
+            baby_label: "Yavru",
         }
     }
 
@@ -224,6 +234,9 @@ impl Strings {
             evo_nav_hint: "←/→ Wählen · Enter Springen · Esc Zurück",
             sprite_loading: "lädt…",
             language_title: " Sprache ",
+            legendary_label: "Legendär",
+            mythical_label: "Mysteriös",
+            baby_label: "Baby",
         }
     }
 
@@ -255,6 +268,9 @@ impl Strings {
             evo_nav_hint: "←/→ Choisir · Entrée Aller · Esc Retour",
             sprite_loading: "chargement…",
             language_title: " Langue ",
+            legendary_label: "Légendaire",
+            mythical_label: "Fabuleux",
+            baby_label: "Bébé",
         }
     }
 
@@ -286,6 +302,9 @@ impl Strings {
             evo_nav_hint: "←/→ Elegir · Enter Ir · Esc Volver",
             sprite_loading: "cargando…",
             language_title: " Idioma ",
+            legendary_label: "Legendario",
+            mythical_label: "Singular",
+            baby_label: "Bebé",
         }
     }
 
@@ -317,6 +336,9 @@ impl Strings {
             evo_nav_hint: "←/→ Scegli · Invio Vai · Esc Indietro",
             sprite_loading: "caricamento…",
             language_title: " Lingua ",
+            legendary_label: "Leggendario",
+            mythical_label: "Misterioso",
+            baby_label: "Cucciolo",
         }
     }
 }

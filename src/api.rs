@@ -59,6 +59,10 @@ pub async fn fetch_pokemon_bundle(
     // key it on the *base species* (not `detail.name`) so alternate forms like
     // `raichu-alola` resolve instead of 404-ing.
     let species = fetch_species(client, &detail.species).await?;
+    detail.dex_number = species.dex_number;
+    detail.is_legendary = species.is_legendary;
+    detail.is_mythical = species.is_mythical;
+    detail.is_baby = species.is_baby;
     detail.genera = species.genera;
     detail.flavors = species.flavors;
     let evolution = fetch_chain(client, &species.chain_url).await?;
@@ -71,6 +75,31 @@ pub async fn fetch_pokemon_bundle(
     };
 
     Ok((detail, evolution, sprite))
+}
+
+/// Translates `text` from one language to another via MyMemory's free,
+/// key-less endpoint. Used to fill in flavor text for UI languages PokeAPI has
+/// no native entry for (e.g. Turkish). Best-effort: callers fall back to the
+/// English original if this errors or the service is rate-limited.
+pub async fn translate_text(
+    client: &reqwest::Client,
+    text: &str,
+    from: &str,
+    to: &str,
+) -> Result<String, ApiError> {
+    // MyMemory caps anonymous requests at ~500 characters; flavor blurbs are
+    // well under that, but clamp defensively just in case.
+    let clamped: String = text.chars().take(500).collect();
+    let pair = format!("{from}|{to}");
+    let resp: MyMemoryResponse = client
+        .get("https://api.mymemory.translated.net/get")
+        .query(&[("q", clamped.as_str()), ("langpair", pair.as_str())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(resp.response_data.translated_text)
 }
 
 /// Fetches and decodes just the sprite for a named species. Used to lazily
@@ -119,9 +148,14 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
     stats.sort_by_key(|s| s.kind.order());
 
     Ok(PokemonDetail {
-        id: raw.id,
         name: raw.name,
         species: raw.species.name,
+        // Sensible fallback for the default form; overwritten with the true
+        // national number once the species record loads.
+        dex_number: raw.id,
+        is_legendary: false,
+        is_mythical: false,
+        is_baby: false,
         types: types.into_iter().map(|(_, name)| name).collect(),
         stats,
         height: raw.height,
@@ -140,6 +174,10 @@ const CARD_LANGS: [&str; 5] = ["en", "de", "fr", "es", "it"];
 /// The slice of species data the rest of the app cares about.
 struct SpeciesInfo {
     chain_url: String,
+    dex_number: u32,
+    is_legendary: bool,
+    is_mythical: bool,
+    is_baby: bool,
     genera: HashMap<String, String>,
     flavors: HashMap<String, String>,
 }
@@ -173,7 +211,15 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
         }
     }
 
-    Ok(SpeciesInfo { chain_url, genera, flavors })
+    Ok(SpeciesInfo {
+        chain_url,
+        dex_number: species.id,
+        is_legendary: species.is_legendary,
+        is_mythical: species.is_mythical,
+        is_baby: species.is_baby,
+        genera,
+        flavors,
+    })
 }
 
 /// Fetches and parses an evolution chain from its API URL.
@@ -244,6 +290,13 @@ struct RawStatSlot {
 
 #[derive(serde::Deserialize)]
 struct RawSpecies {
+    id: u32,
+    #[serde(default)]
+    is_legendary: bool,
+    #[serde(default)]
+    is_mythical: bool,
+    #[serde(default)]
+    is_baby: bool,
     evolution_chain: Option<RawChainRef>,
     #[serde(default)]
     genera: Vec<RawGenus>,
@@ -277,4 +330,16 @@ struct RawEvolutionChain {
 struct RawChainLink {
     species: NamedResource,
     evolves_to: Vec<RawChainLink>,
+}
+
+#[derive(serde::Deserialize)]
+struct MyMemoryResponse {
+    #[serde(rename = "responseData")]
+    response_data: MyMemoryData,
+}
+
+#[derive(serde::Deserialize)]
+struct MyMemoryData {
+    #[serde(rename = "translatedText")]
+    translated_text: String,
 }

@@ -38,6 +38,12 @@ pub enum Message {
         name: String,
         sprite: Option<Sprite>,
     },
+    /// A machine-translated flavor blurb finished loading.
+    FlavorTranslated {
+        name: String,
+        lang: String,
+        text: String,
+    },
     /// A background task failed.
     Error(String),
 }
@@ -75,6 +81,10 @@ pub struct App {
     /// Whether the language-picker card is open, and which row it highlights.
     pub language_picker: bool,
     pub lang_cursor: usize,
+    /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
+    pub translations: HashMap<(String, String), String>,
+    /// Translation requests currently in flight, to avoid duplicating work.
+    pub translating: HashSet<(String, String)>,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
     /// Name currently being fetched, if any (drives the detail spinner).
@@ -109,6 +119,8 @@ impl App {
             evo_cursor: 0,
             language_picker: false,
             lang_cursor: 0,
+            translations: HashMap::new(),
+            translating: HashSet::new(),
             selected_name: None,
             loading_detail: None,
             list_loading: false,
@@ -133,6 +145,9 @@ impl App {
         let mut ticker = tokio::time::interval(Duration::from_millis(120));
 
         while !self.should_quit {
+            // Cheap, idempotent: requests a translation only when the current
+            // selection+language needs one and none is cached or in flight.
+            self.ensure_translation();
             terminal.draw(|frame| crate::ui::render(frame, &mut self))?;
 
             tokio::select! {
@@ -199,6 +214,53 @@ impl App {
             };
             let _ = tx.send(msg).await;
         });
+    }
+
+    /// Requests a machine translation of the selected Pokemon's flavor text when
+    /// the active language has no native PokeAPI entry (e.g. Turkish) and we
+    /// haven't already translated or queued it.
+    fn ensure_translation(&mut self) {
+        let code = self.language.flavor_code();
+        if code == "en" {
+            return; // English is always the source; nothing to translate
+        }
+        // Gather what we need under a short immutable borrow, then release it.
+        let (name, source) = {
+            let Some(detail) = self.selected_detail() else {
+                return;
+            };
+            if detail.flavors.contains_key(code) {
+                return; // PokeAPI already has this language natively
+            }
+            match detail.flavors.get("en") {
+                Some(src) => (detail.name.clone(), src.clone()),
+                None => return, // no English source to translate from
+            }
+        };
+
+        let key = (name.clone(), code.to_string());
+        if self.translations.contains_key(&key) || self.translating.contains(&key) {
+            return;
+        }
+        self.translating.insert(key);
+
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        let lang = code.to_string();
+        tokio::spawn(async move {
+            // On failure we simply never send: the UI keeps the English text and
+            // the in-flight flag stops us from hammering a rate-limited service.
+            if let Ok(text) = api::translate_text(&client, &source, "en", &lang).await {
+                let _ = tx.send(Message::FlavorTranslated { name, lang, text }).await;
+            }
+        });
+    }
+
+    /// A cached machine translation for `name` in `code`, if one exists.
+    pub fn translation_for(&self, name: &str, code: &str) -> Option<&str> {
+        self.translations
+            .get(&(name.to_string(), code.to_string()))
+            .map(String::as_str)
     }
 
     /// The names in the current evolution chain, depth-first. Empty if no
@@ -283,6 +345,11 @@ impl App {
                 if let Some(sprite) = sprite {
                     self.sprites.insert(name, sprite);
                 }
+            }
+            Message::FlavorTranslated { name, lang, text } => {
+                let key = (name, lang);
+                self.translating.remove(&key);
+                self.translations.insert(key, text);
             }
             Message::Error(err) => {
                 self.error = Some(err);
