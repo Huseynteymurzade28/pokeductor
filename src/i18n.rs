@@ -82,8 +82,10 @@ pub struct Strings {
     pub stat_sp_defense: &'static str,
     pub stat_speed: &'static str,
     pub help: &'static str,
-    /// Hint shown inside the compact evolution panel.
+    /// Hint shown in the evolution panel when it is not focused.
     pub expand_hint: &'static str,
+    /// Hint shown in the evolution panel while it is focused.
+    pub evo_nav_hint: &'static str,
     /// Placeholder under a chain member whose sprite is still loading.
     pub sprite_loading: &'static str,
 }
@@ -112,8 +114,9 @@ impl Strings {
             stat_sp_attack: "Sp. Atk",
             stat_sp_defense: "Sp. Def",
             stat_speed: "Speed",
-            help: " ↑/↓ Navigate · Enter Select · E Evolution · / Search · L Language · Q Quit ",
-            expand_hint: "Press E to expand the evolution chain",
+            help: " ↑/↓ Navigate · Enter Select · E Evolutions · / Search · L Language · Q Quit ",
+            expand_hint: "Press E to browse evolutions",
+            evo_nav_hint: "←/→ Select · Enter Jump · Esc Back",
             sprite_loading: "loading…",
         }
     }
@@ -141,8 +144,9 @@ impl Strings {
             stat_sp_attack: "Öz. Sal",
             stat_sp_defense: "Öz. Sav",
             stat_speed: "Hız",
-            help: " ↑/↓ Gezin · Enter Seç · E Evrim · / Ara · L Dil · Q Çıkış ",
-            expand_hint: "Evrim zincirini açmak için E'ye basın",
+            help: " ↑/↓ Gezin · Enter Seç · E Evrimler · / Ara · L Dil · Q Çıkış ",
+            expand_hint: "Evrimlere göz atmak için E'ye basın",
+            evo_nav_hint: "←/→ Seç · Enter Git · Esc Geri",
             sprite_loading: "yükleniyor…",
         }
     }
@@ -172,6 +176,7 @@ impl Strings {
             stat_speed: "Tempo",
             help: " ↑/↓ Navigieren · Enter Wählen · E Entwicklung · / Suche · L Sprache · Q Beenden ",
             expand_hint: "Drücke E für die Entwicklungsreihe",
+            evo_nav_hint: "←/→ Wählen · Enter Springen · Esc Zurück",
             sprite_loading: "lädt…",
         }
     }

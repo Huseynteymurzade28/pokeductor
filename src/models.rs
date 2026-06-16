@@ -137,13 +137,30 @@ pub struct Sprite {
 }
 
 impl Sprite {
-    /// Returns the RGBA pixel at `(x, y)`, clamped to the image bounds so
-    /// callers can sample freely without bounds-checking.
-    pub fn sample(&self, x: u32, y: u32) -> [u8; 4] {
-        let x = x.min(self.width.saturating_sub(1));
-        let y = y.min(self.height.saturating_sub(1));
-        let idx = (y * self.width + x) as usize;
-        self.pixels.get(idx).copied().unwrap_or([0, 0, 0, 0])
+    /// Average RGBA over the source box `[x0..=x1] × [y0..=y1]`, weighting color
+    /// by alpha so transparent pixels don't muddy the result. The returned alpha
+    /// is the box's mean coverage. Averaging (rather than nearest-neighbour point
+    /// sampling) is what keeps downscaled sprites smooth instead of leaving the
+    /// hard black outline pixels as ragged lines.
+    pub fn box_average(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> [u8; 4] {
+        let x1 = x1.min(self.width.saturating_sub(1)).max(x0);
+        let y1 = y1.min(self.height.saturating_sub(1)).max(y0);
+        let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let p = self.pixels[(y * self.width + x) as usize];
+                let pa = p[3] as u32;
+                r += p[0] as u32 * pa;
+                g += p[1] as u32 * pa;
+                b += p[2] as u32 * pa;
+                a += pa;
+                n += 1;
+            }
+        }
+        if a == 0 || n == 0 {
+            return [0, 0, 0, 0];
+        }
+        [(r / a) as u8, (g / a) as u8, (b / a) as u8, (a / n) as u8]
     }
 
     /// Tight bounding box `(x0, y0, x1, y1)` (inclusive) of the non-transparent

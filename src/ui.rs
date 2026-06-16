@@ -4,7 +4,7 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus};
@@ -43,11 +43,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(cols[1]);
     render_details(frame, app, &strings, right[0]);
     render_evolution(frame, app, &strings, right[1]);
-
-    // The evolution overlay floats above everything when toggled on.
-    if app.show_evolution {
-        render_evolution_overlay(frame, app, &strings, area);
-    }
 }
 
 fn render_header(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -314,15 +309,24 @@ fn render_sprite_capped(frame: &mut Frame, area: Rect, sprite: &Sprite, max_cols
     let cols = (((bw * scale) as u16).max(2)) & !1; // even, so columns map cleanly
     let rows = ((bh * scale) as u16).div_ceil(2).max(1);
 
+    let bw = bw as u32;
+    let bh = bh as u32;
+    let cols_u = cols as u32;
+    let sub_rows = 2 * rows as u32; // each cell row carries two vertical pixels
+
+    // Source box covered by output column `cx` / sub-row `py`, in image pixels.
+    let span_x = |cx: u32| (bx0 + cx * bw / cols_u, bx0 + ((cx + 1) * bw / cols_u).saturating_sub(1));
+    let span_y = |py: u32| (by0 + py * bh / sub_rows, by0 + ((py + 1) * bh / sub_rows).saturating_sub(1));
+
     let mut lines: Vec<Line> = Vec::with_capacity(rows as usize);
     for cy in 0..rows {
+        let (ty0, ty1) = span_y(2 * cy as u32);
+        let (by_0, by_1) = span_y(2 * cy as u32 + 1);
         let mut spans: Vec<Span> = Vec::with_capacity(cols as usize);
         for cx in 0..cols {
-            let sx = bx0 + (cx as u32 * bw as u32) / cols as u32;
-            let sy_top = by0 + (2 * cy as u32 * bh as u32) / (2 * rows as u32);
-            let sy_bot = by0 + ((2 * cy as u32 + 1) * bh as u32) / (2 * rows as u32);
-            let top = pixel_color(sprite.sample(sx, sy_top));
-            let bottom = pixel_color(sprite.sample(sx, sy_bot));
+            let (sx0, sx1) = span_x(cx as u32);
+            let top = pixel_color(sprite.box_average(sx0, ty0, sx1, ty1));
+            let bottom = pixel_color(sprite.box_average(sx0, by_0, sx1, by_1));
             spans.push(Span::styled("▀", Style::default().fg(top).bg(bottom)));
         }
         lines.push(Line::from(spans));
@@ -338,18 +342,22 @@ fn render_sprite_capped(frame: &mut Frame, area: Rect, sprite: &Sprite, max_cols
     frame.render_widget(Paragraph::new(lines), target);
 }
 
-/// Maps an RGBA pixel to a terminal colour, collapsing (mostly) transparent
-/// pixels onto the panel background so the sprite blends into the UI.
-fn pixel_color(rgba: [u8; 4]) -> ratatui::style::Color {
-    if rgba[3] < 128 {
-        theme::BASE
-    } else {
-        ratatui::style::Color::Rgb(rgba[0], rgba[1], rgba[2])
+/// Maps an averaged RGBA pixel to a terminal colour by alpha-compositing it over
+/// the panel background. Blending (rather than a hard transparency threshold)
+/// lets sprite edges fade cleanly into the UI instead of leaving a dark fringe.
+fn pixel_color(rgba: [u8; 4]) -> Color {
+    let a = rgba[3] as u16;
+    if a == 0 {
+        return theme::BASE;
     }
+    let (br, bg, bb) = theme::BASE_RGB;
+    let mix = |fg: u8, bg: u8| ((fg as u16 * a + bg as u16 * (255 - a)) / 255) as u8;
+    Color::Rgb(mix(rgba[0], br), mix(rgba[1], bg), mix(rgba[2], bb))
 }
 
 fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
-    let block = panel_block(s.evolution_title, false);
+    let focused = app.focus == Focus::Evolution;
+    let block = panel_block(s.evolution_title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -367,22 +375,37 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         return;
     };
 
-    let highlight = app.selected_name.as_deref();
-    let lines = evolution_lines(tree, highlight);
-
-    // Reserve the bottom row for the "press E to expand" hint when there's space.
-    if inner.height >= 2 {
-        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-        frame.render_widget(Paragraph::new(lines), rows[0]);
-        let hint = Paragraph::new(Line::from(Span::styled(
-            format!("⤢ {}", s.expand_hint),
-            Style::default().fg(theme::OVERLAY),
-        )))
-        .alignment(Alignment::Center);
-        frame.render_widget(hint, rows[1]);
+    let current = app.selected_name.as_deref();
+    // Only when focused does the cursor highlight a specific member.
+    let cursor_name = if focused {
+        app.chain_names().get(app.evo_cursor).cloned()
     } else {
-        frame.render_widget(Paragraph::new(lines), inner);
+        None
+    };
+    let cursor = cursor_name.as_deref();
+
+    // Reserve the bottom row for a context hint.
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let canvas = rows[0];
+
+    let depth = tree.depth() as u16;
+    let leaves = tree.leaf_count() as u16;
+    let col_w = canvas.width.checked_div(depth).unwrap_or(0);
+    let lane_h = canvas.height.checked_div(leaves).unwrap_or(0);
+
+    // Draw the sprite graph when every card has room; otherwise fall back to the
+    // compact text tree so cramped terminals still show the relationships.
+    if col_w >= MIN_CARD_W && lane_h >= MIN_CARD_H {
+        let mut lane = 0u16;
+        place_node(frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane);
+    } else {
+        frame.render_widget(Paragraph::new(evolution_lines(tree, cursor.or(current))), canvas);
     }
+
+    let hint = if focused { s.evo_nav_hint } else { s.expand_hint };
+    let hint = Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(theme::OVERLAY))))
+        .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
 }
 
 // --- Small rendering helpers ---------------------------------------------
@@ -555,77 +578,30 @@ fn name_span(raw_name: &str, highlight: Option<&str>) -> Span<'static> {
     Span::styled(title_case(raw_name), style)
 }
 
-// --- Evolution overlay (sprite graph) ------------------------------------
+// --- Evolution sprite graph ----------------------------------------------
 
 /// Minimum cells a single sprite card needs to be worth drawing as art rather
 /// than falling back to the compact text tree.
-const MIN_CARD_W: u16 = 14;
-const MIN_CARD_H: u16 = 6;
+const MIN_CARD_W: u16 = 10;
+const MIN_CARD_H: u16 = 4;
 /// Columns reserved between generations for the connector arrows.
-const EVO_GAP: u16 = 6;
-
-/// Draws the full-screen evolution overlay: every species in the chain rendered
-/// as a sprite card, wired together with arrow connectors so the relationships
-/// are visible at a glance.
-fn render_evolution_overlay(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
-    let area = centered_rect(92, 88, full);
-    frame.render_widget(Clear, area);
-
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::MAUVE))
-        .title(Span::styled(
-            s.evolution_title,
-            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(theme::BASE));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let Some(tree) = app.selected_evolution() else {
-        render_centered_text(frame, inner, s.no_evolution, theme::OVERLAY);
-        return;
-    };
-
-    // Split off a one-row footer for the close hint.
-    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-    let canvas = rows[0];
-
-    let depth = tree.depth() as u16;
-    let leaves = tree.leaf_count() as u16;
-    let col_w = canvas.width.checked_div(depth).unwrap_or(0);
-    let lane_h = canvas.height.checked_div(leaves).unwrap_or(0);
-
-    // Only attempt the sprite graph if each card has room; otherwise reuse the
-    // compact textual tree so tiny terminals still get *something* useful.
-    if col_w >= MIN_CARD_W && lane_h >= MIN_CARD_H {
-        let highlight = app.selected_name.as_deref();
-        let mut lane = 0u16;
-        place_node(frame, app, s, tree, highlight, canvas, col_w, lane_h, 0, &mut lane);
-    } else {
-        let lines = evolution_lines(tree, app.selected_name.as_deref());
-        frame.render_widget(Paragraph::new(lines), canvas);
-    }
-
-    let hint = Paragraph::new(Line::from(Span::styled(
-        "Esc · E  ✕",
-        Style::default().fg(theme::OVERLAY),
-    )))
-    .alignment(Alignment::Center);
-    frame.render_widget(hint, rows[1]);
-}
+const EVO_GAP: u16 = 5;
 
 /// Recursively lays out `node` and its descendants. Each generation occupies a
 /// fixed-width column; leaves are stacked into horizontal lanes. Returns the
 /// vertical centre (absolute row) of this node's card so the caller can wire a
 /// connector to it.
+///
+/// `current` is the species shown in the detail panel; `cursor` is the member
+/// the navigation cursor sits on (only set while the panel is focused).
 #[allow(clippy::too_many_arguments)]
 fn place_node(
     frame: &mut Frame,
     app: &App,
     s: &Strings,
     node: &EvolutionTree,
-    highlight: Option<&str>,
+    current: Option<&str>,
+    cursor: Option<&str>,
     canvas: Rect,
     col_w: u16,
     lane_h: u16,
@@ -638,7 +614,7 @@ fn place_node(
     if node.children.is_empty() {
         let top = canvas.y + *lane * lane_h;
         *lane += 1;
-        draw_card(frame, app, s, node, highlight, x, top, card_w, lane_h);
+        draw_card(frame, app, s, node, current, cursor, x, top, card_w, lane_h);
         return top + lane_h / 2;
     }
 
@@ -647,7 +623,9 @@ fn place_node(
         .children
         .iter()
         .map(|child| {
-            place_node(frame, app, s, child, highlight, canvas, col_w, lane_h, depth_idx + 1, lane)
+            place_node(
+                frame, app, s, child, current, cursor, canvas, col_w, lane_h, depth_idx + 1, lane,
+            )
         })
         .collect();
 
@@ -655,7 +633,7 @@ fn place_node(
     let last = *centers.last().unwrap();
     let cy = (first + last) / 2;
     let top = cy.saturating_sub(lane_h / 2);
-    draw_card(frame, app, s, node, highlight, x, top, card_w, lane_h);
+    draw_card(frame, app, s, node, current, cursor, x, top, card_w, lane_h);
 
     let child_x = canvas.x + (depth_idx + 1) * col_w;
     draw_connectors(frame, x + card_w, child_x, cy, &centers);
@@ -663,14 +641,16 @@ fn place_node(
 }
 
 /// Draws one species card: its sprite (or a placeholder while loading) with the
-/// name centred beneath it.
+/// name centred beneath it. The navigation cursor gets a highlighted name bar;
+/// the currently displayed species is tinted but not boxed.
 #[allow(clippy::too_many_arguments)]
 fn draw_card(
     frame: &mut Frame,
     app: &App,
     s: &Strings,
     node: &EvolutionTree,
-    highlight: Option<&str>,
+    current: Option<&str>,
+    cursor: Option<&str>,
     x: u16,
     top: u16,
     w: u16,
@@ -692,10 +672,17 @@ fn draw_card(
         }
     }
 
-    let style = if highlight == Some(node.name.as_str()) {
+    let is_cursor = cursor == Some(node.name.as_str());
+    let is_current = current == Some(node.name.as_str());
+    let style = if is_cursor {
+        Style::default()
+            .fg(theme::BASE)
+            .bg(theme::YELLOW)
+            .add_modifier(Modifier::BOLD)
+    } else if is_current {
         Style::default().fg(theme::YELLOW).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme::GREEN)
     };
     let name = Paragraph::new(Line::from(Span::styled(title_case(&node.name), style)))
         .alignment(Alignment::Center);
@@ -764,17 +751,5 @@ fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
     }
     if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(x, y)) {
         cell.set_symbol(symbol).set_fg(color);
-    }
-}
-
-/// A `Rect` centred within `area`, sized to the given percentages of it.
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let w = area.width * percent_x / 100;
-    let h = area.height * percent_y / 100;
-    Rect {
-        x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
     }
 }

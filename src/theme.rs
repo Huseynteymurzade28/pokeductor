@@ -6,7 +6,10 @@
 use ratatui::style::Color;
 
 // --- Catppuccin Mocha base palette ---------------------------------------
-pub const BASE: Color = Color::Rgb(30, 30, 46);
+/// Raw components of [`BASE`], used when alpha-blending sprite pixels onto the
+/// panel background.
+pub const BASE_RGB: (u8, u8, u8) = (30, 30, 46);
+pub const BASE: Color = Color::Rgb(BASE_RGB.0, BASE_RGB.1, BASE_RGB.2);
 pub const SURFACE: Color = Color::Rgb(49, 50, 68);
 pub const OVERLAY: Color = Color::Rgb(108, 112, 134);
 pub const TEXT: Color = Color::Rgb(205, 214, 244);

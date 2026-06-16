@@ -44,6 +44,9 @@ pub enum Message {
 pub enum Focus {
     Search,
     List,
+    /// The evolution panel: arrow keys move between chain members and Enter
+    /// jumps to the highlighted one.
+    Evolution,
 }
 
 /// The complete, observable state of the running application.
@@ -60,11 +63,12 @@ pub struct App {
     pub evolutions: HashMap<String, EvolutionTree>,
     /// Decoded sprites, keyed by Pokemon name. Absent if a species has no art.
     pub sprites: HashMap<String, Sprite>,
-    /// Names whose sprite is being fetched on demand for the evolution overlay,
+    /// Names whose sprite is being fetched on demand for the evolution panel,
     /// so we never queue the same request twice.
     pub sprite_loading: HashSet<String>,
-    /// Whether the full-screen evolution chain overlay is open (toggled by `E`).
-    pub show_evolution: bool,
+    /// Cursor into the evolution chain (depth-first order) while the evolution
+    /// panel is focused.
+    pub evo_cursor: usize,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
     /// Name currently being fetched, if any (drives the detail spinner).
@@ -96,7 +100,7 @@ impl App {
             evolutions: HashMap::new(),
             sprites: HashMap::new(),
             sprite_loading: HashSet::new(),
-            show_evolution: false,
+            evo_cursor: 0,
             selected_name: None,
             loading_detail: None,
             list_loading: false,
@@ -167,9 +171,11 @@ impl App {
         self.error = None;
         self.selected_name = Some(name.clone());
 
-        // Cache hit: nothing to fetch.
+        // Cache hit: nothing to fetch, but make sure the chain sprites are on
+        // their way (they may not have been requested yet).
         if self.details.contains_key(&name) {
             self.loading_detail = None;
+            self.ensure_chain_sprites();
             return;
         }
 
@@ -187,18 +193,20 @@ impl App {
         });
     }
 
-    /// Opens the evolution overlay and kicks off sprite fetches for every
-    /// member of the current chain that isn't already cached or in flight.
-    fn open_evolution_overlay(&mut self) {
-        let Some(tree) = self.selected_evolution() else {
-            return; // nothing to show yet
-        };
-
+    /// The names in the current evolution chain, depth-first. Empty if no
+    /// evolution data is loaded for the selection.
+    pub fn chain_names(&self) -> Vec<String> {
         let mut names = Vec::new();
-        tree.collect_names(&mut names);
-        self.show_evolution = true;
+        if let Some(tree) = self.selected_evolution() {
+            tree.collect_names(&mut names);
+        }
+        names
+    }
 
-        for name in names {
+    /// Kicks off sprite fetches for every member of the current chain that isn't
+    /// already cached or in flight, so the evolution panel can show its artwork.
+    fn ensure_chain_sprites(&mut self) {
+        for name in self.chain_names() {
             if self.sprites.contains_key(&name) || self.sprite_loading.contains(&name) {
                 continue;
             }
@@ -209,12 +217,31 @@ impl App {
                 let msg = match api::fetch_named_sprite(&client, &name).await {
                     Ok(sprite) => Message::SpriteLoaded { name, sprite },
                     // A failed chain sprite is non-fatal: report no art so the
-                    // overlay shows a placeholder instead of an error banner.
+                    // panel shows a placeholder instead of an error banner.
                     Err(_) => Message::SpriteLoaded { name, sprite: None },
                 };
                 let _ = tx.send(msg).await;
             });
         }
+    }
+
+    /// Loads the chain member currently under the evolution cursor — the quick
+    /// "jump to my next evolution" action.
+    fn jump_to_evolution_member(&mut self) {
+        let names = self.chain_names();
+        let Some(name) = names.get(self.evo_cursor).cloned() else {
+            return;
+        };
+        // Make sure the target is visible in the list and selected there, so the
+        // sidebar stays in sync with the detail panel.
+        self.query.clear();
+        self.recompute_filter();
+        if let Some(abs) = self.all_pokemon.iter().position(|p| p.name == name) {
+            if let Some(pos) = self.filtered.iter().position(|&i| i == abs) {
+                self.list_state.select(Some(pos));
+            }
+        }
+        self.request_selected();
     }
 
     // --- Message handling ------------------------------------------------
@@ -235,7 +262,13 @@ impl App {
                 if let Some(sprite) = sprite {
                     self.sprites.insert(name.clone(), sprite);
                 }
+                let is_selected = self.selected_name.as_deref() == Some(name.as_str());
                 self.details.insert(name, detail);
+                // Now that the chain is known, fetch its members' sprites for
+                // the evolution panel.
+                if is_selected {
+                    self.ensure_chain_sprites();
+                }
             }
             Message::SpriteLoaded { name, sprite } => {
                 self.sprite_loading.remove(&name);
@@ -265,20 +298,10 @@ impl App {
             self.should_quit = true;
             return;
         }
-        // While the evolution overlay is open it captures input: any of Esc/E/Q
-        // dismisses it and nothing else gets through.
-        if self.show_evolution {
-            if matches!(
-                key.code,
-                KeyCode::Esc | KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('q')
-            ) {
-                self.show_evolution = false;
-            }
-            return;
-        }
         match self.focus {
             Focus::List => self.handle_list_key(key),
             Focus::Search => self.handle_search_key(key),
+            Focus::Evolution => self.handle_evolution_key(key),
         }
     }
 
@@ -290,9 +313,44 @@ impl App {
             KeyCode::PageUp => self.move_selection(-10),
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Enter => self.request_selected(),
-            KeyCode::Char('e') | KeyCode::Char('E') => self.open_evolution_overlay(),
+            KeyCode::Char('e') | KeyCode::Char('E') => self.focus_evolution(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.language = self.language.next(),
+            _ => {}
+        }
+    }
+
+    /// Moves focus into the evolution panel, parking the cursor on the species
+    /// currently shown in the detail panel.
+    fn focus_evolution(&mut self) {
+        let names = self.chain_names();
+        if names.is_empty() {
+            return; // no chain to navigate yet
+        }
+        self.evo_cursor = self
+            .selected_name
+            .as_ref()
+            .and_then(|sel| names.iter().position(|n| n == sel))
+            .unwrap_or(0);
+        self.focus = Focus::Evolution;
+    }
+
+    fn handle_evolution_key(&mut self, key: KeyEvent) {
+        let len = self.chain_names().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Tab => self.focus = Focus::List,
+            KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
+            KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k')
+                if self.evo_cursor > 0 =>
+            {
+                self.evo_cursor -= 1;
+            }
+            KeyCode::Right | KeyCode::Down | KeyCode::Char('l') | KeyCode::Char('j')
+                if self.evo_cursor + 1 < len =>
+            {
+                self.evo_cursor += 1;
+            }
+            KeyCode::Enter => self.jump_to_evolution_member(),
             _ => {}
         }
     }
