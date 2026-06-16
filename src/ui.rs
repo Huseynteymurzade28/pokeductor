@@ -1,10 +1,10 @@
 //! All `ratatui` rendering. Pure functions of [`App`] state — given the same
 //! state they always draw the same frame, which keeps the loop trivial.
 
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus};
@@ -43,6 +43,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(cols[1]);
     render_details(frame, app, &strings, right[0]);
     render_evolution(frame, app, &strings, right[1]);
+
+    // The evolution overlay floats above everything when toggled on.
+    if app.show_evolution {
+        render_evolution_overlay(frame, app, &strings, area);
+    }
 }
 
 fn render_header(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -182,6 +187,14 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         Span::styled(format!("   #{:04}", detail.id), Style::default().fg(theme::OVERLAY)),
     ]));
 
+    // Pokedex genus, e.g. "Seed Pokémon" — the headline of the info card.
+    if let Some(genus) = &detail.genus {
+        lines.push(Line::from(Span::styled(
+            genus.clone(),
+            Style::default().fg(theme::PEACH).add_modifier(Modifier::ITALIC),
+        )));
+    }
+
     // Type chips.
     let mut type_spans = vec![Span::styled(
         format!("{}: ", s.types_label),
@@ -228,14 +241,37 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         ),
     ]));
 
-    frame.render_widget(Paragraph::new(lines), info);
+    // When there's a flavor blurb and room to show it, split a small card off
+    // the bottom of the info column for it; otherwise the stats use all of it.
+    let flavor_rows = 4;
+    match &detail.flavor {
+        Some(flavor) if info.height as usize > lines.len() + flavor_rows => {
+            let split = Layout::vertical([Constraint::Min(0), Constraint::Length(flavor_rows as u16)])
+                .split(info);
+            frame.render_widget(Paragraph::new(lines), split[0]);
+            render_flavor_card(frame, split[1], flavor);
+        }
+        _ => frame.render_widget(Paragraph::new(lines), info),
+    }
+}
+
+/// Renders the Pokedex flavor-text blurb as a quoted, word-wrapped little card.
+fn render_flavor_card(frame: &mut Frame, area: Rect, flavor: &str) {
+    let para = Paragraph::new(vec![
+        Line::from(Span::styled(
+            format!("“{flavor}”"),
+            Style::default().fg(theme::SUBTEXT).add_modifier(Modifier::ITALIC),
+        )),
+    ])
+    .wrap(Wrap { trim: true });
+    frame.render_widget(para, area);
 }
 
 // --- Sprite rendering ----------------------------------------------------
 
 /// Maximum cell width we'll ever give a sprite, so it stays a tasteful accent
 /// rather than swallowing the panel on very wide terminals.
-const MAX_SPRITE_COLS: u16 = 34;
+const MAX_SPRITE_COLS: u16 = 40;
 
 /// Chooses the sprite column width: square-ish, bounded by ~40% of the panel
 /// width, the available height (two pixels per cell row), and [`MAX_SPRITE_COLS`].
@@ -246,24 +282,45 @@ fn sprite_col_width(inner: Rect) -> u16 {
     (w & !1).max(2) // keep it even so rows = cols / 2 divides cleanly
 }
 
+/// Draws `sprite` into `area`, capped at [`MAX_SPRITE_COLS`] columns.
+fn render_sprite(frame: &mut Frame, area: Rect, sprite: &Sprite) {
+    render_sprite_capped(frame, area, sprite, MAX_SPRITE_COLS);
+}
+
 /// Draws `sprite` into `area` using upper-half-block characters: each cell packs
 /// two vertical pixels (foreground = top, background = bottom), so one terminal
-/// row shows two image rows. The image is nearest-neighbour downsampled to fit
-/// and centred within `area`.
-fn render_sprite(frame: &mut Frame, area: Rect, sprite: &Sprite) {
-    let cols = area.width.min(area.height.saturating_mul(2)).min(MAX_SPRITE_COLS) & !1;
-    let rows = cols / 2;
-    if cols < 2 || rows < 1 || sprite.width == 0 || sprite.height == 0 {
+/// row shows two image rows.
+///
+/// The artwork is first cropped to its opaque bounding box (PokeAPI sprites have
+/// a wide transparent margin), then scaled to the largest size that fits `area`
+/// and `max_cols` *while preserving aspect ratio* — accounting for terminal
+/// cells being roughly twice as tall as they are wide — and finally centred.
+fn render_sprite_capped(frame: &mut Frame, area: Rect, sprite: &Sprite, max_cols: u16) {
+    if area.width < 2 || area.height < 1 || sprite.width == 0 || sprite.height == 0 {
         return;
     }
+
+    // Crop to the visible Pokemon so it fills the box instead of floating in
+    // empty space.
+    let (bx0, by0, bx1, by1) = sprite.content_bounds();
+    let bw = (bx1 - bx0 + 1) as f32;
+    let bh = (by1 - by0 + 1) as f32;
+
+    // Fit the cropped box into the available pixel grid (width in cells, height
+    // in half-cells) keeping its proportions.
+    let max_w = area.width.min(max_cols) as f32;
+    let max_h_px = (area.height as f32) * 2.0;
+    let scale = (max_w / bw).min(max_h_px / bh);
+    let cols = (((bw * scale) as u16).max(2)) & !1; // even, so columns map cleanly
+    let rows = ((bh * scale) as u16).div_ceil(2).max(1);
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows as usize);
     for cy in 0..rows {
         let mut spans: Vec<Span> = Vec::with_capacity(cols as usize);
         for cx in 0..cols {
-            let sx = (cx as u32 * sprite.width) / cols as u32;
-            let sy_top = (2 * cy as u32 * sprite.height) / (2 * rows as u32);
-            let sy_bot = ((2 * cy as u32 + 1) * sprite.height) / (2 * rows as u32);
+            let sx = bx0 + (cx as u32 * bw as u32) / cols as u32;
+            let sy_top = by0 + (2 * cy as u32 * bh as u32) / (2 * rows as u32);
+            let sy_bot = by0 + ((2 * cy as u32 + 1) * bh as u32) / (2 * rows as u32);
             let top = pixel_color(sprite.sample(sx, sy_top));
             let bottom = pixel_color(sprite.sample(sx, sy_bot));
             spans.push(Span::styled("▀", Style::default().fg(top).bg(bottom)));
@@ -312,7 +369,20 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     let highlight = app.selected_name.as_deref();
     let lines = evolution_lines(tree, highlight);
-    frame.render_widget(Paragraph::new(lines), inner);
+
+    // Reserve the bottom row for the "press E to expand" hint when there's space.
+    if inner.height >= 2 {
+        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+        frame.render_widget(Paragraph::new(lines), rows[0]);
+        let hint = Paragraph::new(Line::from(Span::styled(
+            format!("⤢ {}", s.expand_hint),
+            Style::default().fg(theme::OVERLAY),
+        )))
+        .alignment(Alignment::Center);
+        frame.render_widget(hint, rows[1]);
+    } else {
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
 }
 
 // --- Small rendering helpers ---------------------------------------------
@@ -483,4 +553,228 @@ fn name_span(raw_name: &str, highlight: Option<&str>) -> Span<'static> {
         Style::default().fg(theme::GREEN)
     };
     Span::styled(title_case(raw_name), style)
+}
+
+// --- Evolution overlay (sprite graph) ------------------------------------
+
+/// Minimum cells a single sprite card needs to be worth drawing as art rather
+/// than falling back to the compact text tree.
+const MIN_CARD_W: u16 = 14;
+const MIN_CARD_H: u16 = 6;
+/// Columns reserved between generations for the connector arrows.
+const EVO_GAP: u16 = 6;
+
+/// Draws the full-screen evolution overlay: every species in the chain rendered
+/// as a sprite card, wired together with arrow connectors so the relationships
+/// are visible at a glance.
+fn render_evolution_overlay(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let area = centered_rect(92, 88, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.evolution_title,
+            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::BASE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(tree) = app.selected_evolution() else {
+        render_centered_text(frame, inner, s.no_evolution, theme::OVERLAY);
+        return;
+    };
+
+    // Split off a one-row footer for the close hint.
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let canvas = rows[0];
+
+    let depth = tree.depth() as u16;
+    let leaves = tree.leaf_count() as u16;
+    let col_w = canvas.width.checked_div(depth).unwrap_or(0);
+    let lane_h = canvas.height.checked_div(leaves).unwrap_or(0);
+
+    // Only attempt the sprite graph if each card has room; otherwise reuse the
+    // compact textual tree so tiny terminals still get *something* useful.
+    if col_w >= MIN_CARD_W && lane_h >= MIN_CARD_H {
+        let highlight = app.selected_name.as_deref();
+        let mut lane = 0u16;
+        place_node(frame, app, s, tree, highlight, canvas, col_w, lane_h, 0, &mut lane);
+    } else {
+        let lines = evolution_lines(tree, app.selected_name.as_deref());
+        frame.render_widget(Paragraph::new(lines), canvas);
+    }
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        "Esc · E  ✕",
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
+/// Recursively lays out `node` and its descendants. Each generation occupies a
+/// fixed-width column; leaves are stacked into horizontal lanes. Returns the
+/// vertical centre (absolute row) of this node's card so the caller can wire a
+/// connector to it.
+#[allow(clippy::too_many_arguments)]
+fn place_node(
+    frame: &mut Frame,
+    app: &App,
+    s: &Strings,
+    node: &EvolutionTree,
+    highlight: Option<&str>,
+    canvas: Rect,
+    col_w: u16,
+    lane_h: u16,
+    depth_idx: u16,
+    lane: &mut u16,
+) -> u16 {
+    let x = canvas.x + depth_idx * col_w;
+    let card_w = col_w.saturating_sub(EVO_GAP);
+
+    if node.children.is_empty() {
+        let top = canvas.y + *lane * lane_h;
+        *lane += 1;
+        draw_card(frame, app, s, node, highlight, x, top, card_w, lane_h);
+        return top + lane_h / 2;
+    }
+
+    // Place children first so we know where to anchor the connectors.
+    let centers: Vec<u16> = node
+        .children
+        .iter()
+        .map(|child| {
+            place_node(frame, app, s, child, highlight, canvas, col_w, lane_h, depth_idx + 1, lane)
+        })
+        .collect();
+
+    let first = *centers.first().unwrap();
+    let last = *centers.last().unwrap();
+    let cy = (first + last) / 2;
+    let top = cy.saturating_sub(lane_h / 2);
+    draw_card(frame, app, s, node, highlight, x, top, card_w, lane_h);
+
+    let child_x = canvas.x + (depth_idx + 1) * col_w;
+    draw_connectors(frame, x + card_w, child_x, cy, &centers);
+    cy
+}
+
+/// Draws one species card: its sprite (or a placeholder while loading) with the
+/// name centred beneath it.
+#[allow(clippy::too_many_arguments)]
+fn draw_card(
+    frame: &mut Frame,
+    app: &App,
+    s: &Strings,
+    node: &EvolutionTree,
+    highlight: Option<&str>,
+    x: u16,
+    top: u16,
+    w: u16,
+    h: u16,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let sprite_area = Rect { x, y: top, width: w, height: h.saturating_sub(1) };
+    match app.sprites.get(&node.name) {
+        Some(sprite) => render_sprite_capped(frame, sprite_area, sprite, w),
+        None => {
+            let placeholder = if app.sprite_loading.contains(&node.name) {
+                s.sprite_loading
+            } else {
+                "…"
+            };
+            render_centered_text(frame, sprite_area, placeholder, theme::OVERLAY);
+        }
+    }
+
+    let style = if highlight == Some(node.name.as_str()) {
+        Style::default().fg(theme::YELLOW).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD)
+    };
+    let name = Paragraph::new(Line::from(Span::styled(title_case(&node.name), style)))
+        .alignment(Alignment::Center);
+    frame.render_widget(name, Rect { x, y: top + h.saturating_sub(1), width: w, height: 1 });
+}
+
+/// Wires a parent card's right edge to each child card's left edge with
+/// box-drawing connectors and an arrowhead, branching where needed.
+fn draw_connectors(frame: &mut Frame, x_from: u16, x_to: u16, parent_cy: u16, centers: &[u16]) {
+    let color = theme::OVERLAY;
+    if x_to <= x_from {
+        return;
+    }
+
+    // Single child: a straight arrow reads cleaner than a trunk-and-branch.
+    if centers.len() == 1 {
+        let cy = centers[0];
+        for x in x_from..x_to.saturating_sub(1) {
+            put_cell(frame, x, cy, "─", color);
+        }
+        put_cell(frame, x_to.saturating_sub(1), cy, "▶", theme::MAUVE);
+        return;
+    }
+
+    let trunk_x = x_from + (x_to - x_from) / 2;
+    let min_c = *centers.iter().min().unwrap();
+    let max_c = *centers.iter().max().unwrap();
+
+    // Stub from the parent into the vertical trunk.
+    for x in x_from..trunk_x {
+        put_cell(frame, x, parent_cy, "─", color);
+    }
+    // The vertical trunk spanning all the children.
+    for y in min_c..=max_c {
+        put_cell(frame, trunk_x, y, "│", color);
+    }
+    // Junction where the parent's stub meets the trunk.
+    let junction = if centers.contains(&parent_cy) { "┼" } else { "┤" };
+    put_cell(frame, trunk_x, parent_cy, junction, color);
+
+    // Branch off to each child and tip it with an arrowhead.
+    for &cy in centers {
+        let corner = if cy == min_c {
+            "┌"
+        } else if cy == max_c {
+            "└"
+        } else {
+            "├"
+        };
+        if cy != parent_cy {
+            put_cell(frame, trunk_x, cy, corner, color);
+        }
+        for x in (trunk_x + 1)..x_to.saturating_sub(1) {
+            put_cell(frame, x, cy, "─", color);
+        }
+        put_cell(frame, x_to.saturating_sub(1), cy, "▶", theme::MAUVE);
+    }
+}
+
+/// Writes a single glyph straight into the frame buffer (used for the connector
+/// art, which doesn't map cleanly onto a widget).
+fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
+    let area = frame.area();
+    if x < area.x || y < area.y || x >= area.right() || y >= area.bottom() {
+        return;
+    }
+    if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(x, y)) {
+        cell.set_symbol(symbol).set_fg(color);
+    }
+}
+
+/// A `Rect` centred within `area`, sized to the given percentages of it.
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let w = area.width * percent_x / 100;
+    let h = area.height * percent_y / 100;
+    Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    }
 }

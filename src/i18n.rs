@@ -82,6 +82,10 @@ pub struct Strings {
     pub stat_sp_defense: &'static str,
     pub stat_speed: &'static str,
     pub help: &'static str,
+    /// Hint shown inside the compact evolution panel.
+    pub expand_hint: &'static str,
+    /// Placeholder under a chain member whose sprite is still loading.
+    pub sprite_loading: &'static str,
 }
 
 impl Strings {
@@ -108,7 +112,9 @@ impl Strings {
             stat_sp_attack: "Sp. Atk",
             stat_sp_defense: "Sp. Def",
             stat_speed: "Speed",
-            help: " ↑/↓ Navigate · Enter Select · Tab Focus · / Search · L Language · Q Quit ",
+            help: " ↑/↓ Navigate · Enter Select · E Evolution · / Search · L Language · Q Quit ",
+            expand_hint: "Press E to expand the evolution chain",
+            sprite_loading: "loading…",
         }
     }
 
@@ -135,7 +141,9 @@ impl Strings {
             stat_sp_attack: "Öz. Sal",
             stat_sp_defense: "Öz. Sav",
             stat_speed: "Hız",
-            help: " ↑/↓ Gezin · Enter Seç · Tab Odak · / Ara · L Dil · Q Çıkış ",
+            help: " ↑/↓ Gezin · Enter Seç · E Evrim · / Ara · L Dil · Q Çıkış ",
+            expand_hint: "Evrim zincirini açmak için E'ye basın",
+            sprite_loading: "yükleniyor…",
         }
     }
 
@@ -162,7 +170,9 @@ impl Strings {
             stat_sp_attack: "Sp. Ang",
             stat_sp_defense: "Sp. Vert",
             stat_speed: "Tempo",
-            help: " ↑/↓ Navigieren · Enter Wählen · Tab Fokus · / Suche · L Sprache · Q Beenden ",
+            help: " ↑/↓ Navigieren · Enter Wählen · E Entwicklung · / Suche · L Sprache · Q Beenden ",
+            expand_hint: "Drücke E für die Entwicklungsreihe",
+            sprite_loading: "lädt…",
         }
     }
 }

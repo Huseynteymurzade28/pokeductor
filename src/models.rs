@@ -71,6 +71,10 @@ pub struct PokemonDetail {
     pub weight: u32,
     /// URL of the front-facing PNG artwork, if the species has one.
     pub sprite_url: Option<String>,
+    /// Pokedex genus, e.g. `"Seed Pokémon"`, if the species lists one.
+    pub genus: Option<String>,
+    /// A short Pokedex flavor-text blurb, cleaned of control characters.
+    pub flavor: Option<String>,
 }
 
 impl PokemonDetail {
@@ -91,6 +95,32 @@ pub struct EvolutionTree {
     /// Raw API name of the species at this node.
     pub name: String,
     pub children: Vec<EvolutionTree>,
+}
+
+impl EvolutionTree {
+    /// Collects every species name in the chain (depth-first) into `out`.
+    pub fn collect_names(&self, out: &mut Vec<String>) {
+        out.push(self.name.clone());
+        for child in &self.children {
+            child.collect_names(out);
+        }
+    }
+
+    /// Number of leaf species — i.e. how many vertical lanes a sprite layout
+    /// needs to give every branch its own row.
+    pub fn leaf_count(&self) -> usize {
+        if self.children.is_empty() {
+            1
+        } else {
+            self.children.iter().map(EvolutionTree::leaf_count).sum()
+        }
+    }
+
+    /// Length of the longest evolution path (number of stages), e.g. 3 for
+    /// Bulbasaur → Ivysaur → Venusaur.
+    pub fn depth(&self) -> usize {
+        1 + self.children.iter().map(EvolutionTree::depth).max().unwrap_or(0)
+    }
 }
 
 /// A decoded Pokemon sprite, stored as raw RGBA pixels ready to be rendered
@@ -114,6 +144,31 @@ impl Sprite {
         let y = y.min(self.height.saturating_sub(1));
         let idx = (y * self.width + x) as usize;
         self.pixels.get(idx).copied().unwrap_or([0, 0, 0, 0])
+    }
+
+    /// Tight bounding box `(x0, y0, x1, y1)` (inclusive) of the non-transparent
+    /// pixels. PokeAPI artwork sits in a large transparent margin; cropping to
+    /// this box lets the visible Pokemon fill its on-screen cell. Falls back to
+    /// the full image if nothing is opaque.
+    pub fn content_bounds(&self) -> (u32, u32, u32, u32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (self.width, self.height, 0u32, 0u32);
+        let mut found = false;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if self.pixels[(y * self.width + x) as usize][3] >= 128 {
+                    found = true;
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        if found {
+            (x0, y0, x1, y1)
+        } else {
+            (0, 0, self.width.saturating_sub(1), self.height.saturating_sub(1))
+        }
     }
 }
 

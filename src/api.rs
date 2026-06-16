@@ -50,8 +50,14 @@ pub async fn fetch_pokemon_bundle(
     client: &reqwest::Client,
     name: &str,
 ) -> Result<(PokemonDetail, EvolutionTree, Option<Sprite>), ApiError> {
-    let detail = fetch_detail(client, name).await?;
-    let evolution = fetch_evolution(client, &detail.name).await?;
+    let mut detail = fetch_detail(client, name).await?;
+
+    // The species record carries both the evolution chain *and* the Pokedex
+    // blurb shown on the info card, so we fetch it once and read both out.
+    let species = fetch_species(client, &detail.name).await?;
+    detail.genus = species.genus;
+    detail.flavor = species.flavor;
+    let evolution = fetch_chain(client, &species.chain_url).await?;
 
     // The sprite is a nice-to-have: a missing or undecodable image must not
     // sink the whole bundle, so failures here degrade to "no sprite".
@@ -61,6 +67,19 @@ pub async fn fetch_pokemon_bundle(
     };
 
     Ok((detail, evolution, sprite))
+}
+
+/// Fetches and decodes just the sprite for a named species. Used to lazily
+/// populate the evolution overlay, where every member of the chain needs art.
+pub async fn fetch_named_sprite(
+    client: &reqwest::Client,
+    name: &str,
+) -> Result<Option<Sprite>, ApiError> {
+    let detail = fetch_detail(client, name).await?;
+    match detail.sprite_url {
+        Some(url) => Ok(Some(fetch_sprite(client, &url).await?)),
+        None => Ok(None),
+    }
 }
 
 /// Downloads a sprite PNG and decodes it into raw RGBA pixels.
@@ -103,37 +122,54 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         height: raw.height,
         weight: raw.weight,
         sprite_url: raw.sprites.front_default,
+        genus: None,
+        flavor: None,
     })
 }
 
-/// Resolves species -> evolution-chain URL -> parsed tree.
-async fn fetch_evolution(
-    client: &reqwest::Client,
-    name: &str,
-) -> Result<EvolutionTree, ApiError> {
-    let species_url = format!("{BASE_URL}/pokemon-species/{name}");
-    let species: RawSpecies = client
-        .get(species_url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+/// The slice of species data the rest of the app cares about.
+struct SpeciesInfo {
+    chain_url: String,
+    genus: Option<String>,
+    flavor: Option<String>,
+}
+
+/// Fetches a species record, pulling out the evolution-chain URL plus the
+/// English genus and flavor text for the info card.
+async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesInfo, ApiError> {
+    let url = format!("{BASE_URL}/pokemon-species/{name}");
+    let species: RawSpecies = client.get(url).send().await?.error_for_status()?.json().await?;
 
     let chain_url = species
         .evolution_chain
         .map(|c| c.url)
         .ok_or(ApiError::MissingEvolutionChain)?;
 
-    let chain: RawEvolutionChain = client
-        .get(chain_url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let genus = species
+        .genera
+        .iter()
+        .find(|g| g.language.name == "en")
+        .map(|g| g.genus.clone());
 
+    let flavor = species
+        .flavor_text_entries
+        .iter()
+        .find(|e| e.language.name == "en")
+        .map(|e| clean_flavor(&e.flavor_text));
+
+    Ok(SpeciesInfo { chain_url, genus, flavor })
+}
+
+/// Fetches and parses an evolution chain from its API URL.
+async fn fetch_chain(client: &reqwest::Client, url: &str) -> Result<EvolutionTree, ApiError> {
+    let chain: RawEvolutionChain = client.get(url).send().await?.error_for_status()?.json().await?;
     Ok(parse_chain(&chain.chain))
+}
+
+/// PokeAPI flavor text is wrapped to a fixed width with hard newlines and stray
+/// form-feed characters; collapse all whitespace runs into single spaces.
+fn clean_flavor(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Recursively converts PokeAPI's nested `ChainLink` into our [`EvolutionTree`].
@@ -192,6 +228,22 @@ struct RawStatSlot {
 #[derive(serde::Deserialize)]
 struct RawSpecies {
     evolution_chain: Option<RawChainRef>,
+    #[serde(default)]
+    genera: Vec<RawGenus>,
+    #[serde(default)]
+    flavor_text_entries: Vec<RawFlavorText>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawGenus {
+    genus: String,
+    language: NamedResource,
+}
+
+#[derive(serde::Deserialize)]
+struct RawFlavorText {
+    flavor_text: String,
+    language: NamedResource,
 }
 
 #[derive(serde::Deserialize)]

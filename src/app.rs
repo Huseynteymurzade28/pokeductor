@@ -5,7 +5,7 @@
 //! the main loop in [`App::run`] is the single *consumer*, draining the channel
 //! alongside terminal input and a steady animation tick via `tokio::select!`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -28,6 +28,11 @@ pub enum Message {
         detail: PokemonDetail,
         evolution: EvolutionTree,
         /// Decoded artwork, if the species had a sprite we could fetch.
+        sprite: Option<Sprite>,
+    },
+    /// A standalone sprite (for an evolution-chain member) finished loading.
+    SpriteLoaded {
+        name: String,
         sprite: Option<Sprite>,
     },
     /// A background task failed.
@@ -55,6 +60,11 @@ pub struct App {
     pub evolutions: HashMap<String, EvolutionTree>,
     /// Decoded sprites, keyed by Pokemon name. Absent if a species has no art.
     pub sprites: HashMap<String, Sprite>,
+    /// Names whose sprite is being fetched on demand for the evolution overlay,
+    /// so we never queue the same request twice.
+    pub sprite_loading: HashSet<String>,
+    /// Whether the full-screen evolution chain overlay is open (toggled by `E`).
+    pub show_evolution: bool,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
     /// Name currently being fetched, if any (drives the detail spinner).
@@ -85,6 +95,8 @@ impl App {
             details: HashMap::new(),
             evolutions: HashMap::new(),
             sprites: HashMap::new(),
+            sprite_loading: HashSet::new(),
+            show_evolution: false,
             selected_name: None,
             loading_detail: None,
             list_loading: false,
@@ -175,6 +187,36 @@ impl App {
         });
     }
 
+    /// Opens the evolution overlay and kicks off sprite fetches for every
+    /// member of the current chain that isn't already cached or in flight.
+    fn open_evolution_overlay(&mut self) {
+        let Some(tree) = self.selected_evolution() else {
+            return; // nothing to show yet
+        };
+
+        let mut names = Vec::new();
+        tree.collect_names(&mut names);
+        self.show_evolution = true;
+
+        for name in names {
+            if self.sprites.contains_key(&name) || self.sprite_loading.contains(&name) {
+                continue;
+            }
+            self.sprite_loading.insert(name.clone());
+            let tx = self.tx.clone();
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let msg = match api::fetch_named_sprite(&client, &name).await {
+                    Ok(sprite) => Message::SpriteLoaded { name, sprite },
+                    // A failed chain sprite is non-fatal: report no art so the
+                    // overlay shows a placeholder instead of an error banner.
+                    Err(_) => Message::SpriteLoaded { name, sprite: None },
+                };
+                let _ = tx.send(msg).await;
+            });
+        }
+    }
+
     // --- Message handling ------------------------------------------------
 
     fn handle_message(&mut self, msg: Message) {
@@ -194,6 +236,12 @@ impl App {
                     self.sprites.insert(name.clone(), sprite);
                 }
                 self.details.insert(name, detail);
+            }
+            Message::SpriteLoaded { name, sprite } => {
+                self.sprite_loading.remove(&name);
+                if let Some(sprite) = sprite {
+                    self.sprites.insert(name, sprite);
+                }
             }
             Message::Error(err) => {
                 self.error = Some(err);
@@ -217,6 +265,17 @@ impl App {
             self.should_quit = true;
             return;
         }
+        // While the evolution overlay is open it captures input: any of Esc/E/Q
+        // dismisses it and nothing else gets through.
+        if self.show_evolution {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('q')
+            ) {
+                self.show_evolution = false;
+            }
+            return;
+        }
         match self.focus {
             Focus::List => self.handle_list_key(key),
             Focus::Search => self.handle_search_key(key),
@@ -231,6 +290,7 @@ impl App {
             KeyCode::PageUp => self.move_selection(-10),
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Enter => self.request_selected(),
+            KeyCode::Char('e') | KeyCode::Char('E') => self.open_evolution_overlay(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.language = self.language.next(),
             _ => {}
