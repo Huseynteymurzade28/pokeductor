@@ -1,0 +1,19 @@
+[package]
+name = "pokeductor"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal-based Pokedex and Evolution Analyzer powered by PokeAPI"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+futures = "0.3"
+anyhow = "1"
+thiserror = "2"
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+
+# Backtrace / debug
+*.pdb
+
+# Editor / IDE
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.local
