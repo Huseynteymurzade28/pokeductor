@@ -60,6 +60,11 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
 </table>
 ---
 
+## Easy Install with Cargo
+```bash
+cargo install pokeductor
+```
+
 ## 🚀 Getting started
 
 ### Requirements
