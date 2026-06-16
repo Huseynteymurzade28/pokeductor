@@ -52,13 +52,12 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
     </td>
   </tr>
   <tr>
-    <td align="center">
+    <td align="center" colspan="2">
       <img src="assets/demo.gif" alt="Demo" width="420"><br>
       <sub>Quick demo</sub>
     </td>
   </tr>
 </table>
-
 ---
 
 ## 🚀 Getting started
