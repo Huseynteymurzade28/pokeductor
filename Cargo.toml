@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 futures = "0.3"
 anyhow = "1"
 thiserror = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [profile.release]
 opt-level = 3

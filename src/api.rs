@@ -4,7 +4,7 @@
 //! and return clean domain types from `models.rs`. Raw wire-format structs are
 //! kept private so the JSON shape never leaks out of this module.
 
-use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Stat, StatKind};
+use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite, Stat, StatKind};
 
 const BASE_URL: &str = "https://pokeapi.co/api/v2";
 /// How many Pokemon to load into the sidebar. Covers all current species.
@@ -17,6 +17,8 @@ pub enum ApiError {
     Network(#[from] reqwest::Error),
     #[error("could not locate the evolution chain for this Pokemon")]
     MissingEvolutionChain,
+    #[error("could not decode sprite image: {0}")]
+    Image(#[from] image::ImageError),
 }
 
 /// Builds the shared HTTP client used for every request in the session.
@@ -47,10 +49,27 @@ pub async fn fetch_pokemon_list(
 pub async fn fetch_pokemon_bundle(
     client: &reqwest::Client,
     name: &str,
-) -> Result<(PokemonDetail, EvolutionTree), ApiError> {
+) -> Result<(PokemonDetail, EvolutionTree, Option<Sprite>), ApiError> {
     let detail = fetch_detail(client, name).await?;
     let evolution = fetch_evolution(client, &detail.name).await?;
-    Ok((detail, evolution))
+
+    // The sprite is a nice-to-have: a missing or undecodable image must not
+    // sink the whole bundle, so failures here degrade to "no sprite".
+    let sprite = match &detail.sprite_url {
+        Some(url) => fetch_sprite(client, url).await.ok(),
+        None => None,
+    };
+
+    Ok((detail, evolution, sprite))
+}
+
+/// Downloads a sprite PNG and decodes it into raw RGBA pixels.
+async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite, ApiError> {
+    let bytes = client.get(url).send().await?.error_for_status()?.bytes().await?;
+    let image = image::load_from_memory(&bytes)?.to_rgba8();
+    let (width, height) = image.dimensions();
+    let pixels = image.pixels().map(|p| p.0).collect();
+    Ok(Sprite { width, height, pixels })
 }
 
 async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDetail, ApiError> {
@@ -83,6 +102,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         stats,
         height: raw.height,
         weight: raw.weight,
+        sprite_url: raw.sprites.front_default,
     })
 }
 
@@ -147,6 +167,13 @@ struct RawPokemon {
     weight: u32,
     types: Vec<RawTypeSlot>,
     stats: Vec<RawStatSlot>,
+    sprites: RawSprites,
+}
+
+#[derive(serde::Deserialize)]
+struct RawSprites {
+    #[serde(default)]
+    front_default: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::api;
 use crate::i18n::Language;
-use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry};
+use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 
 /// Messages sent from background fetch tasks to the UI loop.
 #[derive(Debug)]
@@ -27,6 +27,8 @@ pub enum Message {
     PokemonLoaded {
         detail: PokemonDetail,
         evolution: EvolutionTree,
+        /// Decoded artwork, if the species had a sprite we could fetch.
+        sprite: Option<Sprite>,
     },
     /// A background task failed.
     Error(String),
@@ -51,6 +53,8 @@ pub struct App {
     /// In-memory cache so each Pokemon is fetched at most once per session.
     pub details: HashMap<String, PokemonDetail>,
     pub evolutions: HashMap<String, EvolutionTree>,
+    /// Decoded sprites, keyed by Pokemon name. Absent if a species has no art.
+    pub sprites: HashMap<String, Sprite>,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
     /// Name currently being fetched, if any (drives the detail spinner).
@@ -80,6 +84,7 @@ impl App {
             focus: Focus::List,
             details: HashMap::new(),
             evolutions: HashMap::new(),
+            sprites: HashMap::new(),
             selected_name: None,
             loading_detail: None,
             list_loading: false,
@@ -161,7 +166,9 @@ impl App {
         let client = self.client.clone();
         tokio::spawn(async move {
             let msg = match api::fetch_pokemon_bundle(&client, &name).await {
-                Ok((detail, evolution)) => Message::PokemonLoaded { detail, evolution },
+                Ok((detail, evolution, sprite)) => {
+                    Message::PokemonLoaded { detail, evolution, sprite }
+                }
                 Err(err) => Message::Error(err.to_string()),
             };
             let _ = tx.send(msg).await;
@@ -177,12 +184,15 @@ impl App {
                 self.list_loading = false;
                 self.recompute_filter();
             }
-            Message::PokemonLoaded { detail, evolution } => {
+            Message::PokemonLoaded { detail, evolution, sprite } => {
                 let name = detail.name.clone();
                 if self.loading_detail.as_deref() == Some(name.as_str()) {
                     self.loading_detail = None;
                 }
                 self.evolutions.insert(name.clone(), evolution);
+                if let Some(sprite) = sprite {
+                    self.sprites.insert(name.clone(), sprite);
+                }
                 self.details.insert(name, detail);
             }
             Message::Error(err) => {
@@ -299,6 +309,12 @@ impl App {
     pub fn selected_evolution(&self) -> Option<&EvolutionTree> {
         let name = self.selected_name.as_ref()?;
         self.evolutions.get(name)
+    }
+
+    /// Decoded sprite for the selected Pokemon, if one was loaded.
+    pub fn selected_sprite(&self) -> Option<&Sprite> {
+        let name = self.selected_name.as_ref()?;
+        self.sprites.get(name)
     }
 
     /// True while the detail panel is awaiting its current selection.

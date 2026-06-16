@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::app::{App, Focus};
 use crate::i18n::Strings;
-use crate::models::{title_case, EvolutionTree};
+use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -152,6 +152,24 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         return;
     };
 
+    // Carve out a square column on the left for the sprite when the panel is
+    // wide and tall enough to host one; otherwise the info text spans the full
+    // width as before.
+    let info = match app.selected_sprite() {
+        Some(sprite) if inner.width >= 46 && inner.height >= 6 => {
+            let sprite_w = sprite_col_width(inner);
+            let cols = Layout::horizontal([
+                Constraint::Length(sprite_w),
+                Constraint::Length(2),
+                Constraint::Min(0),
+            ])
+            .split(inner);
+            render_sprite(frame, cols[0], sprite);
+            cols[2]
+        }
+        _ => inner,
+    };
+
     let mut lines: Vec<Line> = Vec::new();
 
     lines.push(Line::from(vec![
@@ -194,7 +212,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     lines.push(Line::raw(""));
 
     // Stat bars sized to the available width.
-    let bar_width = (inner.width as usize).saturating_sub(STAT_LABEL_WIDTH + 6);
+    let bar_width = (info.width as usize).saturating_sub(STAT_LABEL_WIDTH + 6);
     for stat in &detail.stats {
         lines.push(stat_line(app.language.stat_label(stat.kind), stat.base, bar_width));
     }
@@ -210,7 +228,67 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         ),
     ]));
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), info);
+}
+
+// --- Sprite rendering ----------------------------------------------------
+
+/// Maximum cell width we'll ever give a sprite, so it stays a tasteful accent
+/// rather than swallowing the panel on very wide terminals.
+const MAX_SPRITE_COLS: u16 = 34;
+
+/// Chooses the sprite column width: square-ish, bounded by ~40% of the panel
+/// width, the available height (two pixels per cell row), and [`MAX_SPRITE_COLS`].
+fn sprite_col_width(inner: Rect) -> u16 {
+    let by_width = inner.width * 2 / 5;
+    let by_height = inner.height.saturating_mul(2);
+    let w = by_width.min(by_height).min(MAX_SPRITE_COLS);
+    (w & !1).max(2) // keep it even so rows = cols / 2 divides cleanly
+}
+
+/// Draws `sprite` into `area` using upper-half-block characters: each cell packs
+/// two vertical pixels (foreground = top, background = bottom), so one terminal
+/// row shows two image rows. The image is nearest-neighbour downsampled to fit
+/// and centred within `area`.
+fn render_sprite(frame: &mut Frame, area: Rect, sprite: &Sprite) {
+    let cols = area.width.min(area.height.saturating_mul(2)).min(MAX_SPRITE_COLS) & !1;
+    let rows = cols / 2;
+    if cols < 2 || rows < 1 || sprite.width == 0 || sprite.height == 0 {
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::with_capacity(rows as usize);
+    for cy in 0..rows {
+        let mut spans: Vec<Span> = Vec::with_capacity(cols as usize);
+        for cx in 0..cols {
+            let sx = (cx as u32 * sprite.width) / cols as u32;
+            let sy_top = (2 * cy as u32 * sprite.height) / (2 * rows as u32);
+            let sy_bot = ((2 * cy as u32 + 1) * sprite.height) / (2 * rows as u32);
+            let top = pixel_color(sprite.sample(sx, sy_top));
+            let bottom = pixel_color(sprite.sample(sx, sy_bot));
+            spans.push(Span::styled("▀", Style::default().fg(top).bg(bottom)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Centre the block within the allotted area.
+    let target = Rect {
+        x: area.x + (area.width.saturating_sub(cols)) / 2,
+        y: area.y + (area.height.saturating_sub(rows)) / 2,
+        width: cols,
+        height: rows,
+    };
+    frame.render_widget(Paragraph::new(lines), target);
+}
+
+/// Maps an RGBA pixel to a terminal colour, collapsing (mostly) transparent
+/// pixels onto the panel background so the sprite blends into the UI.
+fn pixel_color(rgba: [u8; 4]) -> ratatui::style::Color {
+    if rgba[3] < 128 {
+        theme::BASE
+    } else {
+        ratatui::style::Color::Rgb(rgba[0], rgba[1], rgba[2])
+    }
 }
 
 fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {

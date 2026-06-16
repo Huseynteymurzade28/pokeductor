@@ -69,6 +69,8 @@ pub struct PokemonDetail {
     pub height: u32,
     /// Weight in hectograms, as returned by the API.
     pub weight: u32,
+    /// URL of the front-facing PNG artwork, if the species has one.
+    pub sprite_url: Option<String>,
 }
 
 impl PokemonDetail {
@@ -89,6 +91,30 @@ pub struct EvolutionTree {
     /// Raw API name of the species at this node.
     pub name: String,
     pub children: Vec<EvolutionTree>,
+}
+
+/// A decoded Pokemon sprite, stored as raw RGBA pixels ready to be rendered
+/// in the terminal with Unicode half-blocks.
+///
+/// Sprites are tiny (PokeAPI's `front_default` is 96×96), so we keep the full
+/// image in memory and downsample at draw time to whatever space is available.
+#[derive(Debug, Clone)]
+pub struct Sprite {
+    pub width: u32,
+    pub height: u32,
+    /// Row-major RGBA, four bytes per pixel.
+    pub pixels: Vec<[u8; 4]>,
+}
+
+impl Sprite {
+    /// Returns the RGBA pixel at `(x, y)`, clamped to the image bounds so
+    /// callers can sample freely without bounds-checking.
+    pub fn sample(&self, x: u32, y: u32) -> [u8; 4] {
+        let x = x.min(self.width.saturating_sub(1));
+        let y = y.min(self.height.saturating_sub(1));
+        let idx = (y * self.width + x) as usize;
+        self.pixels.get(idx).copied().unwrap_or([0, 0, 0, 0])
+    }
 }
 
 /// Turns a raw API name like `"mr-mime"` into a display label `"Mr Mime"`.
