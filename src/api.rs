@@ -4,6 +4,8 @@
 //! and return clean domain types from `models.rs`. Raw wire-format structs are
 //! kept private so the JSON shape never leaks out of this module.
 
+use std::collections::HashMap;
+
 use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite, Stat, StatKind};
 
 const BASE_URL: &str = "https://pokeapi.co/api/v2";
@@ -57,8 +59,8 @@ pub async fn fetch_pokemon_bundle(
     // key it on the *base species* (not `detail.name`) so alternate forms like
     // `raichu-alola` resolve instead of 404-ing.
     let species = fetch_species(client, &detail.species).await?;
-    detail.genus = species.genus;
-    detail.flavor = species.flavor;
+    detail.genera = species.genera;
+    detail.flavors = species.flavors;
     let evolution = fetch_chain(client, &species.chain_url).await?;
 
     // The sprite is a nice-to-have: a missing or undecodable image must not
@@ -125,20 +127,25 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         height: raw.height,
         weight: raw.weight,
         sprite_url: raw.sprites.front_default,
-        genus: None,
-        flavor: None,
+        genera: HashMap::new(),
+        flavors: HashMap::new(),
     })
 }
+
+/// Languages we keep info-card text for (matching the UI's selectable set, plus
+/// English as the universal fallback). PokeAPI has no Turkish text, so `tr` is
+/// intentionally absent and Turkish falls back to English at render time.
+const CARD_LANGS: [&str; 5] = ["en", "de", "fr", "es", "it"];
 
 /// The slice of species data the rest of the app cares about.
 struct SpeciesInfo {
     chain_url: String,
-    genus: Option<String>,
-    flavor: Option<String>,
+    genera: HashMap<String, String>,
+    flavors: HashMap<String, String>,
 }
 
-/// Fetches a species record, pulling out the evolution-chain URL plus the
-/// English genus and flavor text for the info card.
+/// Fetches a species record, pulling out the evolution-chain URL plus the genus
+/// and flavor text in every language we care about for the info card.
 async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesInfo, ApiError> {
     let url = format!("{BASE_URL}/pokemon-species/{name}");
     let species: RawSpecies = client.get(url).send().await?.error_for_status()?.json().await?;
@@ -148,19 +155,25 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
         .map(|c| c.url)
         .ok_or(ApiError::MissingEvolutionChain)?;
 
-    let genus = species
-        .genera
-        .iter()
-        .find(|g| g.language.name == "en")
-        .map(|g| g.genus.clone());
+    let mut genera = HashMap::new();
+    for g in &species.genera {
+        if CARD_LANGS.contains(&g.language.name.as_str()) {
+            genera.entry(g.language.name.clone()).or_insert_with(|| g.genus.clone());
+        }
+    }
 
-    let flavor = species
-        .flavor_text_entries
-        .iter()
-        .find(|e| e.language.name == "en")
-        .map(|e| clean_flavor(&e.flavor_text));
+    // A species lists one flavor entry per game version per language; the first
+    // we see for each language is a fine representative.
+    let mut flavors = HashMap::new();
+    for e in &species.flavor_text_entries {
+        if CARD_LANGS.contains(&e.language.name.as_str()) {
+            flavors
+                .entry(e.language.name.clone())
+                .or_insert_with(|| clean_flavor(&e.flavor_text));
+        }
+    }
 
-    Ok(SpeciesInfo { chain_url, genus, flavor })
+    Ok(SpeciesInfo { chain_url, genera, flavors })
 }
 
 /// Fetches and parses an evolution chain from its API URL.

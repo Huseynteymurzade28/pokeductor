@@ -12,11 +12,21 @@ pub enum Language {
     English,
     Turkish,
     German,
+    French,
+    Spanish,
+    Italian,
 }
 
 impl Language {
     /// Every supported language, in picker order.
-    pub const ALL: [Language; 3] = [Language::English, Language::Turkish, Language::German];
+    pub const ALL: [Language; 6] = [
+        Language::English,
+        Language::Turkish,
+        Language::German,
+        Language::French,
+        Language::Spanish,
+        Language::Italian,
+    ];
 
     /// Position of this language within [`Language::ALL`].
     pub fn index(self) -> usize {
@@ -29,6 +39,23 @@ impl Language {
             Language::English => "English",
             Language::Turkish => "Türkçe",
             Language::German => "Deutsch",
+            Language::French => "Français",
+            Language::Spanish => "Español",
+            Language::Italian => "Italiano",
+        }
+    }
+
+    /// PokeAPI language code used to pick localized flavor/genus text. PokeAPI
+    /// has no Turkish entries, so Turkish maps to `"tr"` and falls back to
+    /// English at the point of use.
+    pub fn flavor_code(self) -> &'static str {
+        match self {
+            Language::English => "en",
+            Language::Turkish => "tr",
+            Language::German => "de",
+            Language::French => "fr",
+            Language::Spanish => "es",
+            Language::Italian => "it",
         }
     }
 
@@ -38,6 +65,9 @@ impl Language {
             Language::English => "EN",
             Language::Turkish => "TR",
             Language::German => "DE",
+            Language::French => "FR",
+            Language::Spanish => "ES",
+            Language::Italian => "IT",
         }
     }
 
@@ -47,6 +77,9 @@ impl Language {
             Language::English => Strings::english(),
             Language::Turkish => Strings::turkish(),
             Language::German => Strings::german(),
+            Language::French => Strings::french(),
+            Language::Spanish => Strings::spanish(),
+            Language::Italian => Strings::italian(),
         }
     }
 
@@ -191,6 +224,99 @@ impl Strings {
             evo_nav_hint: "←/→ Wählen · Enter Springen · Esc Zurück",
             sprite_loading: "lädt…",
             language_title: " Sprache ",
+        }
+    }
+
+    fn french() -> Self {
+        Strings {
+            app_title: " Pokeductor — Pokedex & Analyseur d'Évolution ",
+            sidebar_title: " Pokemon ",
+            search_title: " Recherche ",
+            details_title: " Détails ",
+            evolution_title: " Chaîne d'Évolution ",
+            loading: "Chargement",
+            loading_list: "Chargement du Pokedex",
+            no_selection: "Choisis un Pokemon et appuie sur Entrée",
+            no_results: "Aucun Pokemon trouvé",
+            no_evolution: "Pas de données d'évolution",
+            types_label: "Types",
+            height_label: "Taille",
+            weight_label: "Poids",
+            total_label: "Total",
+            error_prefix: "Erreur",
+            stat_hp: "PV",
+            stat_attack: "Attaque",
+            stat_defense: "Défense",
+            stat_sp_attack: "Att. Sp",
+            stat_sp_defense: "Déf. Sp",
+            stat_speed: "Vitesse",
+            help: " ↑/↓ Naviguer · Entrée Choisir · E Évolution · / Recherche · L Langue · Q Quitter ",
+            expand_hint: "Appuie sur E pour les évolutions",
+            evo_nav_hint: "←/→ Choisir · Entrée Aller · Esc Retour",
+            sprite_loading: "chargement…",
+            language_title: " Langue ",
+        }
+    }
+
+    fn spanish() -> Self {
+        Strings {
+            app_title: " Pokeductor — Pokedex y Analizador de Evolución ",
+            sidebar_title: " Pokemon ",
+            search_title: " Buscar ",
+            details_title: " Detalles ",
+            evolution_title: " Cadena Evolutiva ",
+            loading: "Cargando",
+            loading_list: "Cargando Pokedex",
+            no_selection: "Elige un Pokemon y pulsa Enter",
+            no_results: "No se encontraron Pokemon",
+            no_evolution: "Sin datos de evolución",
+            types_label: "Tipos",
+            height_label: "Altura",
+            weight_label: "Peso",
+            total_label: "Total",
+            error_prefix: "Error",
+            stat_hp: "PS",
+            stat_attack: "Ataque",
+            stat_defense: "Defensa",
+            stat_sp_attack: "At. Esp",
+            stat_sp_defense: "Def. Esp",
+            stat_speed: "Velocid.",
+            help: " ↑/↓ Navegar · Enter Elegir · E Evolución · / Buscar · L Idioma · Q Salir ",
+            expand_hint: "Pulsa E para ver las evoluciones",
+            evo_nav_hint: "←/→ Elegir · Enter Ir · Esc Volver",
+            sprite_loading: "cargando…",
+            language_title: " Idioma ",
+        }
+    }
+
+    fn italian() -> Self {
+        Strings {
+            app_title: " Pokeductor — Pokedex e Analizzatore di Evoluzione ",
+            sidebar_title: " Pokemon ",
+            search_title: " Cerca ",
+            details_title: " Dettagli ",
+            evolution_title: " Catena Evolutiva ",
+            loading: "Caricamento",
+            loading_list: "Caricamento Pokedex",
+            no_selection: "Scegli un Pokemon e premi Invio",
+            no_results: "Nessun Pokemon trovato",
+            no_evolution: "Nessun dato di evoluzione",
+            types_label: "Tipi",
+            height_label: "Altezza",
+            weight_label: "Peso",
+            total_label: "Totale",
+            error_prefix: "Errore",
+            stat_hp: "PS",
+            stat_attack: "Attacco",
+            stat_defense: "Difesa",
+            stat_sp_attack: "Att. Sp",
+            stat_sp_defense: "Dif. Sp",
+            stat_speed: "Velocità",
+            help: " ↑/↓ Naviga · Invio Scegli · E Evoluzione · / Cerca · L Lingua · Q Esci ",
+            expand_hint: "Premi E per le evoluzioni",
+            evo_nav_hint: "←/→ Scegli · Invio Vai · Esc Indietro",
+            sprite_loading: "caricamento…",
+            language_title: " Lingua ",
         }
     }
 }

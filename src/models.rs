@@ -5,6 +5,8 @@
 //! these types. This keeps the rest of the application decoupled from the
 //! quirks of the upstream service.
 
+use std::collections::HashMap;
+
 /// A single entry in the master Pokemon list shown in the sidebar.
 #[derive(Debug, Clone)]
 pub struct PokemonEntry {
@@ -75,16 +77,34 @@ pub struct PokemonDetail {
     pub weight: u32,
     /// URL of the front-facing PNG artwork, if the species has one.
     pub sprite_url: Option<String>,
-    /// Pokedex genus, e.g. `"Seed Pokémon"`, if the species lists one.
-    pub genus: Option<String>,
-    /// A short Pokedex flavor-text blurb, cleaned of control characters.
-    pub flavor: Option<String>,
+    /// Pokedex genus (e.g. `"Seed Pokémon"`) keyed by PokeAPI language code.
+    pub genera: HashMap<String, String>,
+    /// Pokedex flavor-text blurbs, cleaned of control characters, keyed by
+    /// PokeAPI language code.
+    pub flavors: HashMap<String, String>,
 }
 
 impl PokemonDetail {
     /// Sum of all base stats — a common "power level" heuristic.
     pub fn stat_total(&self) -> u32 {
         self.stats.iter().map(|s| s.base as u32).sum()
+    }
+
+    /// Genus in the requested language, falling back to English when that
+    /// language has no entry (PokeAPI has no Turkish text, for instance).
+    pub fn genus_for(&self, code: &str) -> Option<&str> {
+        self.genera
+            .get(code)
+            .or_else(|| self.genera.get("en"))
+            .map(String::as_str)
+    }
+
+    /// Flavor blurb in the requested language, with the same English fallback.
+    pub fn flavor_for(&self, code: &str) -> Option<&str> {
+        self.flavors
+            .get(code)
+            .or_else(|| self.flavors.get("en"))
+            .map(String::as_str)
     }
 }
 

@@ -187,10 +187,12 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         Span::styled(format!("   #{:04}", detail.id), Style::default().fg(theme::OVERLAY)),
     ]));
 
-    // Pokedex genus, e.g. "Seed Pokémon" — the headline of the info card.
-    if let Some(genus) = &detail.genus {
+    // Pokedex genus, e.g. "Seed Pokémon" — the headline of the info card, in the
+    // active language where PokeAPI has it.
+    let lang_code = app.language.flavor_code();
+    if let Some(genus) = detail.genus_for(lang_code) {
         lines.push(Line::from(Span::styled(
-            genus.clone(),
+            genus.to_string(),
             Style::default().fg(theme::PEACH).add_modifier(Modifier::ITALIC),
         )));
     }
@@ -244,7 +246,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     // When there's a flavor blurb and room to show it, split a small card off
     // the bottom of the info column for it; otherwise the stats use all of it.
     let flavor_rows = 4;
-    match &detail.flavor {
+    match detail.flavor_for(lang_code) {
         Some(flavor) if info.height as usize > lines.len() + flavor_rows => {
             let split = Layout::vertical([Constraint::Min(0), Constraint::Length(flavor_rows as u16)])
                 .split(info);
