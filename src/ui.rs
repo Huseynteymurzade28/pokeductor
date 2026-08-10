@@ -11,6 +11,7 @@ use crate::app::{App, Focus};
 use crate::i18n::{Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
+use crate::typechart;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Column width reserved for stat labels (longest is "Verteid."/"Sp. Def").
@@ -44,7 +45,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_details(frame, app, &strings, right[0]);
     render_evolution(frame, app, &strings, right[1]);
 
-    // The language picker floats above everything when open.
+    // The overlay cards float above everything when open. Only one can be open
+    // at a time (input is modal), so the draw order is arbitrary.
+    if app.matchups {
+        render_matchups(frame, app, &strings, area);
+    }
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
     }
@@ -228,13 +233,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         format!("{}: ", s.types_label),
         Style::default().fg(theme::SUBTEXT),
     )];
-    for ty in &detail.types {
-        type_spans.push(Span::styled(
-            format!(" {} ", title_case(ty)),
-            Style::default().fg(theme::BASE).bg(theme::type_color(ty)),
-        ));
-        type_spans.push(Span::raw(" "));
-    }
+    type_spans.extend(type_chips(&detail.types));
     lines.push(Line::from(type_spans));
 
     lines.push(Line::from(vec![
@@ -801,6 +800,138 @@ fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
     if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(x, y)) {
         cell.set_symbol(symbol).set_fg(color);
     }
+}
+
+// --- Type matchup card ----------------------------------------------------
+
+/// Preferred width of the matchup card, clamped to the terminal.
+const MATCHUP_CARD_W: u16 = 48;
+/// Columns reserved for a multiplier label (`" ×4  "`), which also sets the
+/// indent used when a group of chips wraps onto another row.
+const MATCHUP_LABEL_W: usize = 5;
+
+/// Draws the modal card summarising the selected Pokemon's type matchups: what
+/// hits it hard, what it shrugs off, and what its own attacks are strong
+/// against. Everything here is computed offline from [`typechart`].
+fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some(detail) = app.selected_detail() else {
+        return; // nothing loaded to analyse
+    };
+
+    let width = MATCHUP_CARD_W.min(full.width);
+    let text_w = width.saturating_sub(2) as usize; // usable columns inside the border
+    if text_w < 16 || full.height < 8 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Headline: who this card is about, and the types the analysis is based on.
+    let mut head = vec![Span::styled(
+        format!(" {}  ", title_case(&detail.name)),
+        Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+    )];
+    head.extend(type_chips(&detail.types));
+    lines.push(Line::from(head));
+    lines.push(Line::raw(""));
+
+    // Defensive view: incoming damage, worst multiplier first. Neutral matchups
+    // are omitted by `defensive_groups`, so every row here is worth reading.
+    lines.push(section_heading(s.matchups_defense));
+    for group in typechart::defensive_groups(&detail.types) {
+        lines.extend(chip_rows(group.label, &group.types, text_w));
+    }
+
+    // Offensive view: what its own same-type moves are strong against.
+    lines.push(Line::raw(""));
+    lines.push(section_heading(s.matchups_offense));
+    let coverage = typechart::offensive_coverage(&detail.types);
+    if coverage.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", s.matchups_none),
+            Style::default().fg(theme::OVERLAY),
+        )));
+    } else {
+        lines.extend(chip_rows("", &coverage, text_w));
+    }
+
+    // Two border rows plus the hint row at the foot.
+    let height = (lines.len() as u16 + 3).min(full.height);
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.matchups_title,
+            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.close_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
+/// Renders a list of types as coloured chips, separated by a space.
+fn type_chips(types: &[String]) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(types.len() * 2);
+    for ty in types {
+        spans.push(Span::styled(
+            format!(" {} ", title_case(ty)),
+            Style::default().fg(theme::BASE).bg(theme::type_color(ty)),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    spans
+}
+
+fn section_heading(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(" {text}"),
+        Style::default().fg(theme::PEACH).add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// Lays `types` out as chips in a labelled row, wrapping onto further rows when
+/// they overflow `max_width`. Continuation rows are indented under the chips so
+/// the label column stays clean.
+fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>> {
+    let indent = " ".repeat(MATCHUP_LABEL_W);
+    let mut rows: Vec<Line> = Vec::new();
+    let mut spans: Vec<Span> = vec![Span::styled(
+        format!(" {label:<pad$} ", pad = MATCHUP_LABEL_W - 2),
+        Style::default().fg(theme::SUBTEXT).add_modifier(Modifier::BOLD),
+    )];
+    let mut used = MATCHUP_LABEL_W;
+
+    for ty in types {
+        let chip = format!(" {} ", title_case(ty));
+        let chip_w = chip.chars().count() + 1; // chip plus its trailing space
+        if used + chip_w > max_width && used > MATCHUP_LABEL_W {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            spans.push(Span::raw(indent.clone()));
+            used = MATCHUP_LABEL_W;
+        }
+        spans.push(Span::styled(
+            chip,
+            Style::default().fg(theme::BASE).bg(theme::type_color(ty)),
+        ));
+        spans.push(Span::raw(" "));
+        used += chip_w;
+    }
+
+    rows.push(Line::from(spans));
+    rows
 }
 
 // --- Language picker ------------------------------------------------------

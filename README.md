@@ -26,6 +26,10 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
   stage with a keypress to instantly inspect a Pokémon's next evolution.
 - **Info cards** — national Pokédex number, genus, flavor-text blurb, and
   **Legendary / Mythical / Baby** badges for each species.
+- **Type matchup analysis** — press `T` for a card showing exactly what the
+  species takes ×4 / ×2 / ×½ / ×¼ / ×0 damage from, plus what its own same-type
+  moves are super effective against. Computed offline from a built-in
+  Generation VI+ type chart, so it opens instantly.
 - **6 interface languages** — English, Türkçe, Deutsch, Français, Español, Italiano,
   switchable live from a little picker card.
 - **Localized Pokédex text** — flavor/genus come straight from PokeAPI in EN/DE/FR/ES/IT;
@@ -95,6 +99,7 @@ evolution chain, and artwork on demand.
 | | `Enter` | Load the highlighted Pokémon |
 | | `/` or `Tab` | Focus the search box |
 | | `E` | Focus the evolution panel |
+| | `T` | Open the type matchup card |
 | | `L` | Open the language picker |
 | | `Q` / `Esc` | Quit |
 | **Search** | *type* | Filter the list |
@@ -106,6 +111,7 @@ evolution chain, and artwork on demand.
 | **Language card** | `↑` / `↓` | Move selection |
 | | `Enter` / `Space` | Apply |
 | | `Esc` | Cancel |
+| **Matchup card** | `Esc` / `T` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
 
 ---
@@ -123,6 +129,7 @@ state, and all network work happens off the UI thread.
 | `app.rs` | State machine + `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite & evolution-graph drawing. |
 | `i18n.rs` | `Language` enum + translation tables for the 6 UI languages. |
+| `typechart.rs` | Offline Generation VI+ type-effectiveness chart & matchup analysis. |
 | `theme.rs` | PICO-8-inspired palette and per-type accent colors. |
 
 ### How it works

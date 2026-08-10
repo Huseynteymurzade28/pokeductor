@@ -81,6 +81,8 @@ pub struct App {
     /// Whether the language-picker card is open, and which row it highlights.
     pub language_picker: bool,
     pub lang_cursor: usize,
+    /// Whether the type-matchup card is open for the current selection.
+    pub matchups: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
     pub translations: HashMap<(String, String), String>,
     /// Translation requests currently in flight, to avoid duplicating work.
@@ -119,6 +121,7 @@ impl App {
             evo_cursor: 0,
             language_picker: false,
             lang_cursor: 0,
+            matchups: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
             selected_name: None,
@@ -373,15 +376,32 @@ impl App {
             self.should_quit = true;
             return;
         }
-        // The language picker is modal: it grabs all input while open.
+        // The overlay cards are modal: whichever is open grabs all input.
         if self.language_picker {
             self.handle_language_key(key);
+            return;
+        }
+        if self.matchups {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('t' | 'T' | 'q' | 'Q')
+            ) {
+                self.matchups = false;
+            }
             return;
         }
         match self.focus {
             Focus::List => self.handle_list_key(key),
             Focus::Search => self.handle_search_key(key),
             Focus::Evolution => self.handle_evolution_key(key),
+        }
+    }
+
+    /// Opens the type-matchup card. It reads the selection's types, so there is
+    /// nothing to show until a Pokemon has actually loaded.
+    fn open_matchups(&mut self) {
+        if self.selected_detail().is_some() {
+            self.matchups = true;
         }
     }
 
@@ -418,6 +438,7 @@ impl App {
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Enter => self.request_selected(),
             KeyCode::Char('e') | KeyCode::Char('E') => self.focus_evolution(),
+            KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
             _ => {}
@@ -455,6 +476,7 @@ impl App {
                 self.evo_cursor += 1;
             }
             KeyCode::Enter => self.jump_to_evolution_member(),
+            KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
             _ => {}
         }
     }
