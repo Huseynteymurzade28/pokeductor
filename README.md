@@ -24,6 +24,10 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
 - **Interactive evolution graph** — focus the evolution panel and the chain is laid
   out as connected sprite cards (branching chains like Eevee included). Hop to any
   stage with a keypress to instantly inspect a Pokémon's next evolution.
+- **Evolution requirements** — every stage is labelled with what it takes to get
+  there: `Lv. 16`, `Use Water Stone`, `Trade for Shelmet`, `Happiness 160`,
+  `At night`, `Knows a Fairy move`, and the rest. Move the cursor onto a stage
+  and the full set of conditions is spelled out under the panel.
 - **Info cards** — national Pokédex number, genus, flavor-text blurb, and
   **Legendary / Mythical / Baby** badges for each species.
 - **Type matchup analysis** — press `T` for a card showing exactly what the
@@ -147,6 +151,11 @@ state, and all network work happens off the UI thread.
   bg = bottom pixel).
 - **Alternate forms.** Forms like `raichu-alola` resolve their species/evolution
   data via the base species name from the Pokémon payload, so they don't 404.
+- **Evolution requirements.** PokeAPI's `evolution_details` are parsed into a
+  structured `EvolutionCondition` and phrased through per-language templates, so
+  each translation decides where the value lands (`Use {}` vs. `{} kullan`).
+  Where a stage can be reached more than one way, the first (current-generation)
+  route is shown.
 
 ### Built with
 
@@ -166,6 +175,9 @@ state, and all network work happens off the UI thread.
 - UI strings live in `i18n.rs` — add a language by extending the `Language` enum,
   `Language::ALL`, and adding a `Strings` table.
 - Pokédex **flavor text and genus** come from PokeAPI in `en`, `de`, `fr`, `es`, `it`.
+- **Evolution requirements** are phrased from the `EvoStrings` templates in
+  `i18n.rs`. Item, move and location names inside them stay in English: they
+  arrive as PokeAPI slugs and localizing each one would cost an extra request.
 - For UI languages PokeAPI has **no** text for (Turkish), the English blurb is
   translated on demand through the free, key-less
   [MyMemory](https://mymemory.translated.net/) API and cached. Translation is

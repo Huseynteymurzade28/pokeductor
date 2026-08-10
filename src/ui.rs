@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap
 use ratatui::Frame;
 
 use crate::app::{App, Focus};
-use crate::i18n::{Language, Strings};
+use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
 use crate::typechart;
@@ -445,13 +445,30 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         let mut lane = 0u16;
         place_node(frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane);
     } else {
-        frame.render_widget(Paragraph::new(evolution_lines(tree, cursor.or(current))), canvas);
+        let lines = evolution_lines(tree, cursor.or(current), &s.evo);
+        frame.render_widget(Paragraph::new(lines), canvas);
     }
 
-    let hint = if focused { s.evo_nav_hint } else { s.expand_hint };
-    let hint = Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(theme::OVERLAY))))
-        .alignment(Alignment::Center);
-    frame.render_widget(hint, rows[1]);
+    // The bottom row doubles as a requirement readout: while the cursor sits on
+    // a member, spell out in full what it takes to get there — the cards only
+    // have room for the headline condition.
+    let requirement = cursor
+        .and_then(|name| tree.find(name))
+        .and_then(|node| node.condition.as_ref())
+        .map(|condition| s.evo.summary(condition))
+        .filter(|text| !text.is_empty());
+
+    let hint = match requirement {
+        Some(text) => Line::from(vec![
+            Span::styled("✦ ", Style::default().fg(theme::PEACH)),
+            Span::styled(text, Style::default().fg(theme::LAVENDER)),
+        ]),
+        None => Line::from(Span::styled(
+            if focused { s.evo_nav_hint } else { s.expand_hint },
+            Style::default().fg(theme::OVERLAY),
+        )),
+    };
+    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), rows[1]);
 }
 
 // --- Small rendering helpers ---------------------------------------------
@@ -548,10 +565,15 @@ fn render_centered_loading(frame: &mut Frame, inner: Rect, label: &str, spinner:
 // --- Evolution tree rendering --------------------------------------------
 
 /// Renders an [`EvolutionTree`] as a list of styled lines. Linear segments are
-/// drawn horizontally (`A ──▶ B ──▶ C`); wherever a species branches, the
-/// children are laid out vertically with `├──`/`└──` connectors.
-fn evolution_lines(tree: &EvolutionTree, highlight: Option<&str>) -> Vec<Line<'static>> {
-    node_block(tree, highlight)
+/// drawn horizontally (`A ──▶ B (Lv. 16) ──▶ C`); wherever a species branches,
+/// the children are laid out vertically with `├──`/`└──` connectors. Each
+/// member carries its evolution requirement in parentheses.
+fn evolution_lines(
+    tree: &EvolutionTree,
+    highlight: Option<&str>,
+    evo: &EvoStrings,
+) -> Vec<Line<'static>> {
+    node_block(tree, highlight, evo)
         .into_iter()
         .map(Line::from)
         .collect()
@@ -559,7 +581,11 @@ fn evolution_lines(tree: &EvolutionTree, highlight: Option<&str>) -> Vec<Line<'s
 
 /// Returns the block of span-rows for `node` and its descendants, without any
 /// outer indentation (the caller prepends connectors).
-fn node_block(node: &EvolutionTree, highlight: Option<&str>) -> Vec<Vec<Span<'static>>> {
+fn node_block(
+    node: &EvolutionTree,
+    highlight: Option<&str>,
+    evo: &EvoStrings,
+) -> Vec<Vec<Span<'static>>> {
     // Walk the linear run: follow single-child links onto one horizontal line.
     let mut run: Vec<&EvolutionTree> = vec![node];
     let mut cur = node;
@@ -568,29 +594,37 @@ fn node_block(node: &EvolutionTree, highlight: Option<&str>) -> Vec<Vec<Span<'st
         run.push(cur);
     }
 
+    // Lay the run out left to right, tracking how wide it gets so any branch
+    // connectors below can be indented under the last name.
     let mut first: Vec<Span<'static>> = Vec::new();
+    let mut width = 0usize;
+    let mut indent_width = 0usize;
     for (i, n) in run.iter().enumerate() {
         if i > 0 {
             first.push(Span::styled(" ──▶ ", Style::default().fg(theme::OVERLAY)));
+            width += 5; // " ──▶ " is 5 columns
+        }
+        if i + 1 == run.len() {
+            indent_width = width; // everything preceding the final name
         }
         first.push(name_span(&n.name, highlight));
+        width += title_case(&n.name).chars().count();
+        if let Some(label) = condition_label(n, evo) {
+            width += label.chars().count();
+            first.push(Span::styled(label, Style::default().fg(theme::OVERLAY)));
+        }
     }
     let mut lines = vec![first];
 
     // `cur` ends the run; if it branches, lay children out vertically beneath
     // the final name of the run.
     if cur.children.len() > 1 {
-        let mut indent_width = 0usize;
-        for n in &run[..run.len() - 1] {
-            indent_width += title_case(&n.name).chars().count();
-        }
-        indent_width += (run.len() - 1) * 5; // each " ──▶ " is 5 columns
         let indent = " ".repeat(indent_width);
 
         let count = cur.children.len();
         for (i, child) in cur.children.iter().enumerate() {
             let is_last = i == count - 1;
-            for (j, child_row) in node_block(child, highlight).into_iter().enumerate() {
+            for (j, child_row) in node_block(child, highlight, evo).into_iter().enumerate() {
                 let connector = if j == 0 {
                     if is_last {
                         "└── "
@@ -613,6 +647,28 @@ fn node_block(node: &EvolutionTree, highlight: Option<&str>) -> Vec<Vec<Span<'st
     }
 
     lines
+}
+
+/// Longest requirement text the compact tree will inline before truncating —
+/// it is the fallback for cramped terminals, so it has to stay narrow.
+const EVO_TEXT_LABEL_MAX: usize = 16;
+
+/// The parenthesised requirement suffix for a chain member in the compact text
+/// tree, e.g. `" (Lv. 16)"`. `None` for a chain root, which nothing evolves into.
+fn condition_label(node: &EvolutionTree, evo: &EvoStrings) -> Option<String> {
+    let text = node.condition.as_ref().and_then(|c| evo.short(c))?;
+    Some(format!(" ({})", truncate(&text, EVO_TEXT_LABEL_MAX)))
+}
+
+/// Shortens `text` to `max` columns, marking the cut with an ellipsis.
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    text.chars().take(max - 1).chain(std::iter::once('…')).collect()
 }
 
 fn name_span(raw_name: &str, highlight: Option<&str>) -> Span<'static> {
@@ -707,7 +763,15 @@ fn draw_card(
     if w == 0 || h == 0 {
         return;
     }
-    let sprite_area = Rect { x, y: top, width: w, height: h.saturating_sub(1) };
+
+    // How this stage is reached. A card one row taller than the minimum gets a
+    // dedicated row for it; a shorter one tucks it in beside the name instead,
+    // so the requirement survives even on a cramped three-way branch.
+    let condition = node.condition.as_ref().and_then(|c| s.evo.short(c));
+    let stacked = condition.is_some() && h > MIN_CARD_H;
+    let text_rows = if stacked { 2 } else { 1 };
+
+    let sprite_area = Rect { x, y: top, width: w, height: h.saturating_sub(text_rows) };
     match app.sprites.get(&node.name) {
         Some(sprite) => render_sprite_capped(frame, sprite_area, sprite, w),
         None => {
@@ -732,9 +796,33 @@ fn draw_card(
     } else {
         Style::default().fg(theme::GREEN)
     };
-    let name = Paragraph::new(Line::from(Span::styled(title_case(&node.name), style)))
+    let label = title_case(&node.name);
+    let mut name_spans = vec![Span::styled(label.clone(), style)];
+
+    // Inline requirement: only when there is no row of its own for it, and only
+    // if enough columns are left over to say something meaningful.
+    if let (Some(text), false) = (&condition, stacked) {
+        let free = (w as usize).saturating_sub(label.chars().count());
+        if free >= 6 {
+            name_spans.push(Span::styled(
+                truncate(&format!(" · {text}"), free),
+                Style::default().fg(theme::PEACH),
+            ));
+        }
+    }
+
+    let name_y = top + h.saturating_sub(text_rows);
+    let name = Paragraph::new(Line::from(name_spans)).alignment(Alignment::Center);
+    frame.render_widget(name, Rect { x, y: name_y, width: w, height: 1 });
+
+    if let (Some(text), true) = (&condition, stacked) {
+        let requirement = Paragraph::new(Line::from(Span::styled(
+            truncate(text, w as usize),
+            Style::default().fg(theme::PEACH),
+        )))
         .alignment(Alignment::Center);
-    frame.render_widget(name, Rect { x, y: top + h.saturating_sub(1), width: w, height: 1 });
+        frame.render_widget(requirement, Rect { x, y: name_y + 1, width: w, height: 1 });
+    }
 }
 
 /// Wires a parent card's right edge to each child card's left edge with

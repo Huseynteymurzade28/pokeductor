@@ -6,7 +6,10 @@
 
 use std::collections::HashMap;
 
-use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite, Stat, StatKind};
+use crate::models::{
+    EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail, PokemonEntry, Sprite, Stat,
+    StatKind,
+};
 
 const BASE_URL: &str = "https://pokeapi.co/api/v2";
 /// How many Pokemon to load into the sidebar. Covers all current species.
@@ -238,7 +241,42 @@ fn clean_flavor(raw: &str) -> String {
 fn parse_chain(link: &RawChainLink) -> EvolutionTree {
     EvolutionTree {
         name: link.species.name.clone(),
+        condition: link.evolution_details.first().map(parse_condition),
         children: link.evolves_to.iter().map(parse_chain).collect(),
+    }
+}
+
+/// Converts one raw `evolution_details` entry into an [`EvolutionCondition`].
+///
+/// A species can list several entries when the games offer more than one route
+/// to the same evolution (different items across generations, for instance).
+/// [`parse_chain`] surfaces only the first, which is the route the current
+/// games use; showing all of them would swamp the panel.
+fn parse_condition(raw: &RawEvolutionDetail) -> EvolutionCondition {
+    let name_of = |r: &Option<NamedResource>| r.as_ref().map(|n| n.name.clone());
+    EvolutionCondition {
+        trigger: raw
+            .trigger
+            .as_ref()
+            .map(|t| EvolutionTrigger::from_api(&t.name)),
+        min_level: raw.min_level,
+        item: name_of(&raw.item),
+        held_item: name_of(&raw.held_item),
+        known_move: name_of(&raw.known_move),
+        known_move_type: name_of(&raw.known_move_type),
+        min_happiness: raw.min_happiness,
+        min_affection: raw.min_affection,
+        min_beauty: raw.min_beauty,
+        // The API uses an empty string rather than null for "any time of day".
+        time_of_day: (!raw.time_of_day.is_empty()).then(|| raw.time_of_day.clone()),
+        location: name_of(&raw.location),
+        gender: raw.gender,
+        needs_overworld_rain: raw.needs_overworld_rain,
+        turn_upside_down: raw.turn_upside_down,
+        trade_species: name_of(&raw.trade_species),
+        party_species: name_of(&raw.party_species),
+        party_type: name_of(&raw.party_type),
+        relative_physical_stats: raw.relative_physical_stats,
     }
 }
 
@@ -329,7 +367,34 @@ struct RawEvolutionChain {
 #[derive(serde::Deserialize)]
 struct RawChainLink {
     species: NamedResource,
+    #[serde(default)]
+    evolution_details: Vec<RawEvolutionDetail>,
     evolves_to: Vec<RawChainLink>,
+}
+
+/// One way a species can evolve. PokeAPI sends every field on every entry, but
+/// `serde(default)` keeps us resilient to the payload growing or shrinking.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RawEvolutionDetail {
+    trigger: Option<NamedResource>,
+    min_level: Option<u32>,
+    item: Option<NamedResource>,
+    held_item: Option<NamedResource>,
+    known_move: Option<NamedResource>,
+    known_move_type: Option<NamedResource>,
+    min_happiness: Option<u32>,
+    min_affection: Option<u32>,
+    min_beauty: Option<u32>,
+    time_of_day: String,
+    location: Option<NamedResource>,
+    gender: Option<u8>,
+    needs_overworld_rain: bool,
+    turn_upside_down: bool,
+    trade_species: Option<NamedResource>,
+    party_species: Option<NamedResource>,
+    party_type: Option<NamedResource>,
+    relative_physical_stats: Option<i8>,
 }
 
 #[derive(serde::Deserialize)]
@@ -342,4 +407,104 @@ struct MyMemoryResponse {
 struct MyMemoryData {
     #[serde(rename = "translatedText")]
     translated_text: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trimmed `/evolution-chain` payload in the exact shape PokeAPI sends:
+    /// Eevee branching into an item evolution and a conditional one.
+    const EEVEE_CHAIN: &str = r#"{
+      "chain": {
+        "species": { "name": "eevee", "url": "" },
+        "evolution_details": [],
+        "evolves_to": [
+          {
+            "species": { "name": "vaporeon", "url": "" },
+            "evolution_details": [{
+              "trigger": { "name": "use-item", "url": "" },
+              "item": { "name": "water-stone", "url": "" },
+              "min_level": null,
+              "time_of_day": "",
+              "needs_overworld_rain": false,
+              "turn_upside_down": false
+            }],
+            "evolves_to": []
+          },
+          {
+            "species": { "name": "umbreon", "url": "" },
+            "evolution_details": [{
+              "trigger": { "name": "level-up", "url": "" },
+              "min_happiness": 160,
+              "time_of_day": "night",
+              "needs_overworld_rain": false,
+              "turn_upside_down": false
+            }],
+            "evolves_to": []
+          }
+        ]
+      }
+    }"#;
+
+    fn eevee() -> EvolutionTree {
+        let raw: RawEvolutionChain = serde_json::from_str(EEVEE_CHAIN).unwrap();
+        parse_chain(&raw.chain)
+    }
+
+    #[test]
+    fn chain_root_has_no_condition() {
+        // Nothing evolves *into* Eevee, so there is no requirement to show.
+        assert!(eevee().condition.is_none());
+    }
+
+    #[test]
+    fn item_evolutions_carry_their_item() {
+        let tree = eevee();
+        let vaporeon = tree.find("vaporeon").unwrap();
+        let condition = vaporeon.condition.as_ref().unwrap();
+        assert_eq!(condition.trigger, Some(EvolutionTrigger::UseItem));
+        assert_eq!(condition.item.as_deref(), Some("water-stone"));
+        assert_eq!(condition.min_level, None);
+    }
+
+    #[test]
+    fn layered_conditions_are_all_kept() {
+        let tree = eevee();
+        let umbreon = tree.find("umbreon").unwrap();
+        let condition = umbreon.condition.as_ref().unwrap();
+        assert_eq!(condition.trigger, Some(EvolutionTrigger::LevelUp));
+        assert_eq!(condition.min_happiness, Some(160));
+        assert_eq!(condition.time_of_day.as_deref(), Some("night"));
+    }
+
+    #[test]
+    fn empty_time_of_day_is_treated_as_unset() {
+        // PokeAPI sends "" rather than null for "any time of day".
+        let tree = eevee();
+        let vaporeon = tree.find("vaporeon").unwrap();
+        assert_eq!(vaporeon.condition.as_ref().unwrap().time_of_day, None);
+    }
+
+    #[test]
+    fn missing_fields_do_not_break_parsing() {
+        // Only the fields we care about are guaranteed; the rest must default.
+        let json = r#"{
+          "chain": {
+            "species": { "name": "pichu", "url": "" },
+            "evolves_to": [{
+              "species": { "name": "pikachu", "url": "" },
+              "evolution_details": [{ "trigger": { "name": "level-up", "url": "" } }],
+              "evolves_to": []
+            }]
+          }
+        }"#;
+        let raw: RawEvolutionChain = serde_json::from_str(json).unwrap();
+        let tree = parse_chain(&raw.chain);
+        let pikachu = tree.find("pikachu").unwrap();
+        assert_eq!(
+            pikachu.condition.as_ref().unwrap().trigger,
+            Some(EvolutionTrigger::LevelUp)
+        );
+    }
 }

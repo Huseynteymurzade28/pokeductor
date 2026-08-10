@@ -106,6 +106,63 @@ impl PokemonDetail {
     }
 }
 
+/// What sets an evolution in motion. PokeAPI has a long tail of one-off
+/// triggers (spin, three-critical-hits, ...), so anything beyond the four
+/// common ones is carried through verbatim and displayed as-is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvolutionTrigger {
+    LevelUp,
+    Trade,
+    UseItem,
+    Shed,
+    Other(String),
+}
+
+impl EvolutionTrigger {
+    pub fn from_api(slug: &str) -> Self {
+        match slug {
+            "level-up" => Self::LevelUp,
+            "trade" => Self::Trade,
+            "use-item" => Self::UseItem,
+            "shed" => Self::Shed,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+/// The requirements for one species to evolve into another.
+///
+/// Every field is optional because the games layer conditions freely: Umbreon
+/// needs happiness *and* night, Milotic needs beauty, Shedinja needs a free
+/// party slot. The renderer turns whichever fields are set into readable text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EvolutionCondition {
+    pub trigger: Option<EvolutionTrigger>,
+    pub min_level: Option<u32>,
+    /// Item used on the Pokemon (e.g. `"water-stone"`).
+    pub item: Option<String>,
+    /// Item the Pokemon must be holding.
+    pub held_item: Option<String>,
+    pub known_move: Option<String>,
+    pub known_move_type: Option<String>,
+    pub min_happiness: Option<u32>,
+    pub min_affection: Option<u32>,
+    pub min_beauty: Option<u32>,
+    /// `"day"`, `"night"` or `"dusk"`.
+    pub time_of_day: Option<String>,
+    pub location: Option<String>,
+    /// PokeAPI gender id: 1 = female, 2 = male.
+    pub gender: Option<u8>,
+    pub needs_overworld_rain: bool,
+    pub turn_upside_down: bool,
+    /// The species that must be traded for (Karrablast ↔ Shelmet).
+    pub trade_species: Option<String>,
+    pub party_species: Option<String>,
+    pub party_type: Option<String>,
+    /// Attack compared to Defense: 1 = greater, 0 = equal, -1 = less (Tyrogue).
+    pub relative_physical_stats: Option<i8>,
+}
+
 /// A node in a parsed evolution chain.
 ///
 /// PokeAPI returns evolution data as a recursively nested structure where each
@@ -116,6 +173,9 @@ impl PokemonDetail {
 pub struct EvolutionTree {
     /// Raw API name of the species at this node.
     pub name: String,
+    /// How the *parent* evolves into this node. `None` at the root of a chain,
+    /// which nothing evolves into.
+    pub condition: Option<EvolutionCondition>,
     pub children: Vec<EvolutionTree>,
 }
 
@@ -136,6 +196,15 @@ impl EvolutionTree {
         } else {
             self.children.iter().map(EvolutionTree::leaf_count).sum()
         }
+    }
+
+    /// Finds the node for `name` anywhere in the chain. Species appear at most
+    /// once per chain, so the first match is the only match.
+    pub fn find(&self, name: &str) -> Option<&EvolutionTree> {
+        if self.name == name {
+            return Some(self);
+        }
+        self.children.iter().find_map(|child| child.find(name))
     }
 
     /// Length of the longest evolution path (number of stages), e.g. 3 for

@@ -4,7 +4,7 @@
 //! re-reads these on every frame, switching language (the `L` hotkey) updates
 //! the entire interface instantly with no extra bookkeeping.
 
-use crate::models::StatKind;
+use crate::models::{title_case, EvolutionCondition, EvolutionTrigger, StatKind};
 
 /// Supported interface languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,10 +141,145 @@ pub struct Strings {
     pub matchups_none: &'static str,
     /// Hint at the foot of the matchup card.
     pub close_hint: &'static str,
+    /// Wording for evolution requirements.
+    pub evo: EvoStrings,
     /// Badge labels for special species categories.
     pub legendary_label: &'static str,
     pub mythical_label: &'static str,
     pub baby_label: &'static str,
+}
+
+/// Wording for the requirements attached to an evolution.
+///
+/// Entries containing `{}` are templates: the placeholder is replaced with a
+/// value (a level, an item, a species), which lets each language put it where
+/// its grammar wants it — "Use Water Stone" vs. "Water Stone kullan".
+///
+/// Item, move and location names themselves stay in English: they arrive as
+/// PokeAPI slugs and localizing them would mean an extra request per name.
+#[derive(Debug, Clone, Copy)]
+pub struct EvoStrings {
+    pub level: &'static str,
+    pub level_up: &'static str,
+    pub trade: &'static str,
+    pub trade_with: &'static str,
+    pub use_item: &'static str,
+    pub held_item: &'static str,
+    pub knows_move: &'static str,
+    pub knows_move_type: &'static str,
+    pub happiness: &'static str,
+    pub affection: &'static str,
+    pub beauty: &'static str,
+    pub day: &'static str,
+    pub night: &'static str,
+    pub dusk: &'static str,
+    pub location: &'static str,
+    pub male: &'static str,
+    pub female: &'static str,
+    pub rain: &'static str,
+    pub upside_down: &'static str,
+    pub party_species: &'static str,
+    pub party_type: &'static str,
+    pub shed: &'static str,
+}
+
+impl EvoStrings {
+    /// Every requirement in `condition`, phrased for this language and ordered
+    /// most-identifying first — so callers with little room can simply take the
+    /// first entry and still show the part that matters.
+    pub fn parts(&self, condition: &EvolutionCondition) -> Vec<String> {
+        let fill = |template: &str, value: &str| template.replace("{}", value);
+        let mut parts = Vec::new();
+
+        if let Some(level) = condition.min_level {
+            parts.push(fill(self.level, &level.to_string()));
+        }
+        if let Some(item) = &condition.item {
+            parts.push(fill(self.use_item, &title_case(item)));
+        }
+        match (&condition.trigger, &condition.trade_species) {
+            (Some(EvolutionTrigger::Trade), Some(species)) => {
+                parts.push(fill(self.trade_with, &title_case(species)));
+            }
+            (Some(EvolutionTrigger::Trade), None) => parts.push(self.trade.to_string()),
+            (Some(EvolutionTrigger::Shed), _) => parts.push(self.shed.to_string()),
+            _ => {}
+        }
+        if let Some(item) = &condition.held_item {
+            parts.push(fill(self.held_item, &title_case(item)));
+        }
+        if let Some(move_) = &condition.known_move {
+            parts.push(fill(self.knows_move, &title_case(move_)));
+        }
+        if let Some(type_) = &condition.known_move_type {
+            parts.push(fill(self.knows_move_type, &title_case(type_)));
+        }
+        if let Some(value) = condition.min_happiness {
+            parts.push(fill(self.happiness, &value.to_string()));
+        }
+        if let Some(value) = condition.min_affection {
+            parts.push(fill(self.affection, &value.to_string()));
+        }
+        if let Some(value) = condition.min_beauty {
+            parts.push(fill(self.beauty, &value.to_string()));
+        }
+        if let Some(time) = condition.time_of_day.as_deref() {
+            match time {
+                "day" => parts.push(self.day.to_string()),
+                "night" => parts.push(self.night.to_string()),
+                "dusk" => parts.push(self.dusk.to_string()),
+                other => parts.push(title_case(other)),
+            }
+        }
+        if let Some(place) = &condition.location {
+            parts.push(fill(self.location, &title_case(place)));
+        }
+        match condition.gender {
+            Some(1) => parts.push(self.female.to_string()),
+            Some(2) => parts.push(self.male.to_string()),
+            _ => {}
+        }
+        if let Some(species) = &condition.party_species {
+            parts.push(fill(self.party_species, &title_case(species)));
+        }
+        if let Some(type_) = &condition.party_type {
+            parts.push(fill(self.party_type, &title_case(type_)));
+        }
+        if condition.needs_overworld_rain {
+            parts.push(self.rain.to_string());
+        }
+        if condition.turn_upside_down {
+            parts.push(self.upside_down.to_string());
+        }
+        // Tyrogue's three branches. Symbolic, so it reads the same everywhere.
+        if let Some(cmp) = condition.relative_physical_stats {
+            parts.push(match cmp {
+                1 => "Atk > Def".to_string(),
+                -1 => "Atk < Def".to_string(),
+                _ => "Atk = Def".to_string(),
+            });
+        }
+
+        // Nothing but a trigger: name the trigger rather than showing nothing.
+        if parts.is_empty() {
+            match &condition.trigger {
+                Some(EvolutionTrigger::LevelUp) => parts.push(self.level_up.to_string()),
+                Some(EvolutionTrigger::Other(slug)) => parts.push(title_case(slug)),
+                _ => {}
+            }
+        }
+        parts
+    }
+
+    /// Every requirement on one line, for the hint bar.
+    pub fn summary(&self, condition: &EvolutionCondition) -> String {
+        self.parts(condition).join(" · ")
+    }
+
+    /// Just the headline requirement, for the single row under a sprite card.
+    pub fn short(&self, condition: &EvolutionCondition) -> Option<String> {
+        self.parts(condition).into_iter().next()
+    }
 }
 
 impl Strings {
@@ -181,6 +316,30 @@ impl Strings {
             matchups_offense: "Super effective against",
             matchups_none: "nothing",
             close_hint: "Esc / T to close",
+            evo: EvoStrings {
+                level: "Lv. {}",
+                level_up: "Level up",
+                trade: "Trade",
+                trade_with: "Trade for {}",
+                use_item: "Use {}",
+                held_item: "Holding {}",
+                knows_move: "Knows {}",
+                knows_move_type: "Knows a {} move",
+                happiness: "Happiness {}",
+                affection: "Affection {}",
+                beauty: "Beauty {}",
+                day: "Daytime",
+                night: "At night",
+                dusk: "At dusk",
+                location: "At {}",
+                male: "Male",
+                female: "Female",
+                rain: "In rain",
+                upside_down: "Console upside down",
+                party_species: "With {} in party",
+                party_type: "With a {} type in party",
+                shed: "Empty party slot",
+            },
             legendary_label: "Legendary",
             mythical_label: "Mythical",
             baby_label: "Baby",
@@ -220,6 +379,30 @@ impl Strings {
             matchups_offense: "Karşı üstün olduğu tipler",
             matchups_none: "yok",
             close_hint: "Kapatmak için Esc / T",
+            evo: EvoStrings {
+                level: "Sv. {}",
+                level_up: "Seviye atlayınca",
+                trade: "Takas",
+                trade_with: "{} ile takas",
+                use_item: "{} kullan",
+                held_item: "{} taşırken",
+                knows_move: "{} bilir",
+                knows_move_type: "{} tipi hamle bilir",
+                happiness: "Mutluluk {}",
+                affection: "Sevgi {}",
+                beauty: "Güzellik {}",
+                day: "Gündüz",
+                night: "Gece",
+                dusk: "Alacakaranlık",
+                location: "{} bölgesinde",
+                male: "Erkek",
+                female: "Dişi",
+                rain: "Yağmurda",
+                upside_down: "Konsol ters çevrili",
+                party_species: "Takımda {} varken",
+                party_type: "Takımda {} tipi varken",
+                shed: "Takımda boş yer",
+            },
             legendary_label: "Efsanevi",
             mythical_label: "Mitik",
             baby_label: "Yavru",
@@ -259,6 +442,30 @@ impl Strings {
             matchups_offense: "Sehr effektiv gegen",
             matchups_none: "nichts",
             close_hint: "Esc / T zum Schließen",
+            evo: EvoStrings {
+                level: "Lv. {}",
+                level_up: "Levelaufstieg",
+                trade: "Tausch",
+                trade_with: "Tausch gegen {}",
+                use_item: "{} benutzen",
+                held_item: "{} tragend",
+                knows_move: "Kennt {}",
+                knows_move_type: "Kennt {}-Attacke",
+                happiness: "Freundschaft {}",
+                affection: "Zuneigung {}",
+                beauty: "Schönheit {}",
+                day: "Tagsüber",
+                night: "Nachts",
+                dusk: "In der Dämmerung",
+                location: "Bei {}",
+                male: "Männlich",
+                female: "Weiblich",
+                rain: "Bei Regen",
+                upside_down: "Konsole umgedreht",
+                party_species: "Mit {} im Team",
+                party_type: "Mit {}-Typ im Team",
+                shed: "Freier Teamplatz",
+            },
             legendary_label: "Legendär",
             mythical_label: "Mysteriös",
             baby_label: "Baby",
@@ -298,6 +505,30 @@ impl Strings {
             matchups_offense: "Super efficace contre",
             matchups_none: "rien",
             close_hint: "Esc / T pour fermer",
+            evo: EvoStrings {
+                level: "Niv. {}",
+                level_up: "Montée de niveau",
+                trade: "Échange",
+                trade_with: "Échange contre {}",
+                use_item: "Utiliser {}",
+                held_item: "Tient {}",
+                knows_move: "Connaît {}",
+                knows_move_type: "Connaît une capacité {}",
+                happiness: "Bonheur {}",
+                affection: "Affection {}",
+                beauty: "Beauté {}",
+                day: "Le jour",
+                night: "La nuit",
+                dusk: "Au crépuscule",
+                location: "À {}",
+                male: "Mâle",
+                female: "Femelle",
+                rain: "Sous la pluie",
+                upside_down: "Console retournée",
+                party_species: "Avec {} dans l'équipe",
+                party_type: "Avec un type {} dans l'équipe",
+                shed: "Place libre dans l'équipe",
+            },
             legendary_label: "Légendaire",
             mythical_label: "Fabuleux",
             baby_label: "Bébé",
@@ -337,6 +568,30 @@ impl Strings {
             matchups_offense: "Muy eficaz contra",
             matchups_none: "nada",
             close_hint: "Esc / T para cerrar",
+            evo: EvoStrings {
+                level: "Niv. {}",
+                level_up: "Subir de nivel",
+                trade: "Intercambio",
+                trade_with: "Intercambiar por {}",
+                use_item: "Usar {}",
+                held_item: "Llevando {}",
+                knows_move: "Conoce {}",
+                knows_move_type: "Conoce un movimiento {}",
+                happiness: "Felicidad {}",
+                affection: "Afecto {}",
+                beauty: "Belleza {}",
+                day: "De día",
+                night: "De noche",
+                dusk: "Al anochecer",
+                location: "En {}",
+                male: "Macho",
+                female: "Hembra",
+                rain: "Bajo la lluvia",
+                upside_down: "Consola boca abajo",
+                party_species: "Con {} en el equipo",
+                party_type: "Con un tipo {} en el equipo",
+                shed: "Hueco libre en el equipo",
+            },
             legendary_label: "Legendario",
             mythical_label: "Singular",
             baby_label: "Bebé",
@@ -376,9 +631,112 @@ impl Strings {
             matchups_offense: "Superefficace contro",
             matchups_none: "niente",
             close_hint: "Esc / T per chiudere",
+            evo: EvoStrings {
+                level: "Liv. {}",
+                level_up: "Aumento di livello",
+                trade: "Scambio",
+                trade_with: "Scambio con {}",
+                use_item: "Usa {}",
+                held_item: "Tenendo {}",
+                knows_move: "Conosce {}",
+                knows_move_type: "Conosce una mossa {}",
+                happiness: "Felicità {}",
+                affection: "Affetto {}",
+                beauty: "Bellezza {}",
+                day: "Di giorno",
+                night: "Di notte",
+                dusk: "Al tramonto",
+                location: "A {}",
+                male: "Maschio",
+                female: "Femmina",
+                rain: "Sotto la pioggia",
+                upside_down: "Console capovolta",
+                party_species: "Con {} in squadra",
+                party_type: "Con un tipo {} in squadra",
+                shed: "Posto libero in squadra",
+            },
             legendary_label: "Leggendario",
             mythical_label: "Misterioso",
             baby_label: "Cucciolo",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn umbreon() -> EvolutionCondition {
+        EvolutionCondition {
+            trigger: Some(EvolutionTrigger::LevelUp),
+            min_happiness: Some(160),
+            time_of_day: Some("night".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn every_language_fills_its_placeholders() {
+        // A condition touching every templated string, so a translation that
+        // dropped its `{}` shows up here rather than in the UI.
+        let kitchen_sink = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::Trade),
+            min_level: Some(16),
+            item: Some("water-stone".into()),
+            held_item: Some("kings-rock".into()),
+            known_move: Some("ancient-power".into()),
+            known_move_type: Some("fairy".into()),
+            min_happiness: Some(160),
+            min_affection: Some(2),
+            min_beauty: Some(170),
+            location: Some("mount-coronet".into()),
+            trade_species: Some("shelmet".into()),
+            party_species: Some("remoraid".into()),
+            party_type: Some("rock".into()),
+            ..Default::default()
+        };
+        for language in Language::ALL {
+            for part in language.strings().evo.parts(&kitchen_sink) {
+                assert!(
+                    !part.contains("{}"),
+                    "{:?} left a placeholder unfilled: {part}",
+                    language
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parts_are_ordered_headline_first() {
+        let english = Language::English.strings().evo;
+        assert_eq!(english.short(&umbreon()).as_deref(), Some("Happiness 160"));
+        assert_eq!(english.summary(&umbreon()), "Happiness 160 · At night");
+    }
+
+    #[test]
+    fn a_bare_trigger_still_reads_as_something() {
+        let condition = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::Other("three-critical-hits".into())),
+            ..Default::default()
+        };
+        let english = Language::English.strings().evo;
+        assert_eq!(english.summary(&condition), "Three Critical Hits");
+    }
+
+    #[test]
+    fn an_unknown_condition_yields_no_text() {
+        let english = Language::English.strings().evo;
+        assert!(english.short(&EvolutionCondition::default()).is_none());
+    }
+
+    #[test]
+    fn item_names_are_humanised() {
+        let english = Language::English.strings().evo;
+        let condition = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::UseItem),
+            item: Some("water-stone".into()),
+            ..Default::default()
+        };
+        assert_eq!(english.summary(&condition), "Use Water Stone");
     }
 }
