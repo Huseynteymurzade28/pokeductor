@@ -445,7 +445,7 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         let mut lane = 0u16;
         place_node(frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane);
     } else {
-        let lines = evolution_lines(tree, cursor.or(current), &s.evo);
+        let lines = evolution_lines(tree, cursor.or(current), &s.evo, canvas.width);
         frame.render_widget(Paragraph::new(lines), canvas);
     }
 
@@ -572,11 +572,19 @@ fn evolution_lines(
     tree: &EvolutionTree,
     highlight: Option<&str>,
     evo: &EvoStrings,
+    width: u16,
 ) -> Vec<Line<'static>> {
-    node_block(tree, highlight, evo)
+    node_block(tree, highlight, evo, requirement_budget(width))
         .into_iter()
         .map(Line::from)
         .collect()
+}
+
+/// How many columns a requirement may take in the compact tree. Names and
+/// connectors eat into the panel, so the budget grows with the panel but never
+/// so far that a long location name pushes the tree off the right edge.
+fn requirement_budget(width: u16) -> usize {
+    (width as usize).saturating_sub(28).clamp(12, 40)
 }
 
 /// Returns the block of span-rows for `node` and its descendants, without any
@@ -585,6 +593,7 @@ fn node_block(
     node: &EvolutionTree,
     highlight: Option<&str>,
     evo: &EvoStrings,
+    budget: usize,
 ) -> Vec<Vec<Span<'static>>> {
     // Walk the linear run: follow single-child links onto one horizontal line.
     let mut run: Vec<&EvolutionTree> = vec![node];
@@ -609,7 +618,7 @@ fn node_block(
         }
         first.push(name_span(&n.name, highlight));
         width += title_case(&n.name).chars().count();
-        if let Some(label) = condition_label(n, evo) {
+        if let Some(label) = condition_label(n, evo, budget) {
             width += label.chars().count();
             first.push(Span::styled(label, Style::default().fg(theme::OVERLAY)));
         }
@@ -624,7 +633,9 @@ fn node_block(
         let count = cur.children.len();
         for (i, child) in cur.children.iter().enumerate() {
             let is_last = i == count - 1;
-            for (j, child_row) in node_block(child, highlight, evo).into_iter().enumerate() {
+            for (j, child_row) in
+                node_block(child, highlight, evo, budget).into_iter().enumerate()
+            {
                 let connector = if j == 0 {
                     if is_last {
                         "└── "
@@ -649,15 +660,11 @@ fn node_block(
     lines
 }
 
-/// Longest requirement text the compact tree will inline before truncating —
-/// it is the fallback for cramped terminals, so it has to stay narrow.
-const EVO_TEXT_LABEL_MAX: usize = 16;
-
 /// The parenthesised requirement suffix for a chain member in the compact text
 /// tree, e.g. `" (Lv. 16)"`. `None` for a chain root, which nothing evolves into.
-fn condition_label(node: &EvolutionTree, evo: &EvoStrings) -> Option<String> {
+fn condition_label(node: &EvolutionTree, evo: &EvoStrings, budget: usize) -> Option<String> {
     let text = node.condition.as_ref().and_then(|c| evo.short(c))?;
-    Some(format!(" ({})", truncate(&text, EVO_TEXT_LABEL_MAX)))
+    Some(format!(" ({})", truncate(&text, budget)))
 }
 
 /// Shortens `text` to `max` columns, marking the cut with an ellipsis.
