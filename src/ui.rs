@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::app::{App, Focus, SortKey};
 use crate::i18n::{EvoStrings, Language, Strings};
-use crate::models::{title_case, EvolutionTree, Sprite};
+use crate::models::{title_case, Ability, EvolutionTree, Sprite};
 use crate::theme;
 use crate::team;
 use crate::typechart;
@@ -50,6 +50,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // at a time (input is modal), so the draw order is arbitrary.
     if app.matchups {
         render_matchups(frame, app, &strings, area);
+    }
+    if app.ability_card {
+        render_abilities(frame, app, &strings, area);
     }
     if app.team_card {
         render_team(frame, app, &strings, area);
@@ -262,6 +265,31 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     )];
     type_spans.extend(type_chips(&detail.types));
     lines.push(Line::from(type_spans));
+
+    // Ability names. These come in the same payload as the types, so the row
+    // costs nothing; the descriptions behind `A` are what need a request.
+    if !detail.abilities.is_empty() {
+        let mut ability_spans = vec![Span::styled(
+            format!("{}: ", s.abilities_label),
+            Style::default().fg(theme::SUBTEXT),
+        )];
+        for (index, ability) in detail.abilities.iter().enumerate() {
+            if index > 0 {
+                ability_spans.push(Span::styled(" · ", Style::default().fg(theme::OVERLAY)));
+            }
+            ability_spans.push(Span::styled(
+                ability_display_name(app, ability),
+                Style::default().fg(theme::TEXT),
+            ));
+            if ability.is_hidden {
+                ability_spans.push(Span::styled(
+                    format!(" ({})", s.ability_hidden),
+                    Style::default().fg(theme::OVERLAY),
+                ));
+            }
+        }
+        lines.push(Line::from(ability_spans));
+    }
 
     lines.push(Line::from(vec![
         Span::styled(format!("{}: ", s.height_label), Style::default().fg(theme::SUBTEXT)),
@@ -930,6 +958,8 @@ fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
 const MATCHUP_CARD_W: u16 = 48;
 /// The team card carries names *and* chips, so it needs a little more room.
 const TEAM_CARD_W: u16 = 56;
+/// The ability card holds wrapped prose, so it is wider still.
+const ABILITY_CARD_W: u16 = 60;
 /// Columns reserved for a multiplier label (`" ×4  "`), which also sets the
 /// indent used when a group of chips wraps onto another row.
 const MATCHUP_LABEL_W: usize = 5;
@@ -1063,6 +1093,114 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
 /// Draws the little modal card for switching interface language.
 /// The party card: who is on the team, and the three things their combined
 /// typings say about it.
+/// The ability card: each of the species' abilities with what it actually does.
+fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some(detail) = app.selected_detail() else {
+        return;
+    };
+
+    let width = ABILITY_CARD_W.min(full.width);
+    let text_w = width.saturating_sub(4) as usize;
+    if text_w < 16 || full.height < 8 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    let code = app.language.flavor_code();
+
+    lines.push(Line::from(Span::styled(
+        format!(" {}", title_case(&detail.name)),
+        Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+    )));
+
+    for ability in &detail.abilities {
+        lines.push(Line::raw(""));
+
+        let mut head = vec![Span::styled(
+            format!(" {}", ability_display_name(app, ability)),
+            Style::default().fg(theme::PEACH).add_modifier(Modifier::BOLD),
+        )];
+        if ability.is_hidden {
+            head.push(Span::styled(
+                format!("  ({})", s.ability_hidden),
+                Style::default().fg(theme::OVERLAY),
+            ));
+        }
+        lines.push(Line::from(head));
+
+        // Until the text lands — or if it never does — the name above is still
+        // the useful half, so the row degrades to a quiet placeholder.
+        match app.abilities.get(&ability.name).and_then(|info| info.flavor_for(code)) {
+            Some(text) => {
+                for row in wrap_plain(text, text_w) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {row}"),
+                        Style::default().fg(theme::SUBTEXT),
+                    )));
+                }
+            }
+            None => lines.push(Line::from(Span::styled(
+                format!("  {}…", s.loading),
+                Style::default().fg(theme::OVERLAY),
+            ))),
+        }
+    }
+
+    let height = (lines.len() as u16 + 3).min(full.height);
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.abilities_title,
+            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.ability_close_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
+/// An ability's name in the active language, falling back to its slug until
+/// the localized text has been fetched. Callers add the hidden marker
+/// themselves, since the two cards place it differently.
+fn ability_display_name(app: &App, ability: &Ability) -> String {
+    match app.abilities.get(&ability.name) {
+        Some(info) => info.name_for(app.language.flavor_code()),
+        None => title_case(&ability.name),
+    }
+}
+
+/// Greedy word wrap for a plain paragraph of text.
+fn wrap_plain(text: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
+            rows.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    rows
+}
+
 fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let width = TEAM_CARD_W.min(full.width);
     let text_w = width.saturating_sub(2) as usize;

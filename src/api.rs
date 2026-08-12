@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use crate::models::{
-    EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail, PokemonEntry, Sprite, Stat,
-    StatKind,
+    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail,
+    PokemonEntry, Sprite, Stat, StatKind,
 };
 
 const BASE_URL: &str = "https://pokeapi.co/api/v2";
@@ -130,6 +130,39 @@ pub async fn translate_text(
     Ok(resp.response_data.translated_text)
 }
 
+/// Fetches the localized name and description of one ability.
+///
+/// The description comes from the game flavor text rather than the effect
+/// entries: PokeAPI carries flavor in all five languages the info card uses,
+/// while effect text exists only in English, German and French.
+pub async fn fetch_ability(
+    client: &reqwest::Client,
+    name: &str,
+) -> Result<AbilityInfo, ApiError> {
+    let url = format!("{BASE_URL}/ability/{name}");
+    let raw: RawAbility = client.get(url).send().await?.error_for_status()?.json().await?;
+
+    let mut names = HashMap::new();
+    for n in &raw.names {
+        if CARD_LANGS.contains(&n.language.name.as_str()) {
+            names.entry(n.language.name.clone()).or_insert_with(|| n.name.clone());
+        }
+    }
+
+    // One entry per game version per language; the first is a fine
+    // representative, exactly as for species flavor text.
+    let mut flavors = HashMap::new();
+    for e in &raw.flavor_text_entries {
+        if CARD_LANGS.contains(&e.language.name.as_str()) {
+            flavors
+                .entry(e.language.name.clone())
+                .or_insert_with(|| clean_flavor(&e.flavor_text));
+        }
+    }
+
+    Ok(AbilityInfo { name: raw.name, names, flavors })
+}
+
 /// Fetches and decodes just the sprite for a named species. Used to lazily
 /// populate the evolution overlay, where every member of the chain needs art.
 pub async fn fetch_named_sprite(
@@ -163,6 +196,13 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         .collect();
     types.sort_by_key(|(slot, _)| *slot);
 
+    let mut abilities: Vec<(u8, Ability)> = raw
+        .abilities
+        .into_iter()
+        .map(|a| (a.slot, Ability { name: a.ability.name, is_hidden: a.is_hidden }))
+        .collect();
+    abilities.sort_by_key(|(slot, _)| *slot);
+
     let mut stats: Vec<Stat> = raw
         .stats
         .into_iter()
@@ -185,6 +225,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         is_mythical: false,
         is_baby: false,
         types: types.into_iter().map(|(_, name)| name).collect(),
+        abilities: abilities.into_iter().map(|(_, ability)| ability).collect(),
         stats,
         height: raw.height,
         weight: raw.weight,
@@ -320,6 +361,32 @@ struct NamedResource {
 }
 
 #[derive(serde::Deserialize)]
+struct RawAbilitySlot {
+    ability: NamedResource,
+    is_hidden: bool,
+    slot: u8,
+}
+
+#[derive(serde::Deserialize)]
+struct RawAbility {
+    name: String,
+    names: Vec<RawAbilityName>,
+    flavor_text_entries: Vec<RawAbilityFlavor>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawAbilityName {
+    name: String,
+    language: NamedResource,
+}
+
+#[derive(serde::Deserialize)]
+struct RawAbilityFlavor {
+    flavor_text: String,
+    language: NamedResource,
+}
+
+#[derive(serde::Deserialize)]
 struct RawType {
     pokemon: Vec<RawTypeMember>,
 }
@@ -336,6 +403,8 @@ struct RawPokemon {
     height: u32,
     weight: u32,
     types: Vec<RawTypeSlot>,
+    #[serde(default)]
+    abilities: Vec<RawAbilitySlot>,
     stats: Vec<RawStatSlot>,
     sprites: RawSprites,
     species: NamedResource,

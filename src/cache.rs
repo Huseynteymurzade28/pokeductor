@@ -17,12 +17,12 @@ use std::time::{Duration, SystemTime};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
+use crate::models::{AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 
 /// Bumped whenever the cached representation changes shape. Files written by
 /// an older build are treated as misses and overwritten on the next fetch,
 /// which saves us from ever deserializing stale data into the wrong struct.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// How long the master species list stays fresh. Individual records never
 /// expire — PokeAPI does not rewrite history, it only appends new species, and
@@ -86,6 +86,20 @@ pub async fn store_bundle(name: &str, detail: &PokemonDetail, evolution: &Evolut
     // serde for a write that happens once per species per month.
     let bundle = CachedBundle { detail: detail.clone(), evolution: evolution.clone() };
     write_json(&path, &bundle).await;
+}
+
+/// The localized text for one ability, if cached. Ability descriptions never
+/// change once written, so they never expire.
+pub async fn load_ability(name: &str) -> Option<AbilityInfo> {
+    let path = ability_path(name)?;
+    read_json(&path).await
+}
+
+pub async fn store_ability(name: &str, info: &AbilityInfo) {
+    let Some(path) = ability_path(name) else {
+        return;
+    };
+    write_json(&path, info).await;
 }
 
 /// The membership list for a type (`"water"`, `"ghost"`, ...), if cached.
@@ -176,6 +190,10 @@ fn root() -> Option<&'static Path> {
         Some(base.join("pokeductor"))
     })
     .as_deref()
+}
+
+fn ability_path(name: &str) -> Option<PathBuf> {
+    Some(root()?.join("abilities").join(format!("{}.json", slug(name))))
 }
 
 fn type_path(type_name: &str) -> Option<PathBuf> {

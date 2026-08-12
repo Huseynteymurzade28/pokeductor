@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use crate::api;
 use crate::cache;
 use crate::i18n::Language;
-use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
+use crate::models::{AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 use crate::query::Query;
 use crate::team;
 
@@ -41,6 +41,8 @@ pub enum Message {
         name: String,
         sprite: Option<Sprite>,
     },
+    /// An ability's localized text finished loading.
+    AbilityLoaded(AbilityInfo),
     /// The roster for a `type:` filter finished loading.
     TypeMembersLoaded {
         type_name: String,
@@ -132,6 +134,12 @@ pub struct App {
     pub team_loading: HashSet<String>,
     /// Whether the team card is open.
     pub team_card: bool,
+    /// Localized ability text, keyed by ability slug.
+    pub abilities: HashMap<String, AbilityInfo>,
+    /// Ability lookups in flight, so each is requested only once.
+    pub ability_loading: HashSet<String>,
+    /// Whether the ability card is open for the current selection.
+    pub ability_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
     pub translations: HashMap<(String, String), String>,
     /// Translation requests currently in flight, to avoid duplicating work.
@@ -178,6 +186,9 @@ impl App {
             team: Vec::new(),
             team_loading: HashSet::new(),
             team_card: false,
+            abilities: HashMap::new(),
+            ability_loading: HashSet::new(),
+            ability_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
             selected_name: None,
@@ -456,6 +467,10 @@ impl App {
                     self.sprites.insert(name, sprite);
                 }
             }
+            Message::AbilityLoaded(info) => {
+                self.ability_loading.remove(&info.name);
+                self.abilities.insert(info.name.clone(), info);
+            }
             Message::TypeMembersLoaded { type_name, members } => {
                 self.type_loading.remove(&type_name);
                 // Recorded even when empty — a mistyped type must settle on
@@ -493,6 +508,15 @@ impl App {
         // The overlay cards are modal: whichever is open grabs all input.
         if self.language_picker {
             self.handle_language_key(key);
+            return;
+        }
+        if self.ability_card {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('a' | 'A' | 'q' | 'Q')
+            ) {
+                self.ability_card = false;
+            }
             return;
         }
         if self.team_card {
@@ -565,6 +589,40 @@ impl App {
         self.team.iter().any(|member| member == name)
     }
 
+    /// Opens the ability card, pulling in any description it still needs.
+    /// The text lives behind one request per ability, so it is fetched when
+    /// the card is asked for rather than alongside every species.
+    fn open_abilities(&mut self) {
+        // Gather what we need under a short immutable borrow, then release it.
+        let missing: Vec<String> = {
+            let Some(detail) = self.selected_detail() else {
+                return;
+            };
+            detail
+                .abilities
+                .iter()
+                .map(|ability| ability.name.clone())
+                .filter(|name| {
+                    !self.abilities.contains_key(name) && !self.ability_loading.contains(name)
+                })
+                .collect()
+        };
+        self.ability_card = true;
+
+        for name in missing {
+            self.ability_loading.insert(name.clone());
+            let tx = self.tx.clone();
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                // A description we cannot fetch simply never arrives: the card
+                // keeps showing the ability's name, which is the useful half.
+                if let Some(info) = resolve_ability(&client, &name).await {
+                    let _ = tx.send(Message::AbilityLoaded(info)).await;
+                }
+            });
+        }
+    }
+
     fn open_matchups(&mut self) {
         if self.selected_detail().is_some() {
             self.matchups = true;
@@ -610,6 +668,7 @@ impl App {
             KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
             KeyCode::Char(' ') => self.toggle_team_membership(),
             KeyCode::Char('p') | KeyCode::Char('P') => self.team_card = true,
+            KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
             _ => {}
         }
     }
@@ -856,6 +915,16 @@ async fn resolve_named_sprite(client: &reqwest::Client, name: &str) -> Option<Sp
         // species would stay blank for as long as the cache lives.
         Err(_) => None,
     }
+}
+
+/// Resolves one ability's localized text, cache first.
+async fn resolve_ability(client: &reqwest::Client, name: &str) -> Option<AbilityInfo> {
+    if let Some(info) = cache::load_ability(name).await {
+        return Some(info);
+    }
+    let info = api::fetch_ability(client, name).await.ok()?;
+    cache::store_ability(name, &info).await;
+    Some(info)
 }
 
 /// Resolves a type's roster from the cache, falling back to the network.

@@ -95,6 +95,52 @@ pub struct Stat {
     pub base: u16,
 }
 
+/// One of a species' possible abilities.
+///
+/// A Pokemon lists every ability it *can* have; in a given game it carries
+/// exactly one of them. The hidden one is only obtainable by special means,
+/// which is why it is worth flagging separately.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ability {
+    /// API slug, e.g. `"cursed-body"`.
+    pub name: String,
+    pub is_hidden: bool,
+}
+
+/// The localized text for one ability, fetched on demand from its own endpoint.
+///
+/// Mirrors the shape of [`PokemonDetail`]'s genus/flavor maps: keyed by PokeAPI
+/// language code, with English as the universal fallback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbilityInfo {
+    /// API slug, matching [`Ability::name`].
+    pub name: String,
+    /// Display name per language, e.g. `de -> "Schwebe"`.
+    pub names: HashMap<String, String>,
+    /// Short description per language.
+    pub flavors: HashMap<String, String>,
+}
+
+impl AbilityInfo {
+    /// Display name in the requested language, falling back to English and
+    /// then to a title-cased slug.
+    pub fn name_for(&self, code: &str) -> String {
+        self.names
+            .get(code)
+            .or_else(|| self.names.get("en"))
+            .cloned()
+            .unwrap_or_else(|| title_case(&self.name))
+    }
+
+    /// Description in the requested language, falling back to English.
+    pub fn flavor_for(&self, code: &str) -> Option<&str> {
+        self.flavors
+            .get(code)
+            .or_else(|| self.flavors.get("en"))
+            .map(String::as_str)
+    }
+}
+
 /// Fully resolved details for one Pokemon, ready to render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PokemonDetail {
@@ -112,6 +158,8 @@ pub struct PokemonDetail {
     pub is_mythical: bool,
     pub is_baby: bool,
     pub types: Vec<String>,
+    /// Every ability the species can have, in PokeAPI slot order.
+    pub abilities: Vec<Ability>,
     pub stats: Vec<Stat>,
     /// Height in decimetres, as returned by the API.
     pub height: u32,

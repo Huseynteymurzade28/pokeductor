@@ -36,6 +36,11 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
   and the full set of conditions is spelled out under the panel.
 - **Info cards** — national Pokédex number, genus, flavor-text blurb, and
   **Legendary / Mythical / Baby** badges for each species.
+- **Abilities** — every ability a species can have is listed on the info card,
+  with its Hidden Ability marked. Press `A` for what each one actually does,
+  localized like the rest of the Pokédex text. The names ride along in the
+  payload the app already fetches, so that row costs nothing; only the
+  descriptions need a request, and each is cached for good.
 - **Type matchup analysis** — press `T` for a card showing exactly what the
   species takes ×4 / ×2 / ×½ / ×¼ / ×0 damage from, plus what its own same-type
   moves are super effective against. Computed offline from a built-in
@@ -123,6 +128,7 @@ instant and work offline.
 | | `/` or `Tab` | Focus the search box |
 | | `E` | Focus the evolution panel |
 | | `T` | Open the type matchup card |
+| | `A` | Open the ability card |
 | | `Space` | Add / remove the highlighted Pokémon from the party |
 | | `P` | Open the party card |
 | | `S` | Cycle sort: dex order ↔ A–Z |
@@ -139,6 +145,7 @@ instant and work offline.
 | | `Esc` | Cancel |
 | **Matchup card** | `Esc` / `T` | Close |
 | **Party card** | `Esc` / `P` | Close |
+| **Ability card** | `Esc` / `A` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
 
 ### Search syntax
@@ -198,6 +205,13 @@ state, and all network work happens off the UI thread.
   data via the base species name from the Pokémon payload, so they don't 404.
   Their ids sit above 10000 and carry no dex number, so they show a blank dex
   column and are skipped by `gen:` filters.
+- **Abilities.** A species' abilities arrive inside the `/pokemon` payload that
+  is fetched anyway, so listing them is free. Their *descriptions* live behind
+  one request each, which is why they are fetched when the card is opened
+  rather than for every species browsed past. The text comes from the game
+  flavor entries rather than the effect entries: PokeAPI carries flavor in all
+  five languages the info card uses, while effect text exists only in English,
+  German and French.
 - **Party analysis.** A member is added by name; its typing is fetched in the
   background if it isn't loaded yet, and the card lists it greyed out until it
   arrives, so the analysis always describes exactly the members it can see. A

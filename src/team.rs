@@ -114,6 +114,7 @@ mod tests {
             is_mythical: false,
             is_baby: false,
             types: types.iter().map(|t| t.to_string()).collect(),
+            abilities: Vec::new(),
             stats: Vec::new(),
             height: 0,
             weight: 0,
