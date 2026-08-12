@@ -1,15 +1,15 @@
 [package]
 name = "pokeductor"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "A terminal-based Pokedex and Evolution Analyzer powered by PokeAPI"
+description = "A terminal Pokedex and evolution analyzer with sprite rendering, offline type and party analysis, and an on-disk cache for offline use"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Huseynteymurzade28/pokeductor"
 homepage = "https://github.com/Huseynteymurzade28/pokeductor"
 keywords = ["pokemon", "pokedex", "tui", "ratatui", "cli"]
-categories = ["command-line-utilities"]
-authors = ["Huseyn Teymurzade <huseynteymurrr74@gmail.com>"]
+categories = ["command-line-utilities", "games"]
+authors = ["Huseyn Teymurzade <teymurzadehuseyn14@gmail.com>"]
 exclude = ["assets/", ".github/"]
 
 [dependencies]
@@ -23,7 +23,6 @@ futures = "0.3"
 anyhow = "1"
 thiserror = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
-
 
 [profile.release]
 opt-level = 3
