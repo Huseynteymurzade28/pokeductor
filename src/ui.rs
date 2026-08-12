@@ -11,6 +11,7 @@ use crate::app::{App, Focus, SortKey};
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
+use crate::team;
 use crate::typechart;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -49,6 +50,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // at a time (input is modal), so the draw order is arbitrary.
     if app.matchups {
         render_matchups(frame, app, &strings, area);
+    }
+    if app.team_card {
+        render_team(frame, app, &strings, area);
     }
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
@@ -144,7 +148,12 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
                 Some(number) => format!("{number:>4} "),
                 None => " ".repeat(5),
             };
+            let in_team = app.is_in_team(&p.name);
             ListItem::new(Line::from(vec![
+                Span::styled(
+                    if in_team { "● " } else { "  " },
+                    Style::default().fg(theme::GREEN),
+                ),
                 Span::styled(dex, Style::default().fg(theme::OVERLAY)),
                 Span::styled(title_case(&p.name), Style::default().fg(theme::TEXT)),
             ]))
@@ -919,6 +928,8 @@ fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
 
 /// Preferred width of the matchup card, clamped to the terminal.
 const MATCHUP_CARD_W: u16 = 48;
+/// The team card carries names *and* chips, so it needs a little more room.
+const TEAM_CARD_W: u16 = 56;
 /// Columns reserved for a multiplier label (`" ×4  "`), which also sets the
 /// indent used when a group of chips wraps onto another row.
 const MATCHUP_LABEL_W: usize = 5;
@@ -1050,6 +1061,125 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
 // --- Language picker ------------------------------------------------------
 
 /// Draws the little modal card for switching interface language.
+/// The party card: who is on the team, and the three things their combined
+/// typings say about it.
+fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = TEAM_CARD_W.min(full.width);
+    let text_w = width.saturating_sub(2) as usize;
+    if text_w < 16 || full.height < 8 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let loaded = app.team_details();
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        format!(" {}/{}", app.team.len(), team::MAX_MEMBERS),
+        Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::raw(""));
+
+    if app.team.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", s.team_empty),
+            Style::default().fg(theme::OVERLAY),
+        )));
+    }
+
+    // Roster. A member whose record has not arrived yet is listed by name so
+    // the party still reads as complete, but greyed out — the analysis below
+    // genuinely does not account for it yet.
+    for name in &app.team {
+        let mut row = vec![Span::styled(
+            format!("  {:<12} ", title_case(name)),
+            Style::default().fg(theme::TEXT),
+        )];
+        match app.details.get(name) {
+            Some(detail) => row.extend(type_chips(&detail.types)),
+            None => row.push(Span::styled(
+                s.loading.to_string(),
+                Style::default().fg(theme::OVERLAY),
+            )),
+        }
+        lines.push(Line::from(row));
+    }
+
+    if !loaded.is_empty() {
+        let analysis = team::analyse(&loaded);
+
+        // Shared weaknesses, grouped by how many members each type hits. The
+        // `n/total` label counts members, not damage — an important distinction
+        // next to the single-species card, where the label is a multiplier.
+        lines.push(Line::raw(""));
+        lines.push(section_heading(s.team_shared_weak));
+        if analysis.shared_weaknesses.is_empty() {
+            lines.push(all_clear(s));
+        } else {
+            let mut remaining = analysis.shared_weaknesses.as_slice();
+            while let Some(first) = remaining.first() {
+                let count = first.weak;
+                let split = remaining.partition_point(|row| row.weak == count);
+                let (group, rest) = remaining.split_at(split);
+                let types: Vec<&str> = group.iter().map(|row| row.attacker).collect();
+                let label = format!("{count}/{}", loaded.len());
+                lines.extend(chip_rows(&label, &types, text_w));
+                remaining = rest;
+            }
+        }
+
+        lines.push(Line::raw(""));
+        lines.push(section_heading(s.team_unresisted));
+        push_chip_section(&mut lines, &analysis.unresisted, text_w, s);
+
+        lines.push(Line::raw(""));
+        lines.push(section_heading(s.team_offense_gaps));
+        push_chip_section(&mut lines, &analysis.offense_gaps, text_w, s);
+    }
+
+    let height = (lines.len() as u16 + 3).min(full.height);
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.team_title,
+            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.team_close_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
+/// Renders one chip section, or the "nothing to report" line when it is empty.
+/// On this card an empty section is good news, so it reads as reassurance
+/// rather than as missing data.
+fn push_chip_section(lines: &mut Vec<Line<'static>>, types: &[&str], width: usize, s: &Strings) {
+    if types.is_empty() {
+        lines.push(all_clear(s));
+    } else {
+        lines.extend(chip_rows("", types, width));
+    }
+}
+
+fn all_clear(s: &Strings) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("  {}", s.team_all_clear),
+        Style::default().fg(theme::GREEN),
+    ))
+}
+
 fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let width = 26u16;
     let height = Language::ALL.len() as u16 + 4; // borders + title pad + hint

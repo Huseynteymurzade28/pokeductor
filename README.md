@@ -40,6 +40,12 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
   species takes ×4 / ×2 / ×½ / ×¼ / ×0 damage from, plus what its own same-type
   moves are super effective against. Computed offline from a built-in
   Generation VI+ type chart, so it opens instantly.
+- **Party builder** — press `Space` in the list to put up to six Pokémon on a
+  team, then `P` for the verdict on their combined typings: attacking types
+  that hit **several** members hard, types **nobody** resists, and types
+  **nobody** hits back hard. That overlap — not any one member's weaknesses —
+  is what decides whether a team holds together, and it is computed from the
+  same offline chart, so the card is instant.
 - **6 interface languages** — English, Türkçe, Deutsch, Français, Español, Italiano,
   switchable live from a little picker card.
 - **Localized Pokédex text** — flavor/genus come straight from PokeAPI in EN/DE/FR/ES/IT;
@@ -117,6 +123,8 @@ instant and work offline.
 | | `/` or `Tab` | Focus the search box |
 | | `E` | Focus the evolution panel |
 | | `T` | Open the type matchup card |
+| | `Space` | Add / remove the highlighted Pokémon from the party |
+| | `P` | Open the party card |
 | | `S` | Cycle sort: dex order ↔ A–Z |
 | | `L` | Open the language picker |
 | | `Q` / `Esc` | Quit |
@@ -130,6 +138,7 @@ instant and work offline.
 | | `Enter` / `Space` | Apply |
 | | `Esc` | Cancel |
 | **Matchup card** | `Esc` / `T` | Close |
+| **Party card** | `Esc` / `P` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
 
 ### Search syntax
@@ -165,6 +174,7 @@ state, and all network work happens off the UI thread.
 | `ui.rs` | All `ratatui` rendering, including the sprite & evolution-graph drawing. |
 | `i18n.rs` | `Language` enum + translation tables for the 6 UI languages. |
 | `typechart.rs` | Offline Generation VI+ type-effectiveness chart & matchup analysis. |
+| `team.rs` | Team-level type analysis built on top of the chart. |
 | `theme.rs` | PICO-8-inspired palette and per-type accent colors. |
 
 ### How it works
@@ -188,6 +198,11 @@ state, and all network work happens off the UI thread.
   data via the base species name from the Pokémon payload, so they don't 404.
   Their ids sit above 10000 and carry no dex number, so they show a blank dex
   column and are skipped by `gen:` filters.
+- **Party analysis.** A member is added by name; its typing is fetched in the
+  background if it isn't loaded yet, and the card lists it greyed out until it
+  arrives, so the analysis always describes exactly the members it can see. A
+  weakness only counts as *shared* once two members have it — one member's
+  weakness is that member's problem, not the team's.
 - **Filtering.** Generations come from a fixed table of dex ranges — released
   generations never change — so `gen:` costs nothing. `type:` needs a roster,
   but `/type/{name}` answers a whole filter in one request that is then cached

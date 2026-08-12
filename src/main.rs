@@ -8,6 +8,7 @@
 //! - `api`     : async PokeAPI client and evolution-chain parser.
 //! - `query`   : search-box syntax (`type:`, `gen:`) parsing.
 //! - `typechart`: offline type-effectiveness chart.
+//! - `team`    : team-level type analysis built on top of it.
 //! - `app`     : state machine + `tokio::select!` event loop.
 //! - `ui`      : `ratatui` rendering.
 
@@ -17,6 +18,7 @@ mod cache;
 mod i18n;
 mod models;
 mod query;
+mod team;
 mod theme;
 mod typechart;
 mod ui;

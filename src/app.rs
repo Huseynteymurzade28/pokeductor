@@ -19,6 +19,7 @@ use crate::cache;
 use crate::i18n::Language;
 use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 use crate::query::Query;
+use crate::team;
 
 /// Messages sent from background fetch tasks to the UI loop. The payloads are
 /// large but short-lived and low-frequency, so the size difference between
@@ -123,6 +124,14 @@ pub struct App {
     pub lang_cursor: usize,
     /// Whether the type-matchup card is open for the current selection.
     pub matchups: bool,
+    /// The party being assembled, in the order members were added. Holds names
+    /// only; the analysis reads their typings out of `details`, so a member
+    /// whose record is still in flight simply does not contribute yet.
+    pub team: Vec<String>,
+    /// Team members whose details are being fetched, so each is requested once.
+    pub team_loading: HashSet<String>,
+    /// Whether the team card is open.
+    pub team_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
     pub translations: HashMap<(String, String), String>,
     /// Translation requests currently in flight, to avoid duplicating work.
@@ -166,6 +175,9 @@ impl App {
             language_picker: false,
             lang_cursor: 0,
             matchups: false,
+            team: Vec::new(),
+            team_loading: HashSet::new(),
+            team_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
             selected_name: None,
@@ -430,6 +442,7 @@ impl App {
                     self.sprites.insert(name.clone(), sprite);
                 }
                 let is_selected = self.selected_name.as_deref() == Some(name.as_str());
+                self.team_loading.remove(&name);
                 self.details.insert(name, detail);
                 // Now that the chain is known, fetch its members' sprites for
                 // the evolution panel.
@@ -482,6 +495,15 @@ impl App {
             self.handle_language_key(key);
             return;
         }
+        if self.team_card {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('p' | 'P' | 'q' | 'Q')
+            ) {
+                self.team_card = false;
+            }
+            return;
+        }
         if self.matchups {
             if matches!(
                 key.code,
@@ -500,6 +522,49 @@ impl App {
 
     /// Opens the type-matchup card. It reads the selection's types, so there is
     /// nothing to show until a Pokemon has actually loaded.
+    /// Adds the highlighted species to the party, or drops it if it is already
+    /// there. A member whose record is not loaded yet is fetched in the
+    /// background: the party is picked from the list, where nothing but the
+    /// name is known until something asks for more.
+    fn toggle_team_membership(&mut self) {
+        let Some(name) = self.current_name() else {
+            return;
+        };
+        if let Some(position) = self.team.iter().position(|member| *member == name) {
+            self.team.remove(position);
+            return;
+        }
+        if self.team.len() >= team::MAX_MEMBERS {
+            return; // party is full; drop someone first
+        }
+        self.team.push(name.clone());
+
+        if self.details.contains_key(&name) || self.team_loading.contains(&name) {
+            return;
+        }
+        self.team_loading.insert(name.clone());
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(resolve_bundle(&client, &name).await).await;
+        });
+    }
+
+    /// The loaded records for the current party, in party order. Members still
+    /// in flight are skipped, so the analysis always describes exactly what is
+    /// listed as loaded on the card.
+    pub fn team_details(&self) -> Vec<&PokemonDetail> {
+        self.team
+            .iter()
+            .filter_map(|name| self.details.get(name))
+            .collect()
+    }
+
+    /// Whether the highlighted list entry is in the party, for the list marker.
+    pub fn is_in_team(&self, name: &str) -> bool {
+        self.team.iter().any(|member| member == name)
+    }
+
     fn open_matchups(&mut self) {
         if self.selected_detail().is_some() {
             self.matchups = true;
@@ -543,6 +608,8 @@ impl App {
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
             KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
+            KeyCode::Char(' ') => self.toggle_team_membership(),
+            KeyCode::Char('p') | KeyCode::Char('P') => self.team_card = true,
             _ => {}
         }
     }
