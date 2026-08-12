@@ -15,6 +15,7 @@ use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
 use crate::api;
+use crate::cache;
 use crate::i18n::Language;
 use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 
@@ -175,14 +176,38 @@ impl App {
     }
 
     // --- Async fetch dispatch --------------------------------------------
+    //
+    // Every dispatcher below reads through `cache` before it touches the
+    // network, and writes back whatever it had to fetch. The functions doing
+    // that live at the bottom of this file: they run on spawned tasks and so
+    // cannot borrow `self`.
 
+    /// Loads the sidebar list, preferring the cache so the app has something to
+    /// show immediately. A cached-but-expired list is displayed first and then
+    /// refreshed in place; if that refresh fails (offline, say) the stale copy
+    /// simply stays up, which is far more useful than an error banner.
     fn fetch_list(&mut self) {
         self.list_loading = true;
         let tx = self.tx.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
+            if let Some(cached) = cache::load_list().await {
+                let fresh = cached.fresh;
+                let _ = tx.send(Message::ListLoaded(cached.entries)).await;
+                if fresh {
+                    return;
+                }
+                if let Ok(list) = api::fetch_pokemon_list(&client).await {
+                    cache::store_list(&list).await;
+                    let _ = tx.send(Message::ListLoaded(list)).await;
+                }
+                return;
+            }
             let msg = match api::fetch_pokemon_list(&client).await {
-                Ok(list) => Message::ListLoaded(list),
+                Ok(list) => {
+                    cache::store_list(&list).await;
+                    Message::ListLoaded(list)
+                }
                 Err(err) => Message::Error(err.to_string()),
             };
             let _ = tx.send(msg).await;
@@ -209,13 +234,7 @@ impl App {
         let tx = self.tx.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
-            let msg = match api::fetch_pokemon_bundle(&client, &name).await {
-                Ok((detail, evolution, sprite)) => {
-                    Message::PokemonLoaded { detail, evolution, sprite }
-                }
-                Err(err) => Message::Error(err.to_string()),
-            };
-            let _ = tx.send(msg).await;
+            let _ = tx.send(resolve_bundle(&client, &name).await).await;
         });
     }
 
@@ -251,9 +270,16 @@ impl App {
         let client = self.client.clone();
         let lang = code.to_string();
         tokio::spawn(async move {
+            // Translations cost a rate-limited third-party request, so a cached
+            // one is worth reaching for before we ask again.
+            if let Some(text) = cache::load_translation(&name, &lang).await {
+                let _ = tx.send(Message::FlavorTranslated { name, lang, text }).await;
+                return;
+            }
             // On failure we simply never send: the UI keeps the English text and
             // the in-flight flag stops us from hammering a rate-limited service.
             if let Ok(text) = api::translate_text(&client, &source, "en", &lang).await {
+                cache::store_translation(&name, &lang, &text).await;
                 let _ = tx.send(Message::FlavorTranslated { name, lang, text }).await;
             }
         });
@@ -287,13 +313,11 @@ impl App {
             let tx = self.tx.clone();
             let client = self.client.clone();
             tokio::spawn(async move {
-                let msg = match api::fetch_named_sprite(&client, &name).await {
-                    Ok(sprite) => Message::SpriteLoaded { name, sprite },
-                    // A failed chain sprite is non-fatal: report no art so the
-                    // panel shows a placeholder instead of an error banner.
-                    Err(_) => Message::SpriteLoaded { name, sprite: None },
-                };
-                let _ = tx.send(msg).await;
+                // A failed chain sprite is non-fatal: `resolve_named_sprite`
+                // reports no art, so the panel shows a placeholder instead of
+                // an error banner.
+                let sprite = resolve_named_sprite(&client, &name).await;
+                let _ = tx.send(Message::SpriteLoaded { name, sprite }).await;
             });
         }
     }
@@ -572,5 +596,78 @@ impl App {
             (Some(loading), Some(selected)) => loading == selected,
             _ => false,
         }
+    }
+}
+
+// --- Cache-first resolvers -----------------------------------------------
+//
+// These run on spawned tasks, so they take everything they need by value or
+// shared reference rather than borrowing `App`.
+
+/// Resolves a species from the cache, falling back to the network and storing
+/// whatever it had to fetch.
+async fn resolve_bundle(client: &reqwest::Client, name: &str) -> Message {
+    if let Some(bundle) = cache::load_bundle(name).await {
+        let sprite = resolve_sprite(client, name, bundle.detail.sprite_url.as_deref()).await;
+        return Message::PokemonLoaded {
+            detail: bundle.detail,
+            evolution: bundle.evolution,
+            sprite,
+        };
+    }
+    match api::fetch_pokemon_bundle(client, name).await {
+        Ok((detail, evolution, sprite)) => {
+            cache::store_bundle(name, &detail, &evolution).await;
+            record_sprite(name, sprite.as_ref()).await;
+            Message::PokemonLoaded { detail, evolution, sprite }
+        }
+        Err(err) => Message::Error(err.to_string()),
+    }
+}
+
+/// Cache-first sprite lookup for a species whose artwork URL we already know
+/// (because its details came out of the cache alongside it).
+async fn resolve_sprite(
+    client: &reqwest::Client,
+    name: &str,
+    url: Option<&str>,
+) -> Option<Sprite> {
+    if let Some(sprite) = cache::load_sprite(name).await {
+        return Some(sprite);
+    }
+    if cache::has_sprite_answer(name).await {
+        return None; // asked before: this species genuinely has no artwork
+    }
+    let sprite = api::fetch_sprite(client, url?).await.ok();
+    record_sprite(name, sprite.as_ref()).await;
+    sprite
+}
+
+/// Cache-first sprite lookup for a chain member we know nothing else about.
+/// Only the network path has to resolve the artwork URL first.
+async fn resolve_named_sprite(client: &reqwest::Client, name: &str) -> Option<Sprite> {
+    if let Some(sprite) = cache::load_sprite(name).await {
+        return Some(sprite);
+    }
+    if cache::has_sprite_answer(name).await {
+        return None;
+    }
+    match api::fetch_named_sprite(client, name).await {
+        Ok(sprite) => {
+            record_sprite(name, sprite.as_ref()).await;
+            sprite
+        }
+        // A transient failure must not be written down as "no artwork", or the
+        // species would stay blank for as long as the cache lives.
+        Err(_) => None,
+    }
+}
+
+/// Stores a freshly fetched sprite, or the fact that there wasn't one, so the
+/// next run does not repeat the request either way.
+async fn record_sprite(name: &str, sprite: Option<&Sprite>) {
+    match sprite {
+        Some(sprite) => cache::store_sprite(name, sprite).await,
+        None => cache::store_missing_sprite(name).await,
     }
 }

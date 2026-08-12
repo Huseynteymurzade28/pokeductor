@@ -7,15 +7,17 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 /// A single entry in the master Pokemon list shown in the sidebar.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PokemonEntry {
     /// API identifier, e.g. `"pikachu"` (lowercase, possibly hyphenated).
     pub name: String,
 }
 
 /// The six canonical base stats every Pokemon has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatKind {
     Hp,
     Attack,
@@ -53,14 +55,14 @@ impl StatKind {
 }
 
 /// A single base stat value (0..=255 in practice).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Stat {
     pub kind: StatKind,
     pub base: u16,
 }
 
 /// Fully resolved details for one Pokemon, ready to render.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PokemonDetail {
     /// Raw API name (lowercase). Use [`title_case`] for display.
     pub name: String,
@@ -109,7 +111,7 @@ impl PokemonDetail {
 /// What sets an evolution in motion. PokeAPI has a long tail of one-off
 /// triggers (spin, three-critical-hits, ...), so anything beyond the four
 /// common ones is carried through verbatim and displayed as-is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvolutionTrigger {
     LevelUp,
     Trade,
@@ -135,7 +137,7 @@ impl EvolutionTrigger {
 /// Every field is optional because the games layer conditions freely: Umbreon
 /// needs happiness *and* night, Milotic needs beauty, Shedinja needs a free
 /// party slot. The renderer turns whichever fields are set into readable text.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvolutionCondition {
     pub trigger: Option<EvolutionTrigger>,
     pub min_level: Option<u32>,
@@ -169,7 +171,7 @@ pub struct EvolutionCondition {
 /// species can evolve into zero or more others. We mirror that as an n-ary
 /// tree so branching evolutions (Eevee, Tyrogue, Wurmple, ...) are represented
 /// naturally.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvolutionTree {
     /// Raw API name of the species at this node.
     pub name: String,

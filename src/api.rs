@@ -119,7 +119,7 @@ pub async fn fetch_named_sprite(
 }
 
 /// Downloads a sprite PNG and decodes it into raw RGBA pixels.
-async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite, ApiError> {
+pub async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite, ApiError> {
     let bytes = client.get(url).send().await?.error_for_status()?.bytes().await?;
     let image = image::load_from_memory(&bytes)?.to_rgba8();
     let (width, height) = image.dimensions();

@@ -42,6 +42,10 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
 - **Responsive layout** — every panel reflows to the terminal size; sprites scale to fit.
 - **Snappy & async** — all network I/O runs on `tokio` tasks; the UI never blocks,
   and each species is fetched at most once per session.
+- **Works offline** — every response is cached under `~/.cache/pokeductor`
+  (`$XDG_CACHE_HOME` is honoured), so species you have already looked at open
+  instantly on the next run and keep working with no connection at all. The
+  cache is safe to delete at any time; it just refills itself.
 
 ---
 

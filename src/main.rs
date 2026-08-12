@@ -2,6 +2,7 @@
 //!
 //! Module layout:
 //! - `models`  : API-agnostic domain types (the data domain layer).
+//! - `cache`   : on-disk cache of everything fetched, for instant/offline starts.
 //! - `i18n`    : `Language` enum + translation tables (EN / TR / DE).
 //! - `theme`   : Catppuccin Mocha palette and per-type colors.
 //! - `api`     : async PokeAPI client and evolution-chain parser.
@@ -11,6 +12,7 @@
 
 mod api;
 mod app;
+mod cache;
 mod i18n;
 mod models;
 mod theme;
