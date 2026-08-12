@@ -14,7 +14,41 @@ use serde::{Deserialize, Serialize};
 pub struct PokemonEntry {
     /// API identifier, e.g. `"pikachu"` (lowercase, possibly hyphenated).
     pub name: String,
+    /// PokeAPI's numeric id, read straight out of the list response's URL so
+    /// the sidebar can show a dex number without fetching anything. For the
+    /// default form of a species this *is* its National Pokedex number;
+    /// alternate forms (Alolan Raichu and friends) are numbered from 10001 up.
+    pub id: u32,
 }
+
+impl PokemonEntry {
+    /// The National Pokedex number to display, or `None` for an alternate form
+    /// whose id carries no dex meaning.
+    pub fn dex_number(&self) -> Option<u32> {
+        (self.id <= MAX_DEX_NUMBER).then_some(self.id)
+    }
+
+    /// Which generation introduced this species, derived from its dex number.
+    ///
+    /// Alternate forms return `None`: their ids sit in a separate range that
+    /// says nothing about the species they belong to, and resolving that would
+    /// cost a request per form.
+    pub fn generation(&self) -> Option<u8> {
+        let dex = self.dex_number()?;
+        GENERATION_RANGES
+            .iter()
+            .position(|&last| dex <= last)
+            .map(|idx| idx as u8 + 1)
+    }
+}
+
+/// Highest National Pokedex number PokeAPI currently carries.
+const MAX_DEX_NUMBER: u32 = 1025;
+
+/// Last dex number of each generation, in order. These boundaries are fixed
+/// history — a released generation never gains or loses species — so deriving
+/// the generation locally beats spending a request on it.
+const GENERATION_RANGES: [u32; 9] = [151, 251, 386, 493, 649, 721, 809, 905, MAX_DEX_NUMBER];
 
 /// The six canonical base stats every Pokemon has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,4 +329,38 @@ pub fn title_case(raw: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: u32) -> PokemonEntry {
+        PokemonEntry { name: String::new(), id }
+    }
+
+    #[test]
+    fn generation_boundaries_land_on_the_right_side() {
+        // First and last species of every generation.
+        for (id, gen) in [
+            (1, 1), (151, 1),
+            (152, 2), (251, 2),
+            (252, 3), (386, 3),
+            (387, 4), (493, 4),
+            (494, 5), (649, 5),
+            (650, 6), (721, 6),
+            (722, 7), (809, 7),
+            (810, 8), (905, 8),
+            (906, 9), (1025, 9),
+        ] {
+            assert_eq!(entry(id).generation(), Some(gen), "dex #{id}");
+        }
+    }
+
+    #[test]
+    fn alternate_forms_have_no_dex_number_or_generation() {
+        let alolan_raichu = entry(10100);
+        assert_eq!(alolan_raichu.dex_number(), None);
+        assert_eq!(alolan_raichu.generation(), None);
+    }
 }

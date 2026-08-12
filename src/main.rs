@@ -6,6 +6,7 @@
 //! - `i18n`    : `Language` enum + translation tables (EN / TR / DE).
 //! - `theme`   : Catppuccin Mocha palette and per-type colors.
 //! - `api`     : async PokeAPI client and evolution-chain parser.
+//! - `query`   : search-box syntax (`type:`, `gen:`) parsing.
 //! - `typechart`: offline type-effectiveness chart.
 //! - `app`     : state machine + `tokio::select!` event loop.
 //! - `ui`      : `ratatui` rendering.
@@ -15,6 +16,7 @@ mod app;
 mod cache;
 mod i18n;
 mod models;
+mod query;
 mod theme;
 mod typechart;
 mod ui;

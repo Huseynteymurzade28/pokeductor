@@ -43,9 +43,34 @@ pub async fn fetch_pokemon_list(
     let entries = raw
         .results
         .into_iter()
-        .map(|r| PokemonEntry { name: r.name })
+        .map(|r| PokemonEntry { id: id_from_url(&r.url), name: r.name })
         .collect();
     Ok(entries)
+}
+
+/// Every name PokeAPI files under a given type, e.g. every Water Pokemon.
+///
+/// One request answers a whole `type:` filter, which is why the sidebar can
+/// offer type filtering at all: the alternative would be fetching all 1300
+/// species just to read their typing.
+pub async fn fetch_type_members(
+    client: &reqwest::Client,
+    type_name: &str,
+) -> Result<Vec<String>, ApiError> {
+    let url = format!("{BASE_URL}/type/{type_name}");
+    let raw: RawType = client.get(url).send().await?.error_for_status()?.json().await?;
+    Ok(raw.pokemon.into_iter().map(|p| p.pokemon.name).collect())
+}
+
+/// Reads the trailing numeric id out of a PokeAPI resource URL, which always
+/// ends `.../pokemon/25/`. Returns 0 for a URL that does not carry one, which
+/// simply reads as "no dex number" downstream.
+fn id_from_url(url: &str) -> u32 {
+    url.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .and_then(|segment| segment.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Fetches everything needed to display a Pokemon: its details and its parsed
@@ -290,9 +315,18 @@ struct NamedList {
 #[derive(serde::Deserialize)]
 struct NamedResource {
     name: String,
-    #[allow(dead_code)]
     #[serde(default)]
     url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RawType {
+    pokemon: Vec<RawTypeMember>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawTypeMember {
+    pokemon: NamedResource,
 }
 
 #[derive(serde::Deserialize)]

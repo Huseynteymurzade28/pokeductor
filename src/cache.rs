@@ -22,7 +22,7 @@ use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
 /// Bumped whenever the cached representation changes shape. Files written by
 /// an older build are treated as misses and overwritten on the next fetch,
 /// which saves us from ever deserializing stale data into the wrong struct.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// How long the master species list stays fresh. Individual records never
 /// expire — PokeAPI does not rewrite history, it only appends new species, and
@@ -86,6 +86,20 @@ pub async fn store_bundle(name: &str, detail: &PokemonDetail, evolution: &Evolut
     // serde for a write that happens once per species per month.
     let bundle = CachedBundle { detail: detail.clone(), evolution: evolution.clone() };
     write_json(&path, &bundle).await;
+}
+
+/// The membership list for a type (`"water"`, `"ghost"`, ...), if cached.
+/// A type's roster only grows with a new generation, so it never expires.
+pub async fn load_type_members(type_name: &str) -> Option<Vec<String>> {
+    let path = type_path(type_name)?;
+    read_json(&path).await
+}
+
+pub async fn store_type_members(type_name: &str, members: &[String]) {
+    let Some(path) = type_path(type_name) else {
+        return;
+    };
+    write_json(&path, &members.to_vec()).await;
 }
 
 /// A decoded sprite, if one has ever been cached for `name`.
@@ -162,6 +176,10 @@ fn root() -> Option<&'static Path> {
         Some(base.join("pokeductor"))
     })
     .as_deref()
+}
+
+fn type_path(type_name: &str) -> Option<PathBuf> {
+    Some(root()?.join("types").join(format!("{}.json", slug(type_name))))
 }
 
 fn sprite_path(name: &str) -> Option<PathBuf> {
@@ -254,7 +272,7 @@ mod tests {
 
     #[test]
     fn envelope_from_another_version_is_a_miss() {
-        let raw = br#"{"version":999,"data":[{"name":"bulbasaur"}]}"#;
+        let raw = br#"{"version":999,"data":[{"name":"bulbasaur","id":1}]}"#;
         let envelope: Envelope<Vec<PokemonEntry>> = serde_json::from_slice(raw).unwrap();
         assert_ne!(envelope.version, VERSION);
     }

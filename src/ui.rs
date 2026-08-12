@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, SortKey};
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
@@ -97,7 +97,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let search_block = panel_block(s.search_title, search_focused);
     let cursor = if search_focused { "▏" } else { "" };
     let query_line = if app.query.is_empty() && !search_focused {
-        Line::from(Span::styled("type to filter…", Style::default().fg(theme::OVERLAY)))
+        Line::from(Span::styled(s.search_hint, Style::default().fg(theme::OVERLAY)))
     } else {
         Line::from(vec![
             Span::styled("🔍 ", Style::default().fg(theme::SAPPHIRE)),
@@ -109,13 +109,23 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
 
     // --- List ---
     let list_focused = app.focus == Focus::List;
-    let title = format!("{}({})", s.sidebar_title, app.filtered.len());
+    let sort_badge = match app.sort {
+        SortKey::Dex => s.sort_dex,
+        SortKey::Name => s.sort_name,
+    };
+    let title = format!("{}({}) ⇅ {} ", s.sidebar_title, app.filtered.len(), sort_badge);
     let list_block = panel_block_owned(title, list_focused);
     let inner = list_block.inner(rows[1]);
     frame.render_widget(&list_block, rows[1]);
 
     if app.list_loading {
         render_centered_loading(frame, inner, s.loading_list, app.spinner);
+        return;
+    }
+    // A `type:` filter cannot match anything until its roster arrives, so say
+    // that rather than claiming the search found nothing.
+    if app.awaiting_type_roster() {
+        render_centered_loading(frame, inner, s.loading_types, app.spinner);
         return;
     }
     if app.filtered.is_empty() {
@@ -127,10 +137,18 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         .filtered
         .iter()
         .filter_map(|&idx| app.all_pokemon.get(idx))
-        .map(|p| ListItem::new(Line::from(Span::styled(
-            title_case(&p.name),
-            Style::default().fg(theme::TEXT),
-        ))))
+        .map(|p| {
+            // Alternate forms have no dex number; their column stays blank so
+            // the names below still line up.
+            let dex = match p.dex_number() {
+                Some(number) => format!("{number:>4} "),
+                None => " ".repeat(5),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(dex, Style::default().fg(theme::OVERLAY)),
+                Span::styled(title_case(&p.name), Style::default().fg(theme::TEXT)),
+            ]))
+        })
         .collect();
 
     let list = List::new(items)

@@ -18,6 +18,12 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
 ## ✨ Features
 
 - **Full Pokédex** — every species from PokeAPI, searchable and filterable in real time.
+  The sidebar shows National Pokédex numbers and sorts by dex order or A–Z (`S`).
+- **Search that narrows by more than the name** — combine plain text with
+  `type:` and `gen:` terms: `type:ghost gen:1` finds Gastly, Haunter and Gengar;
+  `type:water type:flying` finds the dual-typed ones. Generations are matched
+  offline from dex ranges, and each type's roster costs a single request that is
+  then cached forever.
 - **Sprite rendering in the terminal** — official artwork drawn with Unicode
   upper-half-blocks (two pixels per character cell), cropped to its opaque bounds,
   area-averaged on downscale and alpha-blended over the panel so edges stay clean.
@@ -108,9 +114,10 @@ evolution chain, and artwork on demand.
 | | `/` or `Tab` | Focus the search box |
 | | `E` | Focus the evolution panel |
 | | `T` | Open the type matchup card |
+| | `S` | Cycle sort: dex order ↔ A–Z |
 | | `L` | Open the language picker |
 | | `Q` / `Esc` | Quit |
-| **Search** | *type* | Filter the list |
+| **Search** | *type* | Filter the list (see syntax below) |
 | | `Enter` | Load result & return to list |
 | | `Esc` / `Tab` | Back to list |
 | **Evolution** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between chain members |
@@ -121,6 +128,21 @@ evolution chain, and artwork on demand.
 | | `Esc` | Cancel |
 | **Matchup card** | `Esc` / `T` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
+
+### Search syntax
+
+| Query | Matches |
+|---|---|
+| `char` | names containing "char" |
+| `type:water` | every Water Pokémon (`t:` also works) |
+| `type:water type:flying` | Water **and** Flying — Gyarados, Mantine, … |
+| `gen:1` | introduced in Generation I (`g:` also works) |
+| `gen:1 gen:2` | either generation |
+| `gen:1 type:ghost ga` | all three at once |
+
+Terms combine with the name search, so anything that isn't a recognised term is
+treated as ordinary text. A `gen:` filter skips alternate forms such as
+`raichu-alola`, whose ids carry no dex number to derive a generation from.
 
 ---
 

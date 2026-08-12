@@ -18,6 +18,7 @@ use crate::api;
 use crate::cache;
 use crate::i18n::Language;
 use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
+use crate::query::Query;
 
 /// Messages sent from background fetch tasks to the UI loop. The payloads are
 /// large but short-lived and low-frequency, so the size difference between
@@ -39,6 +40,11 @@ pub enum Message {
         name: String,
         sprite: Option<Sprite>,
     },
+    /// The roster for a `type:` filter finished loading.
+    TypeMembersLoaded {
+        type_name: String,
+        members: Vec<String>,
+    },
     /// A machine-translated flavor blurb finished loading.
     FlavorTranslated {
         name: String,
@@ -59,6 +65,29 @@ pub enum Focus {
     Evolution,
 }
 
+/// How the sidebar orders whatever survived the filter.
+///
+/// Both keys are derived from data the list response already carries, so
+/// sorting never costs a request. Ordering by base-stat total would: it needs
+/// every species' stats, which is 1300 fetches for one keypress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+    /// National Pokedex order — PokeAPI's own, and the default.
+    Dex,
+    /// Alphabetical by name.
+    Name,
+}
+
+impl SortKey {
+    /// The next key in the cycle, for the sort hotkey.
+    pub fn next(self) -> Self {
+        match self {
+            SortKey::Dex => SortKey::Name,
+            SortKey::Name => SortKey::Dex,
+        }
+    }
+}
+
 /// The complete, observable state of the running application.
 pub struct App {
     pub language: Language,
@@ -66,7 +95,17 @@ pub struct App {
     /// Indices into `all_pokemon` that match the current search query.
     pub filtered: Vec<usize>,
     pub list_state: ListState,
+    /// Raw contents of the search box, exactly as typed.
     pub query: String,
+    /// `query` after parsing, kept so the renderer can describe the active
+    /// filter without re-parsing on every frame.
+    pub parsed_query: Query,
+    pub sort: SortKey,
+    /// Rosters for `type:` filters, keyed by type name. An entry that is
+    /// present but empty means "we asked and got nothing back".
+    pub type_members: HashMap<String, HashSet<String>>,
+    /// Type rosters currently in flight, so a filter is requested only once.
+    pub type_loading: HashSet<String>,
     pub focus: Focus,
     /// In-memory cache so each Pokemon is fetched at most once per session.
     pub details: HashMap<String, PokemonDetail>,
@@ -114,6 +153,10 @@ impl App {
             filtered: Vec::new(),
             list_state: ListState::default(),
             query: String::new(),
+            parsed_query: Query::default(),
+            sort: SortKey::Dex,
+            type_members: HashMap::new(),
+            type_loading: HashSet::new(),
             focus: Focus::List,
             details: HashMap::new(),
             evolutions: HashMap::new(),
@@ -212,6 +255,28 @@ impl App {
             };
             let _ = tx.send(msg).await;
         });
+    }
+
+    /// Kicks off a roster fetch for every `type:` term we have not resolved
+    /// yet. One request answers a whole type, and the answer is cached on disk,
+    /// so this fires at most once per type per install.
+    fn request_missing_type_rosters(&mut self, query: &Query) {
+        let missing: Vec<String> = query
+            .types
+            .iter()
+            .filter(|t| !self.type_members.contains_key(*t) && !self.type_loading.contains(*t))
+            .cloned()
+            .collect();
+
+        for type_name in missing {
+            self.type_loading.insert(type_name.clone());
+            let tx = self.tx.clone();
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let members = resolve_type_members(&client, &type_name).await;
+                let _ = tx.send(Message::TypeMembersLoaded { type_name, members }).await;
+            });
+        }
     }
 
     /// Loads (or reveals from cache) the currently highlighted Pokemon.
@@ -378,6 +443,13 @@ impl App {
                     self.sprites.insert(name, sprite);
                 }
             }
+            Message::TypeMembersLoaded { type_name, members } => {
+                self.type_loading.remove(&type_name);
+                // Recorded even when empty — a mistyped type must settle on
+                // "no results" instead of being requested again every frame.
+                self.type_members.insert(type_name, members.into_iter().collect());
+                self.recompute_filter();
+            }
             Message::FlavorTranslated { name, lang, text } => {
                 let key = (name, lang);
                 self.translating.remove(&key);
@@ -470,6 +542,7 @@ impl App {
             KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
+            KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
             _ => {}
         }
     }
@@ -533,26 +606,81 @@ impl App {
 
     // --- List / filter helpers -------------------------------------------
 
+    /// Rebuilds the visible list from the search box and the sort key.
+    ///
+    /// Called after anything that can change either, and cheap enough to run on
+    /// every keystroke: the work is one pass over ~1300 entries plus a sort.
     fn recompute_filter(&mut self) {
-        let query = self.query.to_lowercase();
-        self.filtered = self
+        let query = Query::parse(&self.query);
+        self.request_missing_type_rosters(&query);
+
+        // Remember what was highlighted so the same Pokemon stays under the
+        // cursor when the list is merely re-sorted, or when it survives a
+        // narrowing search. Losing the highlight on every keystroke is the
+        // main thing that makes a filtered list annoying to use.
+        let anchor = self.current_name();
+
+        let mut filtered: Vec<usize> = self
             .all_pokemon
             .iter()
             .enumerate()
-            .filter(|(_, p)| query.is_empty() || p.name.to_lowercase().contains(&query))
+            .filter(|(_, p)| {
+                query.matches_name_and_generation(&p.name, p.generation())
+                    && self.has_every_type(&query, &p.name)
+            })
             .map(|(idx, _)| idx)
             .collect();
 
+        match self.sort {
+            SortKey::Dex => filtered.sort_unstable_by_key(|&idx| self.all_pokemon[idx].id),
+            SortKey::Name => {
+                filtered.sort_unstable_by(|&a, &b| {
+                    self.all_pokemon[a].name.cmp(&self.all_pokemon[b].name)
+                });
+            }
+        }
+
+        self.filtered = filtered;
+        self.parsed_query = query;
+        self.restore_highlight(anchor);
+    }
+
+    /// Whether `name` is in the roster of every type the query asks for.
+    /// A roster we do not have yet matches nothing, which leaves the list empty
+    /// until it lands — the sidebar says as much while that is true.
+    fn has_every_type(&self, query: &Query, name: &str) -> bool {
+        query.types.iter().all(|type_name| {
+            self.type_members
+                .get(type_name)
+                .is_some_and(|members| members.contains(name))
+        })
+    }
+
+    /// Puts the cursor back on `anchor` if it is still visible, and on the
+    /// first row otherwise.
+    fn restore_highlight(&mut self, anchor: Option<String>) {
         if self.filtered.is_empty() {
             self.list_state.select(None);
-        } else {
-            let clamped = self
-                .list_state
-                .selected()
-                .unwrap_or(0)
-                .min(self.filtered.len() - 1);
-            self.list_state.select(Some(clamped));
+            return;
         }
+        let restored = anchor
+            .and_then(|name| self.all_pokemon.iter().position(|p| p.name == name))
+            .and_then(|abs| self.filtered.iter().position(|&idx| idx == abs));
+        self.list_state.select(Some(restored.unwrap_or(0)));
+    }
+
+    /// True while a `type:` filter is still waiting on its roster, so the
+    /// sidebar can say "loading" rather than "no results".
+    pub fn awaiting_type_roster(&self) -> bool {
+        self.parsed_query
+            .types
+            .iter()
+            .any(|type_name| !self.type_members.contains_key(type_name))
+    }
+
+    fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+        self.recompute_filter();
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -660,6 +788,24 @@ async fn resolve_named_sprite(client: &reqwest::Client, name: &str) -> Option<Sp
         // A transient failure must not be written down as "no artwork", or the
         // species would stay blank for as long as the cache lives.
         Err(_) => None,
+    }
+}
+
+/// Resolves a type's roster from the cache, falling back to the network.
+///
+/// A failure yields an empty roster rather than an error: the only way to get
+/// here is a `type:` term, and the honest answer to a type we cannot resolve
+/// is that nothing matches it.
+async fn resolve_type_members(client: &reqwest::Client, type_name: &str) -> Vec<String> {
+    if let Some(members) = cache::load_type_members(type_name).await {
+        return members;
+    }
+    match api::fetch_type_members(client, type_name).await {
+        Ok(members) => {
+            cache::store_type_members(type_name, &members).await;
+            members
+        }
+        Err(_) => Vec::new(),
     }
 }
 
