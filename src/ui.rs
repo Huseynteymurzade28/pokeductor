@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::app::{App, Focus, SortKey};
 use crate::i18n::{EvoStrings, Language, Strings};
-use crate::models::{title_case, Ability, EvolutionTree, Sprite};
+use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::theme;
 use crate::team;
 use crate::typechart;
@@ -278,7 +278,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
                 ability_spans.push(Span::styled(" · ", Style::default().fg(theme::OVERLAY)));
             }
             ability_spans.push(Span::styled(
-                ability_display_name(app, ability),
+                ability_display_name(app, &ability.name),
                 Style::default().fg(theme::TEXT),
             ));
             if ability.is_hidden {
@@ -1117,7 +1117,7 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         lines.push(Line::raw(""));
 
         let mut head = vec![Span::styled(
-            format!(" {}", ability_display_name(app, ability)),
+            format!(" {}", ability_display_name(app, &ability.name)),
             Style::default().fg(theme::PEACH).add_modifier(Modifier::BOLD),
         )];
         if ability.is_hidden {
@@ -1175,10 +1175,10 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 /// An ability's name in the active language, falling back to its slug until
 /// the localized text has been fetched. Callers add the hidden marker
 /// themselves, since the two cards place it differently.
-fn ability_display_name(app: &App, ability: &Ability) -> String {
-    match app.abilities.get(&ability.name) {
+fn ability_display_name(app: &App, slug: &str) -> String {
+    match app.abilities.get(slug) {
         Some(info) => info.name_for(app.language.flavor_code()),
-        None => title_case(&ability.name),
+        None => title_case(slug),
     }
 }
 
@@ -1268,6 +1268,40 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         lines.push(Line::raw(""));
         lines.push(section_heading(s.team_unresisted));
         push_chip_section(&mut lines, &analysis.unresisted, text_w, s);
+
+        // Placed directly under "resisted by nobody", because that is exactly
+        // the claim it qualifies: the chart cannot see these, so an unresisted
+        // type may still have an answer sitting right here.
+        if !analysis.ability_immunities.is_empty() {
+            lines.push(Line::raw(""));
+            lines.push(section_heading(s.team_ability_immunity));
+            for immunity in &analysis.ability_immunities {
+                let mut row = vec![
+                    Span::styled(
+                        format!("  {} · ", title_case(&immunity.member)),
+                        Style::default().fg(theme::TEXT),
+                    ),
+                    Span::styled(
+                        ability_display_name(app, &immunity.ability),
+                        Style::default().fg(theme::SUBTEXT),
+                    ),
+                    Span::styled(" → ", Style::default().fg(theme::OVERLAY)),
+                    Span::styled(
+                        format!(" {} ", title_case(immunity.immune_to)),
+                        Style::default()
+                            .fg(theme::BASE)
+                            .bg(theme::type_color(immunity.immune_to)),
+                    ),
+                ];
+                if !immunity.certain {
+                    row.push(Span::styled(
+                        format!("  ({})", s.team_maybe),
+                        Style::default().fg(theme::OVERLAY),
+                    ));
+                }
+                lines.push(Line::from(row));
+            }
+        }
 
         lines.push(Line::raw(""));
         lines.push(section_heading(s.team_offense_gaps));

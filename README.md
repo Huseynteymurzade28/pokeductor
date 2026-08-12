@@ -50,7 +50,10 @@ warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/)
   that hit **several** members hard, types **nobody** resists, and types
   **nobody** hits back hard. That overlap — not any one member's weaknesses —
   is what decides whether a team holds together, and it is computed from the
-  same offline chart, so the card is instant.
+  same offline chart, so the card is instant. Immunities that come from an
+  **ability** rather than from typing (Levitate, Water Absorb, Flash Fire, …)
+  are reported alongside — and flagged *possible* unless the species has no
+  other ability it could have had instead.
 - **6 interface languages** — English, Türkçe, Deutsch, Français, Español, Italiano,
   switchable live from a little picker card.
 - **Localized Pokédex text** — flavor/genus come straight from PokeAPI in EN/DE/FR/ES/IT;
@@ -212,6 +215,15 @@ state, and all network work happens off the UI thread.
   flavor entries rather than the effect entries: PokeAPI carries flavor in all
   five languages the info card uses, while effect text exists only in English,
   German and French.
+- **Ability immunities.** A species carries *one* of its listed abilities, not
+  all of them, so an ability-granted immunity is only a certainty when the
+  species has exactly one ability to begin with. Rather than fold that
+  uncertainty into the type numbers — which would make the chart claim
+  something the data does not support — the party card leaves its counts purely
+  chart-level and reports ability immunities as their own annotated section,
+  placed directly under the "resisted by nobody" list it qualifies. Only true
+  immunities are listed: abilities that merely soften a type (Thick Fat) or key
+  off a class of move rather than a type (Soundproof) cannot be expressed here.
 - **Party analysis.** A member is added by name; its typing is fetched in the
   background if it isn't loaded yet, and the card lists it greyed out until it
   arrives, so the analysis always describes exactly the members it can see. A

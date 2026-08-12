@@ -218,6 +218,7 @@ impl App {
             // Cheap, idempotent: requests a translation only when the current
             // selection+language needs one and none is cached or in flight.
             self.ensure_translation();
+            self.ensure_ability_info();
             terminal.draw(|frame| crate::ui::render(frame, &mut self))?;
 
             tokio::select! {
@@ -589,33 +590,43 @@ impl App {
         self.team.iter().any(|member| member == name)
     }
 
-    /// Opens the ability card, pulling in any description it still needs.
-    /// The text lives behind one request per ability, so it is fetched when
-    /// the card is asked for rather than alongside every species.
+    /// Opens the ability card. The text it shows is pulled in by
+    /// [`App::ensure_ability_info`], which the loop is already running.
     fn open_abilities(&mut self) {
-        // Gather what we need under a short immutable borrow, then release it.
+        if self.selected_detail().is_some() {
+            self.ability_card = true;
+        }
+    }
+
+    /// Requests the localized text for any ability on the current selection or
+    /// in the party that we do not have yet.
+    ///
+    /// Ability *names* are localized too, and they show on the info card and
+    /// the party card, not just behind `A` — so waiting for the card to open
+    /// would leave those reading as raw English slugs in every other language.
+    /// Cheap and idempotent: it only ever covers species the user has actually
+    /// opened, each name is requested once, and every answer is cached on disk.
+    fn ensure_ability_info(&mut self) {
+        // Gather under a short immutable borrow, then release it.
         let missing: Vec<String> = {
-            let Some(detail) = self.selected_detail() else {
-                return;
-            };
-            detail
-                .abilities
-                .iter()
+            let selection = self.selected_detail().into_iter();
+            selection
+                .chain(self.team_details())
+                .flat_map(|detail| detail.abilities.iter())
                 .map(|ability| ability.name.clone())
                 .filter(|name| {
                     !self.abilities.contains_key(name) && !self.ability_loading.contains(name)
                 })
                 .collect()
         };
-        self.ability_card = true;
 
         for name in missing {
             self.ability_loading.insert(name.clone());
             let tx = self.tx.clone();
             let client = self.client.clone();
             tokio::spawn(async move {
-                // A description we cannot fetch simply never arrives: the card
-                // keeps showing the ability's name, which is the useful half.
+                // Text we cannot fetch simply never arrives: everything keeps
+                // showing the ability's slug, which is the useful half.
                 if let Some(info) = resolve_ability(&client, &name).await {
                     let _ = tx.send(Message::AbilityLoaded(info)).await;
                 }
