@@ -1,154 +1,176 @@
 # Pokeductor
 
-**A retro terminal Pokédex & Evolution Analyzer, powered by [PokeAPI](https://pokeapi.co/).**
+A terminal Pokédex and evolution analyzer, powered by [PokeAPI](https://pokeapi.co/).
 
 Browse every species, read localized Pokédex entries, study branching evolution
-chains as connected sprite cards — all rendered with Unicode half-blocks in a
-warm, PICO-8-inspired palette. Built in Rust with [ratatui](https://ratatui.rs/).
+chains as connected sprite cards, and analyse type coverage for a single species
+or a whole party — rendered with Unicode half-blocks in a PICO-8-inspired
+palette. Built in Rust with [ratatui](https://ratatui.rs/).
 
 ![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)
 ![ratatui](https://img.shields.io/badge/TUI-ratatui%200.29-blueviolet)
 ![Async](https://img.shields.io/badge/runtime-tokio-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 
-</div>
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-main.png" alt="Pokeductor main view: species list, details panel with sprite and base stats, and the evolution chain" width="900">
+
+A short tour — filtering by type and generation, type matchups, abilities,
+building a party, and the help overlay:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/demo.gif" alt="Animated tour: filtering with type:ghost gen:1, opening the matchup and ability cards for Gengar, adding three Pokemon to a party, and the help overlay" width="860">
 
 ---
 
-## ✨ Features
+## Install
 
-- **Full Pokédex** — every species from PokeAPI, searchable and filterable in real time.
-  The sidebar shows National Pokédex numbers and sorts by dex order or A–Z (`S`).
-- **Search that narrows by more than the name** — combine plain text with
-  `type:` and `gen:` terms: `type:ghost gen:1` finds Gastly, Haunter and Gengar;
-  `type:water type:flying` finds the dual-typed ones. Generations are matched
-  offline from dex ranges, and each type's roster costs a single request that is
-  then cached forever.
-- **Sprite rendering in the terminal** — official artwork drawn with Unicode
-  upper-half-blocks (two pixels per character cell), cropped to its opaque bounds,
-  area-averaged on downscale and alpha-blended over the panel so edges stay clean.
-- **Interactive evolution graph** — focus the evolution panel and the chain is laid
-  out as connected sprite cards (branching chains like Eevee included). Hop to any
-  stage with a keypress to instantly inspect a Pokémon's next evolution.
-- **Evolution requirements** — every stage is labelled with what it takes to get
-  there: `Lv. 16`, `Use Water Stone`, `Trade for Shelmet`, `Happiness 160`,
-  `At night`, `Knows a Fairy move`, and the rest. Move the cursor onto a stage
-  and the full set of conditions is spelled out under the panel.
-- **Info cards** — national Pokédex number, genus, flavor-text blurb, and
-  **Legendary / Mythical / Baby** badges for each species.
-- **Abilities** — every ability a species can have is listed on the info card,
-  with its Hidden Ability marked. Press `A` for what each one actually does,
-  localized like the rest of the Pokédex text. The names ride along in the
-  payload the app already fetches, so that row costs nothing; only the
-  descriptions need a request, and each is cached for good.
-- **Type matchup analysis** — press `T` for a card showing exactly what the
-  species takes ×4 / ×2 / ×½ / ×¼ / ×0 damage from, plus what its own same-type
-  moves are super effective against. Computed offline from a built-in
-  Generation VI+ type chart, so it opens instantly.
-- **Party builder** — press `Space` in the list to put up to six Pokémon on a
-  team, then `P` for the verdict on their combined typings: attacking types
-  that hit **several** members hard, types **nobody** resists, and types
-  **nobody** hits back hard. That overlap — not any one member's weaknesses —
-  is what decides whether a team holds together, and it is computed from the
-  same offline chart, so the card is instant. Immunities that come from an
-  **ability** rather than from typing (Levitate, Water Absorb, Flash Fire, …)
-  are reported alongside — and flagged *possible* unless the species has no
-  other ability it could have had instead.
-- **6 interface languages** — English, Türkçe, Deutsch, Français, Español, Italiano,
-  switchable live from a little picker card.
-- **Localized Pokédex text** — flavor/genus come straight from PokeAPI in EN/DE/FR/ES/IT;
-  for languages PokeAPI doesn't carry (Turkish), the English entry is machine-translated
-  on demand and cached.
-- **Responsive layout** — every panel reflows to the terminal size; sprites scale to fit.
-- **Snappy & async** — all network I/O runs on `tokio` tasks; the UI never blocks,
-  and each species is fetched at most once per session.
-- **Works offline** — every response is cached under `~/.cache/pokeductor`
-  (`$XDG_CACHE_HOME` is honoured), so species you have already looked at open
-  instantly on the next run and keep working with no connection at all. The
-  cache is safe to delete at any time; it just refills itself.
-
----
-
-## 📸 Screenshots
-
-
-<table>
-  <tr>  
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/screenshot-main.png" alt="Main view" width="420"><br>
-      <sub>Main view — list, details & info card</sub>
-    </td>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/screenshot-search.png" alt="Evolution graph" width="420"><br>
-      <sub>Search Menu</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/demo.gif" alt="Demo" width="420"><br>
-      <sub>Quick demo</sub>
-    </td>
-  </tr>
-</table>
----
-
-## Easy Install with Cargo
 ```bash
 cargo install pokeductor
 ```
 
-## 🚀 Getting started
-
-### Requirements
-
-- **Rust** (stable, 2021 edition) — install via [rustup](https://rustup.rs/).
-- A **truecolor (24-bit) terminal** for the sprite colors (most modern terminals qualify).
-- A font with **Unicode block + box-drawing glyphs** (e.g. any Nerd Font, Fira Code, JetBrains Mono).
-- An **internet connection** for anything not already cached — see
-  [Works offline](#-features).
-
-### Build & run
+Or from a clone:
 
 ```bash
-# Clone, then from the project root:
 cargo run --release
 ```
 
-The first launch fetches the species list and opens on Bulbasaur; moving through
+### Requirements
+
+- **Rust** (stable, 2021 edition) — via [rustup](https://rustup.rs/).
+- A **truecolor (24-bit) terminal**. Sprites are drawn as RGB half-blocks and
+  will look wrong on a 256-colour terminal.
+- A font with **Unicode block and box-drawing glyphs** — any Nerd Font, Fira
+  Code, JetBrains Mono, and most modern monospace fonts qualify.
+- An **internet connection** for anything not already cached. After a species
+  has been viewed once it opens with no network at all; see
+  [Caching](#caching).
+
+The first launch fetches the species list and opens on Bulbasaur. Moving through
 the list loads each Pokémon's details, evolution chain and artwork on demand.
-Everything fetched is cached under `~/.cache/pokeductor`, so later launches are
-instant and work offline.
 
 ---
 
-## ⌨️ Controls
+## The interface
+
+### Browsing and filtering
+
+The sidebar lists all 1302 entries PokeAPI serves, with National Pokédex
+numbers. Beyond plain name matching, the search box takes `type:` and `gen:`
+terms:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-search.png" alt="Searching for type:ghost gen:1, narrowing the list to Gastly, Haunter and Gengar" width="900">
+
+`type:` terms combine with **AND**, so `type:water type:flying` finds the
+dual-typed ones. `gen:` terms combine with **OR**, since a species belongs to
+exactly one generation and requiring two at once could only ever match nothing.
+Anything that is not a recognised term is treated as ordinary text, so a stray
+colon degrades to a name search instead of an error. `S` cycles the sort between
+Pokédex order and alphabetical; the highlighted species stays under the cursor
+across a re-sort or a narrowing search.
+
+### Species details and abilities
+
+The info panel carries the dex number, genus, typing, abilities, physical
+measurements and base stats, with a flavour blurb when the panel has room for
+one. `A` opens the abilities card:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-abilities.png" alt="The abilities card for Snorlax, showing Immunity, Thick Fat and the hidden ability Gluttony with descriptions" width="900">
+
+Ability *names* arrive inside the payload every species fetch pulls down
+already, so listing them on the info card costs nothing. Their descriptions live
+behind one request each and are cached permanently. Hidden abilities are marked:
+they are only obtainable by special means, which is worth knowing at a glance.
+
+### Evolution chains
+
+Chains are laid out as connected sprite cards, each stage labelled with what it
+takes to reach it. Focus the panel with `E` to move between stages; `Enter`
+jumps to the highlighted one, and the full set of conditions for the stage under
+the cursor is spelled out beneath the panel.
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-evolution.png" alt="The evolution panel focused on the Charmander line, with the cursor on Charmeleon and its Lv. 16 requirement" width="900">
+
+Branching chains are handled as an n-ary tree, so every route is represented.
+When there are too many branches to draw as cards in the space available, the
+panel falls back to a labelled list rather than truncating:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-branching.png" alt="Eevee's eight-way evolution chain listed with the requirement for each branch" width="900">
+
+### Type matchups
+
+`T` opens the defensive and offensive breakdown for the current species:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-matchups.png" alt="Type matchup card for Charizard showing x4 Rock, x2 Water and Electric, and immunity to Ground" width="900">
+
+Computed offline from a built-in Generation VI+ chart, so it opens instantly and
+works with no connection. Neutral matchups are omitted — they are the default,
+and listing them would bury the rows worth reading.
+
+### Party analysis
+
+`Space` puts up to six Pokémon on a team; `P` shows the verdict on their
+combined typings:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-party.png" alt="Party card for Rotom, Charizard, Gyarados and Snorlax showing shared weaknesses, unresisted types, an ability immunity and offensive gaps" width="900">
+
+A party asks a different question than a single species does, and the answer is
+not the union of its members' weaknesses — it is the overlap:
+
+| Section | What it means |
+|---|---|
+| **Shared weaknesses** | Attacking types hitting **two or more** members super-effectively, labelled with how many. A type that hits one member is that member's problem, not the team's. |
+| **Resisted by nobody** | Attacking types **no** member resists or is immune to. There is no safe switch-in against them. |
+| **Immune by ability** | Immunities the type chart cannot see (Levitate, Water Absorb, Flash Fire, …). |
+| **Hit hard by nobody** | Defending types **no** member hits super-effectively with a same-type move. These wall the team. |
+
+Note the differing thresholds: the first section asks "how many at once", the
+others ask "is there any answer at all". An empty section is good news, and the
+card says so rather than leaving a blank.
+
+Ability immunities are deliberately kept *out* of the numbers. A species carries
+one of its listed abilities, not all of them, so an immunity is only a certainty
+when the species had no other ability it could have had — anything else is
+flagged as merely possible. Folding that uncertainty into the counts would make
+the card claim something the data does not support.
+
+### Help
+
+Every binding in one place, grouped by where it applies:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-help.png" alt="The help overlay listing all key bindings for the list, search box, evolution panel and cards" width="900">
+
+### Localization
+
+Six interface languages, switchable live from a picker card with no restart and
+no refetch:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-turkish.png" alt="The same Gengar view with the interface in Turkish" width="900">
+
+---
+
+## Key bindings
 
 | Context | Key | Action |
 |---|---|---|
-| **List** | `↑` / `↓` · `j` / `k` | Move selection |
-| | `PgUp` / `PgDn` | Jump 10 |
+| **List** | `↑` `↓` · `j` `k` | Move selection |
+| | `PgUp` `PgDn` | Jump ten |
 | | `Enter` | Load the highlighted Pokémon |
-| | `/` or `Tab` | Focus the search box |
+| | `/` · `Tab` | Focus the search box |
 | | `E` | Focus the evolution panel |
-| | `T` | Open the type matchup card |
-| | `A` | Open the ability card |
-| | `Space` | Add / remove the highlighted Pokémon from the party |
-| | `P` | Open the party card |
-| | `S` | Cycle sort: dex order ↔ A–Z |
-| | `L` | Open the language picker |
-| | `Q` / `Esc` | Quit |
-| **Search** | *type* | Filter the list (see syntax below) |
-| | `Enter` | Load result & return to list |
-| | `Esc` / `Tab` | Back to list |
-| **Evolution** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between chain members |
-| | `Enter` | Jump to the highlighted evolution |
-| | `Esc` / `Tab` | Back to list |
-| **Language card** | `↑` / `↓` | Move selection |
-| | `Enter` / `Space` | Apply |
-| | `Esc` | Cancel |
-| **Matchup card** | `Esc` / `T` | Close |
-| **Party card** | `Esc` / `P` | Close |
-| **Ability card** | `Esc` / `A` | Close |
+| | `T` | Type matchup card |
+| | `A` | Ability card |
+| | `Space` | Add / remove from the party |
+| | `P` | Party card |
+| | `S` | Cycle sort: Pokédex order ↔ A–Z |
+| | `L` | Language picker |
+| | `?` | Help overlay |
+| | `Q` · `Esc` | Quit |
+| **Search box** | *type* | Filter the list |
+| | `Enter` | Load the result and return to the list |
+| | `Esc` · `Tab` | Back to the list |
+| **Evolution panel** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between stages |
+| | `Enter` | Jump to the highlighted stage |
+| | `Esc` · `Tab` | Back to the list |
+| **Any card** | `Esc` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
 
 ### Search syntax
@@ -162,85 +184,150 @@ instant and work offline.
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
 
-Terms combine with the name search, so anything that isn't a recognised term is
-treated as ordinary text. A `gen:` filter skips alternate forms such as
-`raichu-alola`, whose ids carry no dex number to derive a generation from.
+A `gen:` filter skips alternate forms such as `raichu-alola`: their ids sit
+above 10000 and carry no dex number to derive a generation from.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-A small, layered design — the rendering layer is pure functions of application
-state, and all network work happens off the UI thread.
+A layered design. The rendering layer is a pure function of application state,
+all network work happens off the UI thread, and everything fetched is written
+through to disk.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs` | Entry point; sets up the terminal and the `tokio` runtime. |
-| `models.rs` | API-agnostic domain types (`PokemonDetail`, `EvolutionTree`, `Sprite`). |
+| `main.rs` | Entry point; terminal setup and the `tokio` runtime. |
+| `models.rs` | API-agnostic domain types (`PokemonDetail`, `EvolutionTree`, `Sprite`, `Ability`). |
 | `api.rs` | Async PokeAPI client, evolution-chain parser, sprite decode, translation. |
 | `cache.rs` | On-disk cache of every fetched response, for instant and offline starts. |
 | `query.rs` | Search-box syntax (`type:`, `gen:`) parsing. |
-| `app.rs` | State machine + `tokio::select!` event loop (input · messages · animation tick). |
-| `ui.rs` | All `ratatui` rendering, including the sprite & evolution-graph drawing. |
-| `i18n.rs` | `Language` enum + translation tables for the 6 UI languages. |
-| `typechart.rs` | Offline Generation VI+ type-effectiveness chart & matchup analysis. |
+| `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
+| `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
+| `typechart.rs` | Offline Generation VI+ type-effectiveness chart and matchup analysis. |
 | `team.rs` | Team-level type analysis built on top of the chart. |
-| `theme.rs` | PICO-8-inspired palette and per-type accent colors. |
+| `i18n.rs` | `Language` enum and translation tables for the six UI languages. |
+| `theme.rs` | PICO-8-inspired palette and per-type accent colours. |
 
-### How it works
+### Concurrency
 
-- **Concurrency model.** Background fetch tasks are *producers* that send
-  [`Message`]s over an `mpsc` channel; the main loop is the single *consumer*,
-  draining the channel alongside terminal input and a steady animation tick via
-  `tokio::select!`. The UI thread never blocks on I/O.
-- **Caching.** Two layers, both keyed by name. In memory, a given Pokémon is
-  fetched at most once per session; on disk, details, evolution chains, sprites,
-  type rosters and machine translations survive between runs, so a species you
-  have already seen needs no request at all. Every fetch reads through the disk
-  cache first and writes back what it had to fetch. Writes are atomic
-  (temp file + rename) and version-stamped, and the whole layer is best-effort:
-  a cache that cannot be read or written is a miss, never a visible error.
-- **Sprite pipeline.** PNG → decode to RGBA (`image`) → crop to opaque bounds →
-  box-average downscale (keeping aspect, accounting for ~2:1 cell height) →
-  alpha-blend over the panel → emit `▀` half-block cells (fg = top pixel,
-  bg = bottom pixel).
-- **Alternate forms.** Forms like `raichu-alola` resolve their species/evolution
-  data via the base species name from the Pokémon payload, so they don't 404.
-  Their ids sit above 10000 and carry no dex number, so they show a blank dex
-  column and are skipped by `gen:` filters.
-- **Abilities.** A species' abilities arrive inside the `/pokemon` payload that
-  is fetched anyway, so listing them is free. Their *descriptions* live behind
-  one request each, which is why they are fetched when the card is opened
-  rather than for every species browsed past. The text comes from the game
-  flavor entries rather than the effect entries: PokeAPI carries flavor in all
-  five languages the info card uses, while effect text exists only in English,
-  German and French.
-- **Ability immunities.** A species carries *one* of its listed abilities, not
-  all of them, so an ability-granted immunity is only a certainty when the
-  species has exactly one ability to begin with. Rather than fold that
-  uncertainty into the type numbers — which would make the chart claim
-  something the data does not support — the party card leaves its counts purely
-  chart-level and reports ability immunities as their own annotated section,
-  placed directly under the "resisted by nobody" list it qualifies. Only true
-  immunities are listed: abilities that merely soften a type (Thick Fat) or key
-  off a class of move rather than a type (Soundproof) cannot be expressed here.
-- **Party analysis.** A member is added by name; its typing is fetched in the
-  background if it isn't loaded yet, and the card lists it greyed out until it
-  arrives, so the analysis always describes exactly the members it can see. A
-  weakness only counts as *shared* once two members have it — one member's
-  weakness is that member's problem, not the team's.
-- **Filtering.** Generations come from a fixed table of dex ranges — released
-  generations never change — so `gen:` costs nothing. `type:` needs a roster,
-  but `/type/{name}` answers a whole filter in one request that is then cached
-  forever. Sorting sticks to keys the list response already carries; ordering by
-  base-stat total would mean fetching all ~1300 species for a single keypress.
-- **Evolution requirements.** PokeAPI's `evolution_details` are parsed into a
-  structured `EvolutionCondition` and phrased through per-language templates, so
-  each translation decides where the value lands (`Use {}` vs. `{} kullan`).
-  Where a stage can be reached more than one way, the first (current-generation)
-  route is shown.
+Background fetch tasks are *producers* that send `Message`s over an `mpsc`
+channel; the main loop is the single *consumer*, draining that channel alongside
+terminal input and a steady animation tick via `tokio::select!`. The UI thread
+never blocks on I/O, and no state is shared across tasks — a task owns what it
+needs and hands the result back as a message.
 
-### Built with
+### Caching
+
+Two layers, both keyed by name.
+
+In memory, a given Pokémon is fetched at most once per session. On disk, under
+`$XDG_CACHE_HOME/pokeductor` (falling back to `~/.cache/pokeductor`):
+
+```
+list.json                 master species list, 30-day TTL
+species/<name>.json       details + parsed evolution tree
+sprites/<name>.png        decoded artwork, re-encoded as PNG
+types/<type>.json         roster backing a type: filter
+abilities/<slug>.json     localized ability name and description
+translations/<name>.<lang>.txt
+```
+
+Every fetch reads through the disk cache first and writes back only what it had
+to fetch, so a species already seen needs no request at all and the app keeps
+working with no connection. PokeAPI is effectively an append-only archive — a
+species' stats, typing and evolution chain do not change once published — so
+only the master list carries a TTL, and a stale list is still shown while a
+refresh is attempted in the background rather than replaced by an error.
+
+Writes go through a temporary file and a rename, so an interrupted run cannot
+leave a half-written entry for the next one to read back as valid. Every entry
+is version-stamped: a build whose cached representation has changed shape treats
+older files as misses instead of mis-parsing them. The whole layer is
+best-effort — a cache that cannot be read or written is a miss, never an error
+the user sees. It is safe to delete at any time; it refills itself.
+
+### Sprite pipeline
+
+PokeAPI's `front_default` PNG (96×96) → decode to RGBA via `image` → crop to
+opaque bounds → box-average downscale, keeping aspect and accounting for the
+roughly 2:1 cell aspect ratio → alpha-blend over the panel colour → emit `▀`
+half-block cells, foreground being the top pixel and background the bottom.
+
+Area averaging rather than nearest-neighbour sampling is what keeps downscaled
+sprites smooth instead of leaving the hard outline pixels as ragged lines.
+Sprites are cached re-encoded as PNG rather than as raw RGBA: a few kilobytes
+compressed against ~36 KB flattened, and the decoder is already a dependency.
+
+### Type and team analysis
+
+`typechart.rs` holds the Generation VI+ chart as a pure function from
+(attacking type, defending type) to a multiplier, with the dual-type case
+derived by multiplying across the defender's types exactly as the games do. No
+round-trip is needed to answer "what is this weak to?".
+
+`team.rs` builds on it. For each of the 18 attacking types it counts how many
+members take super-effective damage and whether *anyone* resists, and it derives
+offensive gaps from the union of the members' same-type coverage. Ability
+immunities come from a small static table of abilities that grant an outright
+immunity to a whole damage type. Abilities that merely soften a type (Thick Fat)
+belong to multipliers, and abilities keyed to a class of move rather than a type
+(Soundproof, Bulletproof) cannot be expressed as one, so neither is tabled.
+
+### Filtering and sorting
+
+Generations are derived locally from a fixed table of dex ranges — released
+generations never gain or lose species — so `gen:` costs no request. `type:`
+needs a roster, but `/type/{name}` answers a whole filter in one request that is
+then cached permanently; the alternative would be fetching ~1300 species just to
+read their typings.
+
+Sorting is deliberately limited to keys the list response already carries. Each
+entry's id is parsed out of the URL PokeAPI returns, which is what puts dex
+numbers in the sidebar for free and gives the generation filter something to
+work from. Ordering by base-stat total would mean those same ~1300 fetches for a
+single keypress.
+
+### Alternate forms
+
+Forms such as `raichu-alola` resolve their species and evolution data via the
+base species name carried in the Pokémon payload, so they do not 404. Their ids
+sit above 10000 and carry no dex meaning, so they show a blank dex column and
+are excluded from `gen:` filters rather than being guessed at.
+
+### Evolution requirements
+
+PokeAPI's `evolution_details` are parsed into a structured `EvolutionCondition`
+— level, item, held item, known move, happiness, affection, beauty, time of day,
+location, gender, trade species, party species, relative physical stats, and the
+one-off flags — and phrased through per-language templates, so each translation
+decides where the value lands (`Use {}` versus `{} kullan`). Where a stage can
+be reached more than one way, the first (current-generation) route is shown.
+
+### Localization
+
+UI strings live in `i18n.rs`; add a language by extending the `Language` enum
+and `Language::ALL`, and adding a `Strings` table. Because the renderer re-reads
+these every frame, switching language updates the entire interface instantly
+with no extra bookkeeping.
+
+Pokédex flavour text, genus, and ability names and descriptions come from
+PokeAPI in `en`, `de`, `fr`, `es` and `it`. Ability text is taken from the game
+flavour entries rather than the effect entries: PokeAPI carries flavour in all
+five of those languages, while effect text exists only in English, German and
+French.
+
+Item, move and location names inside evolution requirements stay in English —
+they arrive as PokeAPI slugs, and localizing each would cost an extra request
+per name.
+
+For a UI language PokeAPI has no text for (Turkish), the English blurb is
+translated on demand through the free, key-less
+[MyMemory](https://mymemory.translated.net/) API and cached. This is
+best-effort: if the service errors or rate-limits, the English original is
+shown.
+
+### Dependencies
 
 [`ratatui`](https://crates.io/crates/ratatui) ·
 [`crossterm`](https://crates.io/crates/crossterm) ·
@@ -249,35 +336,21 @@ state, and all network work happens off the UI thread.
 [`serde`](https://crates.io/crates/serde) ·
 [`serde_json`](https://crates.io/crates/serde_json) ·
 [`image`](https://crates.io/crates/image) ·
+[`futures`](https://crates.io/crates/futures) ·
 [`anyhow`](https://crates.io/crates/anyhow) ·
 [`thiserror`](https://crates.io/crates/thiserror)
 
 ---
 
-## 🌍 Localization & translation
+## Credits
 
-- UI strings live in `i18n.rs` — add a language by extending the `Language` enum,
-  `Language::ALL`, and adding a `Strings` table.
-- Pokédex **flavor text and genus** come from PokeAPI in `en`, `de`, `fr`, `es`, `it`.
-- **Evolution requirements** are phrased from the `EvoStrings` templates in
-  `i18n.rs`. Item, move and location names inside them stay in English: they
-  arrive as PokeAPI slugs and localizing each one would cost an extra request.
-- For UI languages PokeAPI has **no** text for (Turkish), the English blurb is
-  translated on demand through the free, key-less
-  [MyMemory](https://mymemory.translated.net/) API and cached. Translation is
-  best-effort: if the service errors or is rate-limited, the original English text
-  is shown.
-
----
-
-## 🙏 Credits
-
-- Data & sprites: [**PokeAPI**](https://pokeapi.co/) (please respect their
-  [fair-use policy](https://pokeapi.co/docs/v2)).
-- Translations fallback: [**MyMemory**](https://mymemory.translated.net/).
+- Data and sprites: [**PokeAPI**](https://pokeapi.co/). Please respect their
+  [fair-use policy](https://pokeapi.co/docs/v2) — the on-disk cache exists partly
+  so this client asks for each resource once and never again.
+- Translation fallback: [**MyMemory**](https://mymemory.translated.net/).
 - Pokémon is © Nintendo / Game Freak / The Pokémon Company. This is a
   non-commercial, educational project.
 
-## 📄 License
+## License
 
-MIT — see `LICENSE` (add one if you haven't yet).
+MIT — see [`LICENSE`](LICENSE).
