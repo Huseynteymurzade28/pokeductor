@@ -90,7 +90,8 @@ cargo install pokeductor
 - **Rust** (stable, 2021 edition) — install via [rustup](https://rustup.rs/).
 - A **truecolor (24-bit) terminal** for the sprite colors (most modern terminals qualify).
 - A font with **Unicode block + box-drawing glyphs** (e.g. any Nerd Font, Fira Code, JetBrains Mono).
-- An **internet connection** (data is fetched live from PokeAPI).
+- An **internet connection** for anything not already cached — see
+  [Works offline](#-features).
 
 ### Build & run
 
@@ -99,8 +100,10 @@ cargo install pokeductor
 cargo run --release
 ```
 
-The first launch fetches the species list; selecting a Pokémon loads its details,
-evolution chain, and artwork on demand.
+The first launch fetches the species list and opens on Bulbasaur; moving through
+the list loads each Pokémon's details, evolution chain and artwork on demand.
+Everything fetched is cached under `~/.cache/pokeductor`, so later launches are
+instant and work offline.
 
 ---
 
@@ -156,6 +159,8 @@ state, and all network work happens off the UI thread.
 | `main.rs` | Entry point; sets up the terminal and the `tokio` runtime. |
 | `models.rs` | API-agnostic domain types (`PokemonDetail`, `EvolutionTree`, `Sprite`). |
 | `api.rs` | Async PokeAPI client, evolution-chain parser, sprite decode, translation. |
+| `cache.rs` | On-disk cache of every fetched response, for instant and offline starts. |
+| `query.rs` | Search-box syntax (`type:`, `gen:`) parsing. |
 | `app.rs` | State machine + `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite & evolution-graph drawing. |
 | `i18n.rs` | `Language` enum + translation tables for the 6 UI languages. |
@@ -168,15 +173,26 @@ state, and all network work happens off the UI thread.
   [`Message`]s over an `mpsc` channel; the main loop is the single *consumer*,
   draining the channel alongside terminal input and a steady animation tick via
   `tokio::select!`. The UI thread never blocks on I/O.
-- **Caching.** Details, evolution chains, decoded sprites, and machine
-  translations are each cached in-memory and keyed by name, so a given Pokémon (or
-  translation) is fetched at most once per session.
+- **Caching.** Two layers, both keyed by name. In memory, a given Pokémon is
+  fetched at most once per session; on disk, details, evolution chains, sprites,
+  type rosters and machine translations survive between runs, so a species you
+  have already seen needs no request at all. Every fetch reads through the disk
+  cache first and writes back what it had to fetch. Writes are atomic
+  (temp file + rename) and version-stamped, and the whole layer is best-effort:
+  a cache that cannot be read or written is a miss, never a visible error.
 - **Sprite pipeline.** PNG → decode to RGBA (`image`) → crop to opaque bounds →
   box-average downscale (keeping aspect, accounting for ~2:1 cell height) →
   alpha-blend over the panel → emit `▀` half-block cells (fg = top pixel,
   bg = bottom pixel).
 - **Alternate forms.** Forms like `raichu-alola` resolve their species/evolution
   data via the base species name from the Pokémon payload, so they don't 404.
+  Their ids sit above 10000 and carry no dex number, so they show a blank dex
+  column and are skipped by `gen:` filters.
+- **Filtering.** Generations come from a fixed table of dex ranges — released
+  generations never change — so `gen:` costs nothing. `type:` needs a roster,
+  but `/type/{name}` answers a whole filter in one request that is then cached
+  forever. Sorting sticks to keys the list response already carries; ordering by
+  base-stat total would mean fetching all ~1300 species for a single keypress.
 - **Evolution requirements.** PokeAPI's `evolution_details` are parsed into a
   structured `EvolutionCondition` and phrased through per-language templates, so
   each translation decides where the value lands (`Use {}` vs. `{} kullan`).
@@ -190,6 +206,7 @@ state, and all network work happens off the UI thread.
 [`tokio`](https://crates.io/crates/tokio) ·
 [`reqwest`](https://crates.io/crates/reqwest) ·
 [`serde`](https://crates.io/crates/serde) ·
+[`serde_json`](https://crates.io/crates/serde_json) ·
 [`image`](https://crates.io/crates/image) ·
 [`anyhow`](https://crates.io/crates/anyhow) ·
 [`thiserror`](https://crates.io/crates/thiserror)
