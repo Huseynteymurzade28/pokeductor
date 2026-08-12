@@ -60,6 +60,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
     }
+    // Drawn last: help must land on top of whatever it is explaining.
+    if app.help_card {
+        render_help(frame, &strings, area);
+    }
 }
 
 fn render_header(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -268,27 +272,35 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     // Ability names. These come in the same payload as the types, so the row
     // costs nothing; the descriptions behind `A` are what need a request.
+    //
+    // Three abilities plus a "hidden" marker overrun a narrow panel, so the
+    // row is wrapped onto continuation lines rather than clipped: a name cut
+    // off halfway is worse than one on the next line.
     if !detail.abilities.is_empty() {
-        let mut ability_spans = vec![Span::styled(
-            format!("{}: ", s.abilities_label),
-            Style::default().fg(theme::SUBTEXT),
-        )];
-        for (index, ability) in detail.abilities.iter().enumerate() {
-            if index > 0 {
-                ability_spans.push(Span::styled(" · ", Style::default().fg(theme::OVERLAY)));
-            }
-            ability_spans.push(Span::styled(
-                ability_display_name(app, &ability.name),
-                Style::default().fg(theme::TEXT),
-            ));
-            if ability.is_hidden {
-                ability_spans.push(Span::styled(
-                    format!(" ({})", s.ability_hidden),
-                    Style::default().fg(theme::OVERLAY),
-                ));
-            }
+        let label = format!("{}: ", s.abilities_label);
+        let entries: Vec<String> = detail
+            .abilities
+            .iter()
+            .map(|ability| {
+                let name = ability_display_name(app, &ability.name);
+                match ability.is_hidden {
+                    true => format!("{name} ({})", s.ability_hidden),
+                    false => name,
+                }
+            })
+            .collect();
+
+        let indent = " ".repeat(label.chars().count());
+        let budget = (info.width as usize).saturating_sub(label.chars().count());
+        for (row, text) in wrap_plain(&entries.join(" · "), budget.max(8)).into_iter().enumerate() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if row == 0 { label.clone() } else { indent.clone() },
+                    Style::default().fg(theme::SUBTEXT),
+                ),
+                Span::styled(text, Style::default().fg(theme::TEXT)),
+            ]));
         }
-        lines.push(Line::from(ability_spans));
     }
 
     lines.push(Line::from(vec![
@@ -1094,6 +1106,118 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
 /// The party card: who is on the team, and the three things their combined
 /// typings say about it.
 /// The ability card: each of the species' abilities with what it actually does.
+/// The overlay is two columns wide so the whole key map fits without scrolling
+/// on a standard 24-row terminal.
+const HELP_CARD_W: u16 = 86;
+
+/// The help overlay: every binding in one place, grouped by where it applies.
+///
+/// The key names are language-neutral and live here; only the action labels
+/// come from the translation table.
+fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
+    let h = &s.help_card;
+
+    let left: Vec<(&str, &str)> = vec![
+        ("", h.ctx_list),
+        ("↑ ↓ · j k", h.act_move),
+        ("PgUp PgDn", h.act_jump10),
+        ("Enter", h.act_load),
+        ("/ · Tab", h.act_search),
+        ("E", h.act_evolutions),
+        ("T", h.act_types),
+        ("A", h.act_abilities),
+        ("Space", h.act_party_toggle),
+        ("P", h.act_party_card),
+        ("S", h.act_sort),
+        ("L", h.act_language),
+        ("?", h.act_help),
+        ("Q", h.act_quit),
+    ];
+    let right: Vec<(&str, &str)> = vec![
+        ("", h.ctx_search),
+        ("Enter", h.act_load_back),
+        ("Esc · Tab", h.act_back),
+        ("type:water", h.act_by_type),
+        ("gen:1", h.act_by_generation),
+        ("", ""),
+        ("", h.ctx_evolution),
+        ("← → ↑ ↓ · h j k l", h.act_chain_move),
+        ("Enter", h.act_chain_jump),
+        ("Esc · Tab", h.act_back),
+        ("", ""),
+        ("", h.ctx_cards),
+        ("Esc", h.act_close),
+        ("Ctrl-C", h.act_quit),
+    ];
+
+    let rows = left.len().max(right.len()) as u16;
+    let width = HELP_CARD_W.min(full.width);
+    let height = (rows + 4).min(full.height);
+    if width < 40 || height < 8 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            h.title,
+            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let body = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(body[0]);
+    frame.render_widget(Paragraph::new(help_lines(&left)), cols[0]);
+    frame.render_widget(Paragraph::new(help_lines(&right)), cols[1]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        h.close_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, body[1]);
+}
+
+/// Turns help rows into lines. A row with no keys is a section heading, and an
+/// entirely empty one is a spacer.
+///
+/// The key column is sized from the column's own widest entry, so the side
+/// carrying `← → ↑ ↓ · h j k l` does not force that much padding on the other
+/// and squeeze its labels into truncation.
+fn help_lines(rows: &[(&str, &str)]) -> Vec<Line<'static>> {
+    let key_w = rows
+        .iter()
+        .map(|(keys, _)| keys.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+
+    rows.iter()
+        .map(|(keys, action)| {
+            if keys.is_empty() {
+                return match action.is_empty() {
+                    true => Line::raw(""),
+                    false => section_heading(action),
+                };
+            }
+            Line::from(vec![
+                Span::styled(
+                    format!("  {keys:<key_w$}"),
+                    Style::default().fg(theme::TEAL).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled((*action).to_string(), Style::default().fg(theme::SUBTEXT)),
+            ])
+        })
+        .collect()
+}
+
 fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let Some(detail) = app.selected_detail() else {
         return;

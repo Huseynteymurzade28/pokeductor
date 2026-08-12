@@ -140,6 +140,8 @@ pub struct App {
     pub ability_loading: HashSet<String>,
     /// Whether the ability card is open for the current selection.
     pub ability_card: bool,
+    /// Whether the help overlay is open.
+    pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
     pub translations: HashMap<(String, String), String>,
     /// Translation requests currently in flight, to avoid duplicating work.
@@ -189,6 +191,7 @@ impl App {
             abilities: HashMap::new(),
             ability_loading: HashSet::new(),
             ability_card: false,
+            help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
             selected_name: None,
@@ -511,6 +514,15 @@ impl App {
             self.handle_language_key(key);
             return;
         }
+        if self.help_card {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?' | 'q' | 'Q')
+            ) {
+                self.help_card = false;
+            }
+            return;
+        }
         if self.ability_card {
             if matches!(
                 key.code,
@@ -680,6 +692,7 @@ impl App {
             KeyCode::Char(' ') => self.toggle_team_membership(),
             KeyCode::Char('p') | KeyCode::Char('P') => self.team_card = true,
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
+            KeyCode::Char('?') => self.help_card = true,
             _ => {}
         }
     }
@@ -716,6 +729,7 @@ impl App {
             }
             KeyCode::Enter => self.jump_to_evolution_member(),
             KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
+            KeyCode::Char('?') => self.help_card = true,
             _ => {}
         }
     }
