@@ -325,6 +325,11 @@ impl App {
                 self.all_pokemon = list;
                 self.list_loading = false;
                 self.recompute_filter();
+                // Open on the first species (Bulbasaur) instead of an empty
+                // panel, so there is something to look at before any keypress.
+                if self.selected_name.is_none() {
+                    self.request_selected();
+                }
             }
             Message::PokemonLoaded { detail, evolution, sprite } => {
                 let name = detail.name.clone();
