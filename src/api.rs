@@ -5,15 +5,38 @@
 //! kept private so the JSON shape never leaks out of this module.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tokio::sync::Semaphore;
 
 use crate::models::{
     Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail,
     PokemonEntry, Sprite, Stat, StatKind,
 };
+use crate::retry::{self, FailureKind};
 
 const BASE_URL: &str = "https://pokeapi.co/api/v2";
 /// How many Pokemon to load into the sidebar. Covers all current species.
 const LIST_LIMIT: u32 = 1302;
+
+/// Ceiling on requests in flight at once across the whole process.
+///
+/// Fetches are dispatched from independent tasks that know nothing about each
+/// other, so without a shared limit a single keypress can produce a burst: an
+/// evolution chain requests a sprite per member, and Eevee's is nine. PokeAPI
+/// asks clients to be considerate of its fair-use policy, and this is where we
+/// hold ourselves to it.
+const MAX_CONCURRENT_REQUESTS: usize = 6;
+
+/// How long to wait for a connection to establish before giving up on it.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long any single attempt may take end to end. `reqwest` applies no
+/// timeout of its own, so without this a connection that opens and then stalls
+/// leaves the request pending forever — and the UI showing a load that can
+/// never resolve.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Errors that can occur while talking to PokeAPI.
 #[derive(Debug, thiserror::Error)]
@@ -30,20 +53,101 @@ pub enum ApiError {
 pub fn build_client() -> Result<reqwest::Client, ApiError> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("pokeductor/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .build()?;
     Ok(client)
+}
+
+/// The process-wide cap on in-flight requests.
+///
+/// A `static` rather than a field on the client because the limit belongs to
+/// PokeAPI, not to any one caller: every task must queue behind the same
+/// permits for the cap to mean anything.
+fn request_permits() -> &'static Semaphore {
+    static PERMITS: OnceLock<Semaphore> = OnceLock::new();
+    PERMITS.get_or_init(|| Semaphore::new(MAX_CONCURRENT_REQUESTS))
+}
+
+/// Sorts a `reqwest` failure into the classes the retry policy reasons about.
+fn classify(err: &reqwest::Error) -> FailureKind {
+    if let Some(status) = err.status() {
+        return FailureKind::Status(status.as_u16());
+    }
+    if err.is_decode() {
+        return FailureKind::Decode;
+    }
+    // Timeouts, connection failures, redirect loops and DNS errors all mean no
+    // usable response arrived, which is the case worth another attempt.
+    FailureKind::Transport
+}
+
+/// A uniform draw from `[0, 1)` for the backoff jitter.
+///
+/// Taken from the clock rather than from `rand`: the requirement is that
+/// simultaneous retries stop colliding, which nanosecond scheduling noise
+/// satisfies, and it is not worth a dependency for that.
+fn jitter_fraction() -> f64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    f64::from(nanos) / f64::from(1_000_000_000u32)
+}
+
+/// Sends a request, retrying transient failures, and returns the successful
+/// response.
+///
+/// Takes a closure rather than a `RequestBuilder` because a builder is consumed
+/// by `send` and each attempt needs a fresh one. The concurrency permit is
+/// acquired per attempt, so a task waiting out a backoff is not holding a slot
+/// another task could be using.
+async fn send_with_retry<F>(build: F) -> Result<reqwest::Response, ApiError>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let mut attempt = 0;
+    loop {
+        let result = {
+            // `request_permits` is never closed, so acquisition cannot fail.
+            let _permit = request_permits().acquire().await;
+            build().send().await.and_then(|r| r.error_for_status())
+        };
+
+        let err = match result {
+            Ok(response) => return Ok(response),
+            Err(err) => err,
+        };
+
+        let last_attempt = attempt + 1 >= retry::MAX_ATTEMPTS;
+        if last_attempt || !retry::is_retryable(classify(&err)) {
+            return Err(ApiError::Network(err));
+        }
+
+        tokio::time::sleep(retry::backoff_delay(attempt, jitter_fraction())).await;
+        attempt += 1;
+    }
+}
+
+/// `GET` a URL and deserialize the JSON body.
+async fn get_json<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<T, ApiError> {
+    let response = send_with_retry(|| client.get(url)).await?;
+    Ok(response.json().await?)
+}
+
+/// `GET` a URL and return the raw body.
+async fn get_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, ApiError> {
+    let response = send_with_retry(|| client.get(url)).await?;
+    Ok(response.bytes().await?.to_vec())
 }
 
 /// Fetches the master list of Pokemon names for the sidebar.
 pub async fn fetch_pokemon_list(client: &reqwest::Client) -> Result<Vec<PokemonEntry>, ApiError> {
     let url = format!("{BASE_URL}/pokemon?limit={LIST_LIMIT}&offset=0");
-    let raw: NamedList = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let raw: NamedList = get_json(client, &url).await?;
     let entries = raw
         .results
         .into_iter()
@@ -65,13 +169,7 @@ pub async fn fetch_type_members(
     type_name: &str,
 ) -> Result<Vec<String>, ApiError> {
     let url = format!("{BASE_URL}/type/{type_name}");
-    let raw: RawType = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let raw: RawType = get_json(client, &url).await?;
     Ok(raw.pokemon.into_iter().map(|p| p.pokemon.name).collect())
 }
 
@@ -132,14 +230,13 @@ pub async fn translate_text(
     // well under that, but clamp defensively just in case.
     let clamped: String = text.chars().take(500).collect();
     let pair = format!("{from}|{to}");
-    let resp: MyMemoryResponse = client
-        .get("https://api.mymemory.translated.net/get")
-        .query(&[("q", clamped.as_str()), ("langpair", pair.as_str())])
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let response = send_with_retry(|| {
+        client
+            .get("https://api.mymemory.translated.net/get")
+            .query(&[("q", clamped.as_str()), ("langpair", pair.as_str())])
+    })
+    .await?;
+    let resp: MyMemoryResponse = response.json().await?;
     Ok(resp.response_data.translated_text)
 }
 
@@ -150,13 +247,7 @@ pub async fn translate_text(
 /// while effect text exists only in English, German and French.
 pub async fn fetch_ability(client: &reqwest::Client, name: &str) -> Result<AbilityInfo, ApiError> {
     let url = format!("{BASE_URL}/ability/{name}");
-    let raw: RawAbility = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let raw: RawAbility = get_json(client, &url).await?;
 
     let mut names = HashMap::new();
     for n in &raw.names {
@@ -200,13 +291,7 @@ pub async fn fetch_named_sprite(
 
 /// Downloads a sprite PNG and decodes it into raw RGBA pixels.
 pub async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite, ApiError> {
-    let bytes = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let bytes = get_bytes(client, url).await?;
     let image = image::load_from_memory(&bytes)?.to_rgba8();
     let (width, height) = image.dimensions();
     let pixels = image.pixels().map(|p| p.0).collect();
@@ -219,13 +304,7 @@ pub async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite,
 
 async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDetail, ApiError> {
     let url = format!("{BASE_URL}/pokemon/{name}");
-    let raw: RawPokemon = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let raw: RawPokemon = get_json(client, &url).await?;
 
     let mut types: Vec<(u8, String)> = raw
         .types
@@ -301,13 +380,7 @@ struct SpeciesInfo {
 /// and flavor text in every language we care about for the info card.
 async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesInfo, ApiError> {
     let url = format!("{BASE_URL}/pokemon-species/{name}");
-    let species: RawSpecies = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let species: RawSpecies = get_json(client, &url).await?;
 
     let chain_url = species
         .evolution_chain
@@ -347,13 +420,7 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
 
 /// Fetches and parses an evolution chain from its API URL.
 async fn fetch_chain(client: &reqwest::Client, url: &str) -> Result<EvolutionTree, ApiError> {
-    let chain: RawEvolutionChain = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let chain: RawEvolutionChain = get_json(client, url).await?;
     Ok(parse_chain(&chain.chain))
 }
 
@@ -575,6 +642,49 @@ struct MyMemoryData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// End-to-end check against the live API, covering the whole request path:
+    /// the permit, the retry wrapper, the real timeouts, and parsing a payload
+    /// nobody wrote by hand.
+    ///
+    /// Ignored by default so neither CI nor a routine `cargo test` depends on
+    /// the network or spends PokeAPI's quota. Run it deliberately after
+    /// touching this module:
+    ///
+    /// ```text
+    /// cargo test --all-features -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires network access to pokeapi.co"]
+    async fn the_live_api_still_answers() {
+        let client = build_client().expect("client builds");
+
+        let list = fetch_pokemon_list(&client).await.expect("list fetch");
+        assert!(list.len() > 1000, "got {} entries", list.len());
+
+        let (detail, tree, sprite) = fetch_pokemon_bundle(&client, "eevee")
+            .await
+            .expect("bundle fetch");
+        assert_eq!(detail.name, "eevee");
+        assert!(detail.types.contains(&"normal".to_string()));
+        assert!(sprite.is_some(), "eevee should have artwork");
+        assert!(
+            tree.leaf_count() >= 8,
+            "eevee branches {} ways",
+            tree.leaf_count()
+        );
+
+        // A name that does not exist must fail fast rather than burn the full
+        // retry budget on an answer that will not change.
+        let started = std::time::Instant::now();
+        let missing = fetch_pokemon_bundle(&client, "missingno-not-a-species").await;
+        assert!(missing.is_err(), "a bogus species should not resolve");
+        assert!(
+            started.elapsed() < REQUEST_TIMEOUT,
+            "a 404 took {:?}, so it was retried",
+            started.elapsed()
+        );
+    }
 
     /// A trimmed `/evolution-chain` payload in the exact shape PokeAPI sends:
     /// Eevee branching into an item evolution and a conditional one.

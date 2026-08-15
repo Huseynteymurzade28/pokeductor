@@ -7,6 +7,7 @@
 //! - `theme`   : Catppuccin Mocha palette and per-type colors.
 //! - `api`     : async PokeAPI client and evolution-chain parser.
 //! - `query`   : search-box syntax (`type:`, `gen:`) parsing.
+//! - `retry`   : retry classification and backoff policy for network requests.
 //! - `typechart`: offline type-effectiveness chart.
 //! - `team`    : team-level type analysis built on top of it.
 //! - `app`     : state machine + `tokio::select!` event loop.
@@ -18,6 +19,7 @@ mod cache;
 mod i18n;
 mod models;
 mod query;
+mod retry;
 mod team;
 mod theme;
 mod typechart;
