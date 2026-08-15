@@ -35,15 +35,22 @@ pub fn build_client() -> Result<reqwest::Client, ApiError> {
 }
 
 /// Fetches the master list of Pokemon names for the sidebar.
-pub async fn fetch_pokemon_list(
-    client: &reqwest::Client,
-) -> Result<Vec<PokemonEntry>, ApiError> {
+pub async fn fetch_pokemon_list(client: &reqwest::Client) -> Result<Vec<PokemonEntry>, ApiError> {
     let url = format!("{BASE_URL}/pokemon?limit={LIST_LIMIT}&offset=0");
-    let raw: NamedList = client.get(url).send().await?.error_for_status()?.json().await?;
+    let raw: NamedList = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     let entries = raw
         .results
         .into_iter()
-        .map(|r| PokemonEntry { id: id_from_url(&r.url), name: r.name })
+        .map(|r| PokemonEntry {
+            id: id_from_url(&r.url),
+            name: r.name,
+        })
         .collect();
     Ok(entries)
 }
@@ -58,7 +65,13 @@ pub async fn fetch_type_members(
     type_name: &str,
 ) -> Result<Vec<String>, ApiError> {
     let url = format!("{BASE_URL}/type/{type_name}");
-    let raw: RawType = client.get(url).send().await?.error_for_status()?.json().await?;
+    let raw: RawType = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     Ok(raw.pokemon.into_iter().map(|p| p.pokemon.name).collect())
 }
 
@@ -135,17 +148,22 @@ pub async fn translate_text(
 /// The description comes from the game flavor text rather than the effect
 /// entries: PokeAPI carries flavor in all five languages the info card uses,
 /// while effect text exists only in English, German and French.
-pub async fn fetch_ability(
-    client: &reqwest::Client,
-    name: &str,
-) -> Result<AbilityInfo, ApiError> {
+pub async fn fetch_ability(client: &reqwest::Client, name: &str) -> Result<AbilityInfo, ApiError> {
     let url = format!("{BASE_URL}/ability/{name}");
-    let raw: RawAbility = client.get(url).send().await?.error_for_status()?.json().await?;
+    let raw: RawAbility = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
 
     let mut names = HashMap::new();
     for n in &raw.names {
         if CARD_LANGS.contains(&n.language.name.as_str()) {
-            names.entry(n.language.name.clone()).or_insert_with(|| n.name.clone());
+            names
+                .entry(n.language.name.clone())
+                .or_insert_with(|| n.name.clone());
         }
     }
 
@@ -160,7 +178,11 @@ pub async fn fetch_ability(
         }
     }
 
-    Ok(AbilityInfo { name: raw.name, names, flavors })
+    Ok(AbilityInfo {
+        name: raw.name,
+        names,
+        flavors,
+    })
 }
 
 /// Fetches and decodes just the sprite for a named species. Used to lazily
@@ -178,16 +200,32 @@ pub async fn fetch_named_sprite(
 
 /// Downloads a sprite PNG and decodes it into raw RGBA pixels.
 pub async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite, ApiError> {
-    let bytes = client.get(url).send().await?.error_for_status()?.bytes().await?;
+    let bytes = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
     let image = image::load_from_memory(&bytes)?.to_rgba8();
     let (width, height) = image.dimensions();
     let pixels = image.pixels().map(|p| p.0).collect();
-    Ok(Sprite { width, height, pixels })
+    Ok(Sprite {
+        width,
+        height,
+        pixels,
+    })
 }
 
 async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDetail, ApiError> {
     let url = format!("{BASE_URL}/pokemon/{name}");
-    let raw: RawPokemon = client.get(url).send().await?.error_for_status()?.json().await?;
+    let raw: RawPokemon = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
 
     let mut types: Vec<(u8, String)> = raw
         .types
@@ -199,7 +237,15 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
     let mut abilities: Vec<(u8, Ability)> = raw
         .abilities
         .into_iter()
-        .map(|a| (a.slot, Ability { name: a.ability.name, is_hidden: a.is_hidden }))
+        .map(|a| {
+            (
+                a.slot,
+                Ability {
+                    name: a.ability.name,
+                    is_hidden: a.is_hidden,
+                },
+            )
+        })
         .collect();
     abilities.sort_by_key(|(slot, _)| *slot);
 
@@ -255,7 +301,13 @@ struct SpeciesInfo {
 /// and flavor text in every language we care about for the info card.
 async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesInfo, ApiError> {
     let url = format!("{BASE_URL}/pokemon-species/{name}");
-    let species: RawSpecies = client.get(url).send().await?.error_for_status()?.json().await?;
+    let species: RawSpecies = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
 
     let chain_url = species
         .evolution_chain
@@ -265,7 +317,9 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
     let mut genera = HashMap::new();
     for g in &species.genera {
         if CARD_LANGS.contains(&g.language.name.as_str()) {
-            genera.entry(g.language.name.clone()).or_insert_with(|| g.genus.clone());
+            genera
+                .entry(g.language.name.clone())
+                .or_insert_with(|| g.genus.clone());
         }
     }
 
@@ -293,7 +347,13 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
 
 /// Fetches and parses an evolution chain from its API URL.
 async fn fetch_chain(client: &reqwest::Client, url: &str) -> Result<EvolutionTree, ApiError> {
-    let chain: RawEvolutionChain = client.get(url).send().await?.error_for_status()?.json().await?;
+    let chain: RawEvolutionChain = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     Ok(parse_chain(&chain.chain))
 }
 

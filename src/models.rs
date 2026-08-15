@@ -294,7 +294,12 @@ impl EvolutionTree {
     /// Length of the longest evolution path (number of stages), e.g. 3 for
     /// Bulbasaur → Ivysaur → Venusaur.
     pub fn depth(&self) -> usize {
-        1 + self.children.iter().map(EvolutionTree::depth).max().unwrap_or(0)
+        1 + self
+            .children
+            .iter()
+            .map(EvolutionTree::depth)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -359,7 +364,12 @@ impl Sprite {
         if found {
             (x0, y0, x1, y1)
         } else {
-            (0, 0, self.width.saturating_sub(1), self.height.saturating_sub(1))
+            (
+                0,
+                0,
+                self.width.saturating_sub(1),
+                self.height.saturating_sub(1),
+            )
         }
     }
 }
@@ -384,22 +394,34 @@ mod tests {
     use super::*;
 
     fn entry(id: u32) -> PokemonEntry {
-        PokemonEntry { name: String::new(), id }
+        PokemonEntry {
+            name: String::new(),
+            id,
+        }
     }
 
     #[test]
     fn generation_boundaries_land_on_the_right_side() {
         // First and last species of every generation.
         for (id, gen) in [
-            (1, 1), (151, 1),
-            (152, 2), (251, 2),
-            (252, 3), (386, 3),
-            (387, 4), (493, 4),
-            (494, 5), (649, 5),
-            (650, 6), (721, 6),
-            (722, 7), (809, 7),
-            (810, 8), (905, 8),
-            (906, 9), (1025, 9),
+            (1, 1),
+            (151, 1),
+            (152, 2),
+            (251, 2),
+            (252, 3),
+            (386, 3),
+            (387, 4),
+            (493, 4),
+            (494, 5),
+            (649, 5),
+            (650, 6),
+            (721, 6),
+            (722, 7),
+            (809, 7),
+            (810, 8),
+            (905, 8),
+            (906, 9),
+            (1025, 9),
         ] {
             assert_eq!(entry(id).generation(), Some(gen), "dex #{id}");
         }

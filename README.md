@@ -7,7 +7,9 @@ chains as connected sprite cards, and analyse type coverage for a single species
 or a whole party — rendered with Unicode half-blocks in a PICO-8-inspired
 palette. Built in Rust with [ratatui](https://ratatui.rs/).
 
+[![CI](https://github.com/Huseynteymurzade28/pokeductor/actions/workflows/ci.yml/badge.svg)](https://github.com/Huseynteymurzade28/pokeductor/actions/workflows/ci.yml)
 ![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)
+![MSRV](https://img.shields.io/badge/MSRV-1.88-orange?logo=rust)
 ![ratatui](https://img.shields.io/badge/TUI-ratatui%200.29-blueviolet)
 ![Async](https://img.shields.io/badge/runtime-tokio-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
@@ -35,7 +37,7 @@ cargo run --release
 
 ### Requirements
 
-- **Rust** (stable, 2021 edition) — via [rustup](https://rustup.rs/).
+- **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/).
 - A **truecolor (24-bit) terminal**. Sprites are drawn as RGB half-blocks and
   will look wrong on a 256-colour terminal.
 - A font with **Unicode block and box-drawing glyphs** — any Nerd Font, Fira
@@ -341,6 +343,26 @@ shown.
 [`thiserror`](https://crates.io/crates/thiserror)
 
 ---
+
+## Development
+
+The checks CI enforces on every pull request, in the order it runs them:
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+```
+
+Tests run on Linux, macOS and Windows. A separate job builds against the
+`rust-version` floor declared in `Cargo.toml`, so a dependency bump that raises
+the minimum supported Rust version fails the build rather than reaching users.
+`cargo deny` checks licenses and RUSTSEC advisories weekly and whenever the
+manifest changes.
+
+Everything under `typechart.rs`, `team.rs`, `query.rs` and `models.rs` is pure
+and unit-tested; new logic belongs there rather than in `app.rs` or `ui.rs`
+wherever it can be expressed without a terminal or a network.
 
 ## Credits
 

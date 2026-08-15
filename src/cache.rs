@@ -61,7 +61,10 @@ struct Envelope<T> {
 pub async fn load_list() -> Option<CachedList> {
     let path = root()?.join("list.json");
     let entries = read_json(&path).await?;
-    Some(CachedList { entries, fresh: age(&path).await.is_some_and(|a| a < LIST_TTL) })
+    Some(CachedList {
+        entries,
+        fresh: age(&path).await.is_some_and(|a| a < LIST_TTL),
+    })
 }
 
 pub async fn store_list(entries: &[PokemonEntry]) {
@@ -84,7 +87,10 @@ pub async fn store_bundle(name: &str, detail: &PokemonDetail, evolution: &Evolut
     // Cloning to build the owned envelope costs one copy of a small record on
     // a background task, which is cheaper than threading lifetimes through
     // serde for a write that happens once per species per month.
-    let bundle = CachedBundle { detail: detail.clone(), evolution: evolution.clone() };
+    let bundle = CachedBundle {
+        detail: detail.clone(),
+        evolution: evolution.clone(),
+    };
     write_json(&path, &bundle).await;
 }
 
@@ -126,7 +132,11 @@ pub async fn load_sprite(name: &str) -> Option<Sprite> {
     let bytes = tokio::fs::read(&path).await.ok()?;
     let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (width, height) = image.dimensions();
-    Some(Sprite { width, height, pixels: image.pixels().map(|p| p.0).collect() })
+    Some(Sprite {
+        width,
+        height,
+        pixels: image.pixels().map(|p| p.0).collect(),
+    })
 }
 
 pub async fn store_sprite(name: &str, sprite: &Sprite) {
@@ -193,11 +203,19 @@ fn root() -> Option<&'static Path> {
 }
 
 fn ability_path(name: &str) -> Option<PathBuf> {
-    Some(root()?.join("abilities").join(format!("{}.json", slug(name))))
+    Some(
+        root()?
+            .join("abilities")
+            .join(format!("{}.json", slug(name))),
+    )
 }
 
 fn type_path(type_name: &str) -> Option<PathBuf> {
-    Some(root()?.join("types").join(format!("{}.json", slug(type_name))))
+    Some(
+        root()?
+            .join("types")
+            .join(format!("{}.json", slug(type_name))),
+    )
 }
 
 fn sprite_path(name: &str) -> Option<PathBuf> {
@@ -205,7 +223,11 @@ fn sprite_path(name: &str) -> Option<PathBuf> {
 }
 
 fn translation_path(name: &str, lang: &str) -> Option<PathBuf> {
-    Some(root()?.join("translations").join(format!("{}.{}.txt", slug(name), slug(lang))))
+    Some(
+        root()?
+            .join("translations")
+            .join(format!("{}.{}.txt", slug(name), slug(lang))),
+    )
 }
 
 /// Reduces an API name to something safe to use as a single filename.
@@ -215,7 +237,13 @@ fn translation_path(name: &str, lang: &str) -> Option<PathBuf> {
 /// directory or collide with a path separator.
 fn slug(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -228,7 +256,10 @@ async fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
 }
 
 async fn write_json<T: Serialize>(path: &Path, data: &T) {
-    let envelope = Envelope { version: VERSION, data };
+    let envelope = Envelope {
+        version: VERSION,
+        data,
+    };
     if let Ok(bytes) = serde_json::to_vec(&envelope) {
         write_atomic(path, &bytes).await;
     }
@@ -305,6 +336,9 @@ mod tests {
         let bytes = encode_png(&sprite).unwrap();
         let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(decoded.dimensions(), (2, 1));
-        assert_eq!(decoded.pixels().map(|p| p.0).collect::<Vec<_>>(), sprite.pixels);
+        assert_eq!(
+            decoded.pixels().map(|p| p.0).collect::<Vec<_>>(),
+            sprite.pixels
+        );
     }
 }

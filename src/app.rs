@@ -301,7 +301,9 @@ impl App {
             let client = self.client.clone();
             tokio::spawn(async move {
                 let members = resolve_type_members(&client, &type_name).await;
-                let _ = tx.send(Message::TypeMembersLoaded { type_name, members }).await;
+                let _ = tx
+                    .send(Message::TypeMembersLoaded { type_name, members })
+                    .await;
             });
         }
     }
@@ -365,14 +367,18 @@ impl App {
             // Translations cost a rate-limited third-party request, so a cached
             // one is worth reaching for before we ask again.
             if let Some(text) = cache::load_translation(&name, &lang).await {
-                let _ = tx.send(Message::FlavorTranslated { name, lang, text }).await;
+                let _ = tx
+                    .send(Message::FlavorTranslated { name, lang, text })
+                    .await;
                 return;
             }
             // On failure we simply never send: the UI keeps the English text and
             // the in-flight flag stops us from hammering a rate-limited service.
             if let Ok(text) = api::translate_text(&client, &source, "en", &lang).await {
                 cache::store_translation(&name, &lang, &text).await;
-                let _ = tx.send(Message::FlavorTranslated { name, lang, text }).await;
+                let _ = tx
+                    .send(Message::FlavorTranslated { name, lang, text })
+                    .await;
             }
         });
     }
@@ -447,7 +453,11 @@ impl App {
                     self.request_selected();
                 }
             }
-            Message::PokemonLoaded { detail, evolution, sprite } => {
+            Message::PokemonLoaded {
+                detail,
+                evolution,
+                sprite,
+            } => {
                 let name = detail.name.clone();
                 if self.loading_detail.as_deref() == Some(name.as_str()) {
                     self.loading_detail = None;
@@ -479,7 +489,8 @@ impl App {
                 self.type_loading.remove(&type_name);
                 // Recorded even when empty — a mistyped type must settle on
                 // "no results" instead of being requested again every frame.
-                self.type_members.insert(type_name, members.into_iter().collect());
+                self.type_members
+                    .insert(type_name, members.into_iter().collect());
                 self.recompute_filter();
             }
             Message::FlavorTranslated { name, lang, text } => {
@@ -898,7 +909,11 @@ async fn resolve_bundle(client: &reqwest::Client, name: &str) -> Message {
         Ok((detail, evolution, sprite)) => {
             cache::store_bundle(name, &detail, &evolution).await;
             record_sprite(name, sprite.as_ref()).await;
-            Message::PokemonLoaded { detail, evolution, sprite }
+            Message::PokemonLoaded {
+                detail,
+                evolution,
+                sprite,
+            }
         }
         Err(err) => Message::Error(err.to_string()),
     }
@@ -906,11 +921,7 @@ async fn resolve_bundle(client: &reqwest::Client, name: &str) -> Message {
 
 /// Cache-first sprite lookup for a species whose artwork URL we already know
 /// (because its details came out of the cache alongside it).
-async fn resolve_sprite(
-    client: &reqwest::Client,
-    name: &str,
-    url: Option<&str>,
-) -> Option<Sprite> {
+async fn resolve_sprite(client: &reqwest::Client, name: &str, url: Option<&str>) -> Option<Sprite> {
     if let Some(sprite) = cache::load_sprite(name).await {
         return Some(sprite);
     }

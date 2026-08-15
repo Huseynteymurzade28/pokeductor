@@ -164,7 +164,12 @@ pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
         })
         .collect();
 
-    TeamAnalysis { shared_weaknesses, unresisted, offense_gaps, ability_immunities }
+    TeamAnalysis {
+        shared_weaknesses,
+        unresisted,
+        offense_gaps,
+        ability_immunities,
+    }
 }
 
 #[cfg(test)]
@@ -188,7 +193,10 @@ mod tests {
             types: types.iter().map(|t| t.to_string()).collect(),
             abilities: abilities
                 .iter()
-                .map(|a| Ability { name: a.to_string(), is_hidden: false })
+                .map(|a| Ability {
+                    name: a.to_string(),
+                    is_hidden: false,
+                })
                 .collect(),
             stats: Vec::new(),
             height: 0,
@@ -271,7 +279,10 @@ mod tests {
 
         // Fire hits Grass/Ice/Bug/Steel; Flying hits Grass/Fighting/Bug.
         for covered in ["grass", "ice", "bug", "steel", "fighting"] {
-            assert!(!analysis.offense_gaps.contains(&covered), "{covered} is covered");
+            assert!(
+                !analysis.offense_gaps.contains(&covered),
+                "{covered} is covered"
+            );
         }
         // Nothing it carries is strong against Water or Dragon.
         assert!(analysis.offense_gaps.contains(&"water"));

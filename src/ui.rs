@@ -10,8 +10,8 @@ use ratatui::Frame;
 use crate::app::{App, Focus, SortKey};
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
-use crate::theme;
 use crate::team;
+use crate::theme;
 use crate::typechart;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -24,7 +24,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let strings = app.language.strings();
 
     // Paint the whole background first so gaps share the pastel base color.
-    frame.render_widget(Block::default().style(Style::default().bg(theme::BASE)), area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::BASE)),
+        area,
+    );
 
     let rows = Layout::vertical([
         Constraint::Length(1), // header
@@ -36,13 +39,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_header(frame, app, &strings, rows[0]);
     render_footer(frame, &strings, rows[2]);
 
-    let cols = Layout::horizontal([Constraint::Percentage(32), Constraint::Percentage(68)])
-        .split(rows[1]);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(32), Constraint::Percentage(68)]).split(rows[1]);
 
     render_sidebar(frame, app, &strings, cols[0]);
 
-    let right = Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(cols[1]);
+    let right =
+        Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).split(cols[1]);
     render_details(frame, app, &strings, right[0]);
     render_evolution(frame, app, &strings, right[1]);
 
@@ -108,7 +111,10 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let search_block = panel_block(s.search_title, search_focused);
     let cursor = if search_focused { "▏" } else { "" };
     let query_line = if app.query.is_empty() && !search_focused {
-        Line::from(Span::styled(s.search_hint, Style::default().fg(theme::OVERLAY)))
+        Line::from(Span::styled(
+            s.search_hint,
+            Style::default().fg(theme::OVERLAY),
+        ))
     } else {
         Line::from(vec![
             Span::styled("🔍 ", Style::default().fg(theme::SAPPHIRE)),
@@ -124,7 +130,12 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         SortKey::Dex => s.sort_dex,
         SortKey::Name => s.sort_name,
     };
-    let title = format!("{}({}) ⇅ {} ", s.sidebar_title, app.filtered.len(), sort_badge);
+    let title = format!(
+        "{}({}) ⇅ {} ",
+        s.sidebar_title,
+        app.filtered.len(),
+        sort_badge
+    );
     let list_block = panel_block_owned(title, list_focused);
     let inner = list_block.inner(rows[1]);
     frame.render_widget(&list_block, rows[1]);
@@ -167,14 +178,12 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items)
-        .highlight_symbol("▶ ")
-        .highlight_style(
-            Style::default()
-                .fg(theme::BASE)
-                .bg(theme::MAUVE)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).highlight_symbol("▶ ").highlight_style(
+        Style::default()
+            .fg(theme::BASE)
+            .bg(theme::MAUVE)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_stateful_widget(list, inner, &mut app.list_state);
 }
 
@@ -235,7 +244,9 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     if let Some(genus) = detail.genus_for(lang_code) {
         lines.push(Line::from(Span::styled(
             genus.to_string(),
-            Style::default().fg(theme::PEACH).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(theme::PEACH)
+                .add_modifier(Modifier::ITALIC),
         )));
     }
 
@@ -255,7 +266,10 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         for (label, color) in badges {
             spans.push(Span::styled(
                 format!(" ✦ {label} "),
-                Style::default().fg(theme::BASE).bg(color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::BASE)
+                    .bg(color)
+                    .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw(" "));
         }
@@ -292,10 +306,17 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
         let indent = " ".repeat(label.chars().count());
         let budget = (info.width as usize).saturating_sub(label.chars().count());
-        for (row, text) in wrap_plain(&entries.join(" · "), budget.max(8)).into_iter().enumerate() {
+        for (row, text) in wrap_plain(&entries.join(" · "), budget.max(8))
+            .into_iter()
+            .enumerate()
+        {
             lines.push(Line::from(vec![
                 Span::styled(
-                    if row == 0 { label.clone() } else { indent.clone() },
+                    if row == 0 {
+                        label.clone()
+                    } else {
+                        indent.clone()
+                    },
                     Style::default().fg(theme::SUBTEXT),
                 ),
                 Span::styled(text, Style::default().fg(theme::TEXT)),
@@ -304,13 +325,19 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     }
 
     lines.push(Line::from(vec![
-        Span::styled(format!("{}: ", s.height_label), Style::default().fg(theme::SUBTEXT)),
+        Span::styled(
+            format!("{}: ", s.height_label),
+            Style::default().fg(theme::SUBTEXT),
+        ),
         Span::styled(
             format!("{:.1} m", detail.height as f32 / 10.0),
             Style::default().fg(theme::TEXT),
         ),
         Span::raw("    "),
-        Span::styled(format!("{}: ", s.weight_label), Style::default().fg(theme::SUBTEXT)),
+        Span::styled(
+            format!("{}: ", s.weight_label),
+            Style::default().fg(theme::SUBTEXT),
+        ),
         Span::styled(
             format!("{:.1} kg", detail.weight as f32 / 10.0),
             Style::default().fg(theme::TEXT),
@@ -321,12 +348,19 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     // Stat bars sized to the available width.
     let bar_width = (info.width as usize).saturating_sub(STAT_LABEL_WIDTH + 6);
     for stat in &detail.stats {
-        lines.push(stat_line(app.language.stat_label(stat.kind), stat.base, bar_width));
+        lines.push(stat_line(
+            app.language.stat_label(stat.kind),
+            stat.base,
+            bar_width,
+        ));
     }
 
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
-        Span::styled(format!("{}: ", s.total_label), Style::default().fg(theme::SUBTEXT)),
+        Span::styled(
+            format!("{}: ", s.total_label),
+            Style::default().fg(theme::SUBTEXT),
+        ),
         Span::styled(
             detail.stat_total().to_string(),
             Style::default()
@@ -349,8 +383,9 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     let flavor_rows = 4;
     match flavor {
         Some(flavor) if info.height as usize > lines.len() + flavor_rows => {
-            let split = Layout::vertical([Constraint::Min(0), Constraint::Length(flavor_rows as u16)])
-                .split(info);
+            let split =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(flavor_rows as u16)])
+                    .split(info);
             frame.render_widget(Paragraph::new(lines), split[0]);
             render_flavor_card(frame, split[1], flavor);
         }
@@ -360,12 +395,12 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
 /// Renders the Pokedex flavor-text blurb as a quoted, word-wrapped little card.
 fn render_flavor_card(frame: &mut Frame, area: Rect, flavor: &str) {
-    let para = Paragraph::new(vec![
-        Line::from(Span::styled(
-            format!("“{flavor}”"),
-            Style::default().fg(theme::SUBTEXT).add_modifier(Modifier::ITALIC),
-        )),
-    ])
+    let para = Paragraph::new(vec![Line::from(Span::styled(
+        format!("“{flavor}”"),
+        Style::default()
+            .fg(theme::SUBTEXT)
+            .add_modifier(Modifier::ITALIC),
+    ))])
     .wrap(Wrap { trim: true });
     frame.render_widget(para, area);
 }
@@ -423,8 +458,18 @@ fn render_sprite_capped(frame: &mut Frame, area: Rect, sprite: &Sprite, max_cols
     let sub_rows = 2 * rows as u32; // each cell row carries two vertical pixels
 
     // Source box covered by output column `cx` / sub-row `py`, in image pixels.
-    let span_x = |cx: u32| (bx0 + cx * bw / cols_u, bx0 + ((cx + 1) * bw / cols_u).saturating_sub(1));
-    let span_y = |py: u32| (by0 + py * bh / sub_rows, by0 + ((py + 1) * bh / sub_rows).saturating_sub(1));
+    let span_x = |cx: u32| {
+        (
+            bx0 + cx * bw / cols_u,
+            bx0 + ((cx + 1) * bw / cols_u).saturating_sub(1),
+        )
+    };
+    let span_y = |py: u32| {
+        (
+            by0 + py * bh / sub_rows,
+            by0 + ((py + 1) * bh / sub_rows).saturating_sub(1),
+        )
+    };
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows as usize);
     for cy in 0..rows {
@@ -510,7 +555,9 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     // compact text tree so cramped terminals still show the relationships.
     if col_w >= MIN_CARD_W && lane_h >= MIN_CARD_H {
         let mut lane = 0u16;
-        place_node(frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane);
+        place_node(
+            frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane,
+        );
     } else {
         let lines = evolution_lines(tree, cursor.or(current), &s.evo, canvas.width);
         frame.render_widget(Paragraph::new(lines), canvas);
@@ -531,7 +578,11 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
             Span::styled(text, Style::default().fg(theme::LAVENDER)),
         ]),
         None => Line::from(Span::styled(
-            if focused { s.evo_nav_hint } else { s.expand_hint },
+            if focused {
+                s.evo_nav_hint
+            } else {
+                s.expand_hint
+            },
             Style::default().fg(theme::OVERLAY),
         )),
     };
@@ -574,7 +625,10 @@ fn stat_line(label: &str, base: u16, bar_width: usize) -> Line<'static> {
             Style::default().fg(theme::SUBTEXT),
         ),
         Span::styled(format!("{base:>3} "), Style::default().fg(theme::TEXT)),
-        Span::styled("█".repeat(filled), Style::default().fg(theme::stat_color(base))),
+        Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(theme::stat_color(base)),
+        ),
         Span::styled(
             "░".repeat(bar_width - filled),
             Style::default().fg(theme::SURFACE),
@@ -589,7 +643,10 @@ fn render_error(frame: &mut Frame, inner: Rect, s: &Strings, err: &str) {
             Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
-        Line::from(Span::styled(err.to_string(), Style::default().fg(theme::SUBTEXT))),
+        Line::from(Span::styled(
+            err.to_string(),
+            Style::default().fg(theme::SUBTEXT),
+        )),
     ])
     .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(para, inner);
@@ -605,8 +662,11 @@ fn render_centered_text(frame: &mut Frame, inner: Rect, text: &str, color: ratat
         width: inner.width,
         height: 1,
     };
-    let para = Paragraph::new(Line::from(Span::styled(text.to_string(), Style::default().fg(color))))
-        .alignment(Alignment::Center);
+    let para = Paragraph::new(Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(color),
+    )))
+    .alignment(Alignment::Center);
     frame.render_widget(para, row);
 }
 
@@ -700,8 +760,9 @@ fn node_block(
         let count = cur.children.len();
         for (i, child) in cur.children.iter().enumerate() {
             let is_last = i == count - 1;
-            for (j, child_row) in
-                node_block(child, highlight, evo, budget).into_iter().enumerate()
+            for (j, child_row) in node_block(child, highlight, evo, budget)
+                .into_iter()
+                .enumerate()
             {
                 let connector = if j == 0 {
                     if is_last {
@@ -742,7 +803,10 @@ fn truncate(text: &str, max: usize) -> String {
     if max <= 1 {
         return "…".to_string();
     }
-    text.chars().take(max - 1).chain(std::iter::once('…')).collect()
+    text.chars()
+        .take(max - 1)
+        .chain(std::iter::once('…'))
+        .collect()
 }
 
 fn name_span(raw_name: &str, highlight: Option<&str>) -> Span<'static> {
@@ -802,7 +866,17 @@ fn place_node(
         .iter()
         .map(|child| {
             place_node(
-                frame, app, s, child, current, cursor, canvas, col_w, lane_h, depth_idx + 1, lane,
+                frame,
+                app,
+                s,
+                child,
+                current,
+                cursor,
+                canvas,
+                col_w,
+                lane_h,
+                depth_idx + 1,
+                lane,
             )
         })
         .collect();
@@ -845,7 +919,12 @@ fn draw_card(
     let stacked = condition.is_some() && h > MIN_CARD_H;
     let text_rows = if stacked { 2 } else { 1 };
 
-    let sprite_area = Rect { x, y: top, width: w, height: h.saturating_sub(text_rows) };
+    let sprite_area = Rect {
+        x,
+        y: top,
+        width: w,
+        height: h.saturating_sub(text_rows),
+    };
     match app.sprites.get(&node.name) {
         Some(sprite) => render_sprite_capped(frame, sprite_area, sprite, w),
         None => {
@@ -866,7 +945,9 @@ fn draw_card(
             .bg(theme::YELLOW)
             .add_modifier(Modifier::BOLD)
     } else if is_current {
-        Style::default().fg(theme::YELLOW).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme::YELLOW)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::GREEN)
     };
@@ -887,7 +968,15 @@ fn draw_card(
 
     let name_y = top + h.saturating_sub(text_rows);
     let name = Paragraph::new(Line::from(name_spans)).alignment(Alignment::Center);
-    frame.render_widget(name, Rect { x, y: name_y, width: w, height: 1 });
+    frame.render_widget(
+        name,
+        Rect {
+            x,
+            y: name_y,
+            width: w,
+            height: 1,
+        },
+    );
 
     if let (Some(text), true) = (&condition, stacked) {
         let requirement = Paragraph::new(Line::from(Span::styled(
@@ -895,7 +984,15 @@ fn draw_card(
             Style::default().fg(theme::PEACH),
         )))
         .alignment(Alignment::Center);
-        frame.render_widget(requirement, Rect { x, y: name_y + 1, width: w, height: 1 });
+        frame.render_widget(
+            requirement,
+            Rect {
+                x,
+                y: name_y + 1,
+                width: w,
+                height: 1,
+            },
+        );
     }
 }
 
@@ -930,7 +1027,11 @@ fn draw_connectors(frame: &mut Frame, x_from: u16, x_to: u16, parent_cy: u16, ce
         put_cell(frame, trunk_x, y, "│", color);
     }
     // Junction where the parent's stub meets the trunk.
-    let junction = if centers.contains(&parent_cy) { "┼" } else { "┤" };
+    let junction = if centers.contains(&parent_cy) {
+        "┼"
+    } else {
+        "┤"
+    };
     put_cell(frame, trunk_x, parent_cy, junction, color);
 
     // Branch off to each child and tip it with an arrowhead.
@@ -995,7 +1096,9 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     // Headline: who this card is about, and the types the analysis is based on.
     let mut head = vec![Span::styled(
         format!(" {}  ", title_case(&detail.name)),
-        Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::MAUVE)
+            .add_modifier(Modifier::BOLD),
     )];
     head.extend(type_chips(&detail.types));
     lines.push(Line::from(head));
@@ -1031,7 +1134,9 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .border_style(Style::default().fg(theme::MAUVE))
         .title(Span::styled(
             s.matchups_title,
-            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(theme::SURFACE));
     let inner = block.inner(area);
@@ -1064,7 +1169,9 @@ fn type_chips(types: &[String]) -> Vec<Span<'static>> {
 fn section_heading(text: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {text}"),
-        Style::default().fg(theme::PEACH).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::PEACH)
+            .add_modifier(Modifier::BOLD),
     ))
 }
 
@@ -1076,7 +1183,9 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
     let mut rows: Vec<Line> = Vec::new();
     let mut spans: Vec<Span> = vec![Span::styled(
         format!(" {label:<pad$} ", pad = MATCHUP_LABEL_W - 2),
-        Style::default().fg(theme::SUBTEXT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::SUBTEXT)
+            .add_modifier(Modifier::BOLD),
     )];
     let mut used = MATCHUP_LABEL_W;
 
@@ -1165,15 +1274,17 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         .border_style(Style::default().fg(theme::MAUVE))
         .title(Span::styled(
             h.title,
-            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(theme::SURFACE));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let body = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-    let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(body[0]);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[0]);
     frame.render_widget(Paragraph::new(help_lines(&left)), cols[0]);
     frame.render_widget(Paragraph::new(help_lines(&right)), cols[1]);
 
@@ -1210,7 +1321,9 @@ fn help_lines(rows: &[(&str, &str)]) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled(
                     format!("  {keys:<key_w$}"),
-                    Style::default().fg(theme::TEAL).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::TEAL)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled((*action).to_string(), Style::default().fg(theme::SUBTEXT)),
             ])
@@ -1234,7 +1347,9 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     lines.push(Line::from(Span::styled(
         format!(" {}", title_case(&detail.name)),
-        Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::MAUVE)
+            .add_modifier(Modifier::BOLD),
     )));
 
     for ability in &detail.abilities {
@@ -1242,7 +1357,9 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
         let mut head = vec![Span::styled(
             format!(" {}", ability_display_name(app, &ability.name)),
-            Style::default().fg(theme::PEACH).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::PEACH)
+                .add_modifier(Modifier::BOLD),
         )];
         if ability.is_hidden {
             head.push(Span::styled(
@@ -1254,7 +1371,11 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
         // Until the text lands — or if it never does — the name above is still
         // the useful half, so the row degrades to a quiet placeholder.
-        match app.abilities.get(&ability.name).and_then(|info| info.flavor_for(code)) {
+        match app
+            .abilities
+            .get(&ability.name)
+            .and_then(|info| info.flavor_for(code))
+        {
             Some(text) => {
                 for row in wrap_plain(text, text_w) {
                     lines.push(Line::from(Span::styled(
@@ -1279,7 +1400,9 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .border_style(Style::default().fg(theme::MAUVE))
         .title(Span::styled(
             s.abilities_title,
-            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(theme::SURFACE));
     let inner = block.inner(area);
@@ -1337,7 +1460,9 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     lines.push(Line::from(Span::styled(
         format!(" {}/{}", app.team.len(), team::MAX_MEMBERS),
-        Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::MAUVE)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::raw(""));
 
@@ -1441,7 +1566,9 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .border_style(Style::default().fg(theme::MAUVE))
         .title(Span::styled(
             s.team_title,
-            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(theme::SURFACE));
     let inner = block.inner(area);
@@ -1487,7 +1614,9 @@ fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect)
         .border_style(Style::default().fg(theme::MAUVE))
         .title(Span::styled(
             s.language_title,
-            Style::default().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(theme::SURFACE));
     let inner = block.inner(area);

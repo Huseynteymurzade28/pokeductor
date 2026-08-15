@@ -1,0 +1,23 @@
+name: Audit
+
+# Dependency problems appear when an advisory is published, not when we happen
+# to push, so this runs on a schedule as well as on changes to the manifest.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+  pull_request:
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources

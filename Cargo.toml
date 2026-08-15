@@ -2,6 +2,9 @@
 name = "pokeductor"
 version = "0.2.0"
 edition = "2021"
+# Set by our dependency floor rather than by anything we use directly:
+# `image` and `darling` both require 1.88. Enforced by the `msrv` CI job.
+rust-version = "1.88"
 description = "A terminal Pokedex and evolution analyzer with sprite rendering, offline type and party analysis, and an on-disk cache for offline use"
 license = "MIT"
 readme = "README.md"
