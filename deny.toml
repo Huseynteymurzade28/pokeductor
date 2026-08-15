@@ -3,6 +3,14 @@
 [advisories]
 # Fail on any unfixed RUSTSEC advisory in the dependency tree.
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2024-0436: `paste` is unmaintained — its author archived the
+    # repository. It is not a vulnerability, and there is nothing to act on
+    # here: it reaches us only through `ratatui`, no upgrade exists, and it is
+    # a proc-macro crate, so it runs at compile time and contributes no code to
+    # the shipped binary. Drop this entry once ratatui stops depending on it.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 # We ship a binary users install with `cargo install`, so every dependency
