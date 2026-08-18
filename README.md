@@ -35,9 +35,19 @@ Or from a clone:
 cargo run --release
 ```
 
+### Arch Linux
+
+Packaged in the [AUR](https://aur.archlinux.org/packages/pokeductor), built from
+the crates.io release:
+
+```bash
+yay -S pokeductor
+```
+
 ### Requirements
 
-- **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/).
+- **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/). Not
+  needed for the AUR package, which builds it for you.
 - A **truecolor (24-bit) terminal**. Sprites are drawn as RGB half-blocks and
   will look wrong on a 256-colour terminal.
 - A font with **Unicode block and box-drawing glyphs** — any Nerd Font, Fira
