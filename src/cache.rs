@@ -202,6 +202,23 @@ async fn sprite_answer_is_current(path: &Path) -> bool {
     age(path).await.is_some_and(|a| a < MISSING_SPRITE_TTL)
 }
 
+/// The `/pokemon` name a species' artwork is filed under, if we have ever
+/// resolved it. The mapping is a property of the species and never changes, so
+/// it is stored without an expiry — one request per species per install.
+pub async fn load_default_variety(species: &str) -> Option<String> {
+    let path = variety_path(species)?;
+    let name = tokio::fs::read_to_string(&path).await.ok()?;
+    let name = name.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+pub async fn store_default_variety(species: &str, variety: &str) {
+    let Some(path) = variety_path(species) else {
+        return;
+    };
+    write_atomic(&path, variety.as_bytes()).await;
+}
+
 /// A machine translation of a flavor blurb. These cost a rate-limited
 /// third-party request, so they are the most valuable thing here to keep.
 pub async fn load_translation(name: &str, lang: &str) -> Option<String> {
@@ -260,6 +277,14 @@ fn sprite_path(name: &str, variant: SpriteVariant) -> Option<PathBuf> {
 /// name, or a shiny PNG would silently overwrite the normal one.
 fn sprite_file(name: &str, variant: SpriteVariant) -> String {
     format!("{}{}.png", slug(name), variant.file_suffix())
+}
+
+fn variety_path(species: &str) -> Option<PathBuf> {
+    Some(
+        root()?
+            .join("varieties")
+            .join(format!("{}.txt", slug(species))),
+    )
 }
 
 fn translation_path(name: &str, lang: &str) -> Option<PathBuf> {
