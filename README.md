@@ -107,6 +107,19 @@ panel falls back to a labelled list rather than truncating:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-branching.png" alt="Eevee's eight-way evolution chain listed with the requirement for each branch" width="900">
 
+### Shiny artwork
+
+`X` flips every sprite on screen — the info panel and each card in the
+evolution chain — into its shiny palette, so a whole line can be inspected in
+the colours it is hunted for. The toggle is app-wide rather than per-species:
+it stays on as you move through the list, and the info panel carries a
+`✦ Shiny` badge while it does, since an unfamiliar palette otherwise reads as a
+rendering bug.
+
+Only the palette on screen is fetched, so flipping the toggle never pulls down
+two full sets of artwork, and both are cached separately on disk. A species
+PokeAPI ships no shiny sprite for falls back to its normal one.
+
 ### Type matchups
 
 `T` opens the defensive and offensive breakdown for the current species:
@@ -170,6 +183,7 @@ no refetch:
 | | `E` | Focus the evolution panel |
 | | `T` | Type matchup card |
 | | `A` | Ability card |
+| | `X` | Toggle shiny artwork |
 | | `Space` | Add / remove from the party |
 | | `P` | Party card |
 | | `S` | Cycle sort: Pokédex order ↔ A–Z |
@@ -181,6 +195,7 @@ no refetch:
 | | `Esc` · `Tab` | Back to the list |
 | **Evolution panel** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between stages |
 | | `Enter` | Jump to the highlighted stage |
+| | `X` | Toggle shiny artwork |
 | | `Esc` · `Tab` | Back to the list |
 | **Any card** | `Esc` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |

@@ -188,6 +188,8 @@ pub struct Strings {
     pub legendary_label: &'static str,
     pub mythical_label: &'static str,
     pub baby_label: &'static str,
+    /// Badge marking the info card while shiny artwork is on display.
+    pub shiny_label: &'static str,
 }
 
 /// Labels for the help overlay.
@@ -209,6 +211,7 @@ pub struct HelpStrings {
     pub act_evolutions: &'static str,
     pub act_types: &'static str,
     pub act_abilities: &'static str,
+    pub act_shiny: &'static str,
     pub act_party_toggle: &'static str,
     pub act_party_card: &'static str,
     pub act_sort: &'static str,
@@ -422,6 +425,7 @@ impl Strings {
                 act_evolutions: "Evolutions",
                 act_types: "Type matchups",
                 act_abilities: "Abilities",
+                act_shiny: "Shiny artwork",
                 act_party_toggle: "Add / remove from party",
                 act_party_card: "Party",
                 act_sort: "Sort order",
@@ -464,6 +468,7 @@ impl Strings {
             legendary_label: "Legendary",
             mythical_label: "Mythical",
             baby_label: "Baby",
+            shiny_label: "Shiny",
         }
     }
 
@@ -530,6 +535,7 @@ impl Strings {
                 act_evolutions: "Evrimler",
                 act_types: "Tip eşleşmeleri",
                 act_abilities: "Yetenekler",
+                act_shiny: "Parlak görsel",
                 act_party_toggle: "Takıma ekle / çıkar",
                 act_party_card: "Takım",
                 act_sort: "Sıralama",
@@ -572,6 +578,7 @@ impl Strings {
             legendary_label: "Efsanevi",
             mythical_label: "Mitik",
             baby_label: "Yavru",
+            shiny_label: "Parlak",
         }
     }
 
@@ -638,6 +645,7 @@ impl Strings {
                 act_evolutions: "Entwicklungen",
                 act_types: "Typ-Matchups",
                 act_abilities: "Fähigkeiten",
+                act_shiny: "Schillernde Grafik",
                 act_party_toggle: "Team hinzu / entfernen",
                 act_party_card: "Team",
                 act_sort: "Sortierung",
@@ -680,6 +688,7 @@ impl Strings {
             legendary_label: "Legendär",
             mythical_label: "Mysteriös",
             baby_label: "Baby",
+            shiny_label: "Schillernd",
         }
     }
 
@@ -746,6 +755,7 @@ impl Strings {
                 act_evolutions: "Évolutions",
                 act_types: "Affinités de type",
                 act_abilities: "Talents",
+                act_shiny: "Illustration chromatique",
                 act_party_toggle: "Ajouter / retirer de l'équipe",
                 act_party_card: "Équipe",
                 act_sort: "Tri",
@@ -788,6 +798,7 @@ impl Strings {
             legendary_label: "Légendaire",
             mythical_label: "Fabuleux",
             baby_label: "Bébé",
+            shiny_label: "Chromatique",
         }
     }
 
@@ -854,6 +865,7 @@ impl Strings {
                 act_evolutions: "Evoluciones",
                 act_types: "Efectividad de tipos",
                 act_abilities: "Habilidades",
+                act_shiny: "Ilustración variocolor",
                 act_party_toggle: "Añadir / quitar del equipo",
                 act_party_card: "Equipo",
                 act_sort: "Orden",
@@ -896,6 +908,7 @@ impl Strings {
             legendary_label: "Legendario",
             mythical_label: "Singular",
             baby_label: "Bebé",
+            shiny_label: "Variocolor",
         }
     }
 
@@ -962,6 +975,7 @@ impl Strings {
                 act_evolutions: "Evoluzioni",
                 act_types: "Efficacia dei tipi",
                 act_abilities: "Abilità",
+                act_shiny: "Illustrazione cromatica",
                 act_party_toggle: "Aggiungi / togli dalla squadra",
                 act_party_card: "Squadra",
                 act_sort: "Ordinamento",
@@ -1004,6 +1018,7 @@ impl Strings {
             legendary_label: "Leggendario",
             mythical_label: "Misterioso",
             baby_label: "Cucciolo",
+            shiny_label: "Cromatico",
         }
     }
 }

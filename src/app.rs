@@ -17,7 +17,9 @@ use tokio::sync::mpsc;
 use crate::api;
 use crate::cache;
 use crate::i18n::Language;
-use crate::models::{AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
+use crate::models::{
+    AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
+};
 use crate::query::Query;
 use crate::team;
 
@@ -35,10 +37,14 @@ pub enum Message {
         evolution: EvolutionTree,
         /// Decoded artwork, if the species had a sprite we could fetch.
         sprite: Option<Sprite>,
+        /// Which palette `sprite` was fetched in. Carried along because the
+        /// shiny toggle can flip while the request is in flight.
+        variant: SpriteVariant,
     },
     /// A standalone sprite (for an evolution-chain member) finished loading.
     SpriteLoaded {
         name: String,
+        variant: SpriteVariant,
         sprite: Option<Sprite>,
     },
     /// An ability's localized text finished loading.
@@ -113,11 +119,16 @@ pub struct App {
     /// In-memory cache so each Pokemon is fetched at most once per session.
     pub details: HashMap<String, PokemonDetail>,
     pub evolutions: HashMap<String, EvolutionTree>,
-    /// Decoded sprites, keyed by Pokemon name. Absent if a species has no art.
-    pub sprites: HashMap<String, Sprite>,
-    /// Names whose sprite is being fetched on demand for the evolution panel,
-    /// so we never queue the same request twice.
-    pub sprite_loading: HashSet<String>,
+    /// Decoded sprites, keyed by palette and then by Pokemon name. Absent if a
+    /// species has no art, or if that palette has not been asked for yet.
+    pub sprites: HashMap<SpriteVariant, HashMap<String, Sprite>>,
+    /// Names whose sprite is being fetched on demand, per palette, so we never
+    /// queue the same request twice.
+    pub sprite_loading: HashMap<SpriteVariant, HashSet<String>>,
+    /// Which palette every sprite on screen is shown in. App-wide rather than
+    /// per-species: moving through the list keeps showing shinies until the
+    /// toggle is switched off again.
+    pub sprite_variant: SpriteVariant,
     /// Cursor into the evolution chain (depth-first order) while the evolution
     /// panel is focused.
     pub evo_cursor: usize,
@@ -180,7 +191,8 @@ impl App {
             details: HashMap::new(),
             evolutions: HashMap::new(),
             sprites: HashMap::new(),
-            sprite_loading: HashSet::new(),
+            sprite_loading: HashMap::new(),
+            sprite_variant: SpriteVariant::Normal,
             evo_cursor: 0,
             language_picker: false,
             lang_cursor: 0,
@@ -320,15 +332,16 @@ impl App {
         // their way (they may not have been requested yet).
         if self.details.contains_key(&name) {
             self.loading_detail = None;
-            self.ensure_chain_sprites();
+            self.ensure_visible_sprites();
             return;
         }
 
         self.loading_detail = Some(name.clone());
         let tx = self.tx.clone();
         let client = self.client.clone();
+        let variant = self.sprite_variant;
         tokio::spawn(async move {
-            let _ = tx.send(resolve_bundle(&client, &name).await).await;
+            let _ = tx.send(resolve_bundle(&client, &name, variant).await).await;
         });
     }
 
@@ -400,24 +413,83 @@ impl App {
         names
     }
 
-    /// Kicks off sprite fetches for every member of the current chain that isn't
-    /// already cached or in flight, so the evolution panel can show its artwork.
-    fn ensure_chain_sprites(&mut self) {
-        for name in self.chain_names() {
-            if self.sprites.contains_key(&name) || self.sprite_loading.contains(&name) {
+    /// Kicks off sprite fetches for everything on screen — the selected species
+    /// and every member of its chain — that isn't already cached or in flight.
+    ///
+    /// Only the palette currently on display is ever requested, so flipping the
+    /// shiny toggle costs the artwork in front of you rather than pre-fetching
+    /// two full sets. The selection is listed separately from the chain because
+    /// an alternate form (`raichu-alola`) does not appear in it under its own
+    /// name — the chain carries the base species.
+    fn ensure_visible_sprites(&mut self) {
+        let variant = self.sprite_variant;
+        let names: Vec<String> = self
+            .selected_name
+            .iter()
+            .cloned()
+            .chain(self.chain_names())
+            .collect();
+
+        for name in names {
+            if self.sprite_for(&name).is_some() || self.sprite_is_loading(&name) {
                 continue;
             }
-            self.sprite_loading.insert(name.clone());
+            // A species whose record is already loaded carries both artwork
+            // URLs, which saves the resolver a `/pokemon` request. `Some(None)`
+            // means we know it has no art at all.
+            let known_url = self
+                .details
+                .get(&name)
+                .map(|detail| detail.sprite_url_for(variant).map(str::to_string));
+
+            self.sprite_loading
+                .entry(variant)
+                .or_default()
+                .insert(name.clone());
             let tx = self.tx.clone();
             let client = self.client.clone();
             tokio::spawn(async move {
-                // A failed chain sprite is non-fatal: `resolve_named_sprite`
-                // reports no art, so the panel shows a placeholder instead of
-                // an error banner.
-                let sprite = resolve_named_sprite(&client, &name).await;
-                let _ = tx.send(Message::SpriteLoaded { name, sprite }).await;
+                // A failed sprite is non-fatal: the resolvers report no art, so
+                // the panel shows a placeholder instead of an error banner.
+                let sprite = match known_url {
+                    Some(url) => resolve_sprite(&client, &name, url.as_deref(), variant).await,
+                    None => resolve_named_sprite(&client, &name, variant).await,
+                };
+                let _ = tx
+                    .send(Message::SpriteLoaded {
+                        name,
+                        variant,
+                        sprite,
+                    })
+                    .await;
             });
         }
+    }
+
+    /// Flips between the normal and shiny palettes, then pulls in whatever
+    /// artwork the new one is missing.
+    fn toggle_shiny(&mut self) {
+        self.sprite_variant = self.sprite_variant.toggled();
+        self.ensure_visible_sprites();
+    }
+
+    /// Decoded artwork for `name` in the palette currently on display.
+    pub fn sprite_for(&self, name: &str) -> Option<&Sprite> {
+        self.sprites.get(&self.sprite_variant)?.get(name)
+    }
+
+    /// Whether `name`'s artwork in the current palette is still in flight.
+    pub fn sprite_is_loading(&self, name: &str) -> bool {
+        self.sprite_loading
+            .get(&self.sprite_variant)
+            .is_some_and(|pending| pending.contains(name))
+    }
+
+    fn remember_sprite(&mut self, name: String, variant: SpriteVariant, sprite: Sprite) {
+        self.sprites
+            .entry(variant)
+            .or_default()
+            .insert(name, sprite);
     }
 
     /// Loads the chain member currently under the evolution cursor — the quick
@@ -457,6 +529,7 @@ impl App {
                 detail,
                 evolution,
                 sprite,
+                variant,
             } => {
                 let name = detail.name.clone();
                 if self.loading_detail.as_deref() == Some(name.as_str()) {
@@ -464,21 +537,29 @@ impl App {
                 }
                 self.evolutions.insert(name.clone(), evolution);
                 if let Some(sprite) = sprite {
-                    self.sprites.insert(name.clone(), sprite);
+                    self.remember_sprite(name.clone(), variant, sprite);
                 }
                 let is_selected = self.selected_name.as_deref() == Some(name.as_str());
                 self.team_loading.remove(&name);
                 self.details.insert(name, detail);
                 // Now that the chain is known, fetch its members' sprites for
-                // the evolution panel.
+                // the evolution panel. This also covers a toggle that happened
+                // while the bundle was in flight: the palette it arrived in may
+                // no longer be the one on screen.
                 if is_selected {
-                    self.ensure_chain_sprites();
+                    self.ensure_visible_sprites();
                 }
             }
-            Message::SpriteLoaded { name, sprite } => {
-                self.sprite_loading.remove(&name);
+            Message::SpriteLoaded {
+                name,
+                variant,
+                sprite,
+            } => {
+                if let Some(pending) = self.sprite_loading.get_mut(&variant) {
+                    pending.remove(&name);
+                }
                 if let Some(sprite) = sprite {
-                    self.sprites.insert(name, sprite);
+                    self.remember_sprite(name, variant, sprite);
                 }
             }
             Message::AbilityLoaded(info) => {
@@ -593,8 +674,9 @@ impl App {
         self.team_loading.insert(name.clone());
         let tx = self.tx.clone();
         let client = self.client.clone();
+        let variant = self.sprite_variant;
         tokio::spawn(async move {
-            let _ = tx.send(resolve_bundle(&client, &name).await).await;
+            let _ = tx.send(resolve_bundle(&client, &name, variant).await).await;
         });
     }
 
@@ -703,6 +785,7 @@ impl App {
             KeyCode::Char(' ') => self.toggle_team_membership(),
             KeyCode::Char('p') | KeyCode::Char('P') => self.team_card = true,
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
+            KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('?') => self.help_card = true,
             _ => {}
         }
@@ -740,6 +823,7 @@ impl App {
             }
             KeyCode::Enter => self.jump_to_evolution_member(),
             KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
+            KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('?') => self.help_card = true,
             _ => {}
         }
@@ -874,10 +958,10 @@ impl App {
         self.evolutions.get(name)
     }
 
-    /// Decoded sprite for the selected Pokemon, if one was loaded.
+    /// Decoded sprite for the selected Pokemon in the current palette, if one
+    /// was loaded.
     pub fn selected_sprite(&self) -> Option<&Sprite> {
-        let name = self.selected_name.as_ref()?;
-        self.sprites.get(name)
+        self.sprite_for(self.selected_name.as_deref()?)
     }
 
     /// True while the detail panel is awaiting its current selection.
@@ -896,23 +980,26 @@ impl App {
 
 /// Resolves a species from the cache, falling back to the network and storing
 /// whatever it had to fetch.
-async fn resolve_bundle(client: &reqwest::Client, name: &str) -> Message {
+async fn resolve_bundle(client: &reqwest::Client, name: &str, variant: SpriteVariant) -> Message {
     if let Some(bundle) = cache::load_bundle(name).await {
-        let sprite = resolve_sprite(client, name, bundle.detail.sprite_url.as_deref()).await;
+        let sprite =
+            resolve_sprite(client, name, bundle.detail.sprite_url_for(variant), variant).await;
         return Message::PokemonLoaded {
             detail: bundle.detail,
             evolution: bundle.evolution,
             sprite,
+            variant,
         };
     }
-    match api::fetch_pokemon_bundle(client, name).await {
+    match api::fetch_pokemon_bundle(client, name, variant).await {
         Ok((detail, evolution, sprite)) => {
             cache::store_bundle(name, &detail, &evolution).await;
-            record_sprite(name, sprite.as_ref()).await;
+            record_sprite(name, sprite.as_ref(), variant).await;
             Message::PokemonLoaded {
                 detail,
                 evolution,
                 sprite,
+                variant,
             }
         }
         Err(err) => Message::Error(err.to_string()),
@@ -920,31 +1007,48 @@ async fn resolve_bundle(client: &reqwest::Client, name: &str) -> Message {
 }
 
 /// Cache-first sprite lookup for a species whose artwork URL we already know
-/// (because its details came out of the cache alongside it).
-async fn resolve_sprite(client: &reqwest::Client, name: &str, url: Option<&str>) -> Option<Sprite> {
-    if let Some(sprite) = cache::load_sprite(name).await {
+/// (because its details came out of the cache alongside it). `url` is the one
+/// for `variant`, so a species with no shiny art resolves its normal sprite —
+/// stored under the shiny name, since that is the question we asked.
+async fn resolve_sprite(
+    client: &reqwest::Client,
+    name: &str,
+    url: Option<&str>,
+    variant: SpriteVariant,
+) -> Option<Sprite> {
+    if let Some(sprite) = cache::load_sprite(name, variant).await {
         return Some(sprite);
     }
-    if cache::has_sprite_answer(name).await {
+    if cache::has_sprite_answer(name, variant).await {
         return None; // asked before: this species genuinely has no artwork
     }
-    let sprite = api::fetch_sprite(client, url?).await.ok();
-    record_sprite(name, sprite.as_ref()).await;
+    let Some(url) = url else {
+        // The record itself says there is no artwork in either palette. Write
+        // that down so the question is not re-asked on every toggle.
+        record_sprite(name, None, variant).await;
+        return None;
+    };
+    let sprite = api::fetch_sprite(client, url).await.ok();
+    record_sprite(name, sprite.as_ref(), variant).await;
     sprite
 }
 
 /// Cache-first sprite lookup for a chain member we know nothing else about.
 /// Only the network path has to resolve the artwork URL first.
-async fn resolve_named_sprite(client: &reqwest::Client, name: &str) -> Option<Sprite> {
-    if let Some(sprite) = cache::load_sprite(name).await {
+async fn resolve_named_sprite(
+    client: &reqwest::Client,
+    name: &str,
+    variant: SpriteVariant,
+) -> Option<Sprite> {
+    if let Some(sprite) = cache::load_sprite(name, variant).await {
         return Some(sprite);
     }
-    if cache::has_sprite_answer(name).await {
+    if cache::has_sprite_answer(name, variant).await {
         return None;
     }
-    match api::fetch_named_sprite(client, name).await {
+    match api::fetch_named_sprite(client, name, variant).await {
         Ok(sprite) => {
-            record_sprite(name, sprite.as_ref()).await;
+            record_sprite(name, sprite.as_ref(), variant).await;
             sprite
         }
         // A transient failure must not be written down as "no artwork", or the
@@ -982,10 +1086,11 @@ async fn resolve_type_members(client: &reqwest::Client, type_name: &str) -> Vec<
 }
 
 /// Stores a freshly fetched sprite, or the fact that there wasn't one, so the
-/// next run does not repeat the request either way.
-async fn record_sprite(name: &str, sprite: Option<&Sprite>) {
+/// next run does not repeat the request either way. Recorded per palette: a
+/// species can be cached shiny and unknown normal, or the other way round.
+async fn record_sprite(name: &str, sprite: Option<&Sprite>, variant: SpriteVariant) {
     match sprite {
-        Some(sprite) => cache::store_sprite(name, sprite).await,
-        None => cache::store_missing_sprite(name).await,
+        Some(sprite) => cache::store_sprite(name, sprite, variant).await,
+        None => cache::store_missing_sprite(name, variant).await,
     }
 }

@@ -202,6 +202,7 @@ mod tests {
             height: 0,
             weight: 0,
             sprite_url: None,
+            shiny_sprite_url: None,
             genera: HashMap::new(),
             flavors: HashMap::new(),
         }

@@ -225,7 +225,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    lines.push(Line::from(vec![
+    let mut title_spans = vec![
         Span::styled(
             title_case(&detail.name),
             Style::default()
@@ -236,7 +236,18 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
             format!("   #{:04}", detail.dex_number),
             Style::default().fg(theme::OVERLAY),
         ),
-    ]));
+    ];
+    // Say so when the artwork is shiny: an unfamiliar palette otherwise reads
+    // as a rendering bug rather than a deliberate choice.
+    if app.sprite_variant.is_shiny() {
+        title_spans.push(Span::styled(
+            format!("  ✦ {}", s.shiny_label),
+            Style::default()
+                .fg(theme::YELLOW)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    lines.push(Line::from(title_spans));
 
     // Pokedex genus, e.g. "Seed Pokémon" — the headline of the info card, in the
     // active language where PokeAPI has it.
@@ -510,7 +521,14 @@ fn pixel_color(rgba: [u8; 4]) -> Color {
 
 fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     let focused = app.focus == Focus::Evolution;
-    let block = panel_block(s.evolution_title, focused);
+    let block = if app.sprite_variant.is_shiny() {
+        panel_block_owned(
+            format!("{}✦ {} ", s.evolution_title, s.shiny_label),
+            focused,
+        )
+    } else {
+        panel_block(s.evolution_title, focused)
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -925,10 +943,10 @@ fn draw_card(
         width: w,
         height: h.saturating_sub(text_rows),
     };
-    match app.sprites.get(&node.name) {
+    match app.sprite_for(&node.name) {
         Some(sprite) => render_sprite_capped(frame, sprite_area, sprite, w),
         None => {
-            let placeholder = if app.sprite_loading.contains(&node.name) {
+            let placeholder = if app.sprite_is_loading(&node.name) {
                 s.sprite_loading
             } else {
                 "…"
@@ -1235,6 +1253,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("E", h.act_evolutions),
         ("T", h.act_types),
         ("A", h.act_abilities),
+        ("X", h.act_shiny),
         ("Space", h.act_party_toggle),
         ("P", h.act_party_card),
         ("S", h.act_sort),
@@ -1252,6 +1271,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("", h.ctx_evolution),
         ("← → ↑ ↓ · h j k l", h.act_chain_move),
         ("Enter", h.act_chain_jump),
+        ("X", h.act_shiny),
         ("Esc · Tab", h.act_back),
         ("", ""),
         ("", h.ctx_cards),

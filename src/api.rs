@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 
 use crate::models::{
     Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail,
-    PokemonEntry, Sprite, Stat, StatKind,
+    PokemonEntry, Sprite, SpriteVariant, Stat, StatKind,
 };
 use crate::retry::{self, FailureKind};
 
@@ -190,6 +190,7 @@ fn id_from_url(url: &str) -> u32 {
 pub async fn fetch_pokemon_bundle(
     client: &reqwest::Client,
     name: &str,
+    variant: SpriteVariant,
 ) -> Result<(PokemonDetail, EvolutionTree, Option<Sprite>), ApiError> {
     let mut detail = fetch_detail(client, name).await?;
 
@@ -207,8 +208,10 @@ pub async fn fetch_pokemon_bundle(
     let evolution = fetch_chain(client, &species.chain_url).await?;
 
     // The sprite is a nice-to-have: a missing or undecodable image must not
-    // sink the whole bundle, so failures here degrade to "no sprite".
-    let sprite = match &detail.sprite_url {
+    // sink the whole bundle, so failures here degrade to "no sprite". Only the
+    // palette currently on screen is fetched; the other one waits until the
+    // shiny toggle actually asks for it.
+    let sprite = match detail.sprite_url_for(variant) {
         Some(url) => fetch_sprite(client, url).await.ok(),
         None => None,
     };
@@ -276,15 +279,17 @@ pub async fn fetch_ability(client: &reqwest::Client, name: &str) -> Result<Abili
     })
 }
 
-/// Fetches and decodes just the sprite for a named species. Used to lazily
-/// populate the evolution overlay, where every member of the chain needs art.
+/// Fetches and decodes just the sprite for a named species, in the requested
+/// palette. Used to lazily populate the evolution overlay, where every member
+/// of the chain needs art.
 pub async fn fetch_named_sprite(
     client: &reqwest::Client,
     name: &str,
+    variant: SpriteVariant,
 ) -> Result<Option<Sprite>, ApiError> {
     let detail = fetch_detail(client, name).await?;
-    match detail.sprite_url {
-        Some(url) => Ok(Some(fetch_sprite(client, &url).await?)),
+    match detail.sprite_url_for(variant) {
+        Some(url) => Ok(Some(fetch_sprite(client, url).await?)),
         None => Ok(None),
     }
 }
@@ -355,6 +360,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         height: raw.height,
         weight: raw.weight,
         sprite_url: raw.sprites.front_default,
+        shiny_sprite_url: raw.sprites.front_shiny,
         genera: HashMap::new(),
         flavors: HashMap::new(),
     })
@@ -541,6 +547,8 @@ struct RawPokemon {
 struct RawSprites {
     #[serde(default)]
     front_default: Option<String>,
+    #[serde(default)]
+    front_shiny: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -662,12 +670,16 @@ mod tests {
         let list = fetch_pokemon_list(&client).await.expect("list fetch");
         assert!(list.len() > 1000, "got {} entries", list.len());
 
-        let (detail, tree, sprite) = fetch_pokemon_bundle(&client, "eevee")
+        let (detail, tree, sprite) = fetch_pokemon_bundle(&client, "eevee", SpriteVariant::Normal)
             .await
             .expect("bundle fetch");
         assert_eq!(detail.name, "eevee");
         assert!(detail.types.contains(&"normal".to_string()));
         assert!(sprite.is_some(), "eevee should have artwork");
+        assert!(
+            detail.shiny_sprite_url.is_some(),
+            "eevee should have shiny artwork"
+        );
         assert!(
             tree.leaf_count() >= 8,
             "eevee branches {} ways",
@@ -677,7 +689,8 @@ mod tests {
         // A name that does not exist must fail fast rather than burn the full
         // retry budget on an answer that will not change.
         let started = std::time::Instant::now();
-        let missing = fetch_pokemon_bundle(&client, "missingno-not-a-species").await;
+        let missing =
+            fetch_pokemon_bundle(&client, "missingno-not-a-species", SpriteVariant::Normal).await;
         assert!(missing.is_err(), "a bogus species should not resolve");
         assert!(
             started.elapsed() < REQUEST_TIMEOUT,

@@ -141,6 +141,42 @@ impl AbilityInfo {
     }
 }
 
+/// Which palette of a species' front artwork to show.
+///
+/// This is app-wide state rather than a property of a species: the shiny toggle
+/// stays on while the user moves through the list, so a whole evolution chain
+/// can be inspected in its shiny colours.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum SpriteVariant {
+    #[default]
+    Normal,
+    Shiny,
+}
+
+impl SpriteVariant {
+    /// The other palette, for the toggle key.
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Normal => Self::Shiny,
+            Self::Shiny => Self::Normal,
+        }
+    }
+
+    pub fn is_shiny(self) -> bool {
+        matches!(self, Self::Shiny)
+    }
+
+    /// Filename infix that keeps a shiny PNG from overwriting the normal one in
+    /// the on-disk cache. Empty for [`Normal`](Self::Normal), so sprites cached
+    /// before shinies existed stay valid.
+    pub fn file_suffix(self) -> &'static str {
+        match self {
+            Self::Normal => "",
+            Self::Shiny => ".shiny",
+        }
+    }
+}
+
 /// Fully resolved details for one Pokemon, ready to render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PokemonDetail {
@@ -167,6 +203,9 @@ pub struct PokemonDetail {
     pub weight: u32,
     /// URL of the front-facing PNG artwork, if the species has one.
     pub sprite_url: Option<String>,
+    /// URL of the same artwork in the shiny palette. Absent for the handful of
+    /// species PokeAPI ships no shiny sprite for.
+    pub shiny_sprite_url: Option<String>,
     /// Pokedex genus (e.g. `"Seed Pokémon"`) keyed by PokeAPI language code.
     pub genera: HashMap<String, String>,
     /// Pokedex flavor-text blurbs, cleaned of control characters, keyed by
@@ -178,6 +217,18 @@ impl PokemonDetail {
     /// Sum of all base stats — a common "power level" heuristic.
     pub fn stat_total(&self) -> u32 {
         self.stats.iter().map(|s| s.base as u32).sum()
+    }
+
+    /// Artwork URL in the requested palette, falling back to the normal one for
+    /// a species with no shiny art — a familiar sprite beats an empty card.
+    pub fn sprite_url_for(&self, variant: SpriteVariant) -> Option<&str> {
+        match variant {
+            SpriteVariant::Normal => self.sprite_url.as_deref(),
+            SpriteVariant::Shiny => self
+                .shiny_sprite_url
+                .as_deref()
+                .or(self.sprite_url.as_deref()),
+        }
     }
 
     /// Genus in the requested language, falling back to English when that
@@ -425,6 +476,47 @@ mod tests {
         ] {
             assert_eq!(entry(id).generation(), Some(gen), "dex #{id}");
         }
+    }
+
+    fn detail_with_sprites(normal: Option<&str>, shiny: Option<&str>) -> PokemonDetail {
+        PokemonDetail {
+            name: "pikachu".into(),
+            species: "pikachu".into(),
+            dex_number: 25,
+            is_legendary: false,
+            is_mythical: false,
+            is_baby: false,
+            types: Vec::new(),
+            abilities: Vec::new(),
+            stats: Vec::new(),
+            height: 0,
+            weight: 0,
+            sprite_url: normal.map(str::to_string),
+            shiny_sprite_url: shiny.map(str::to_string),
+            genera: HashMap::new(),
+            flavors: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn shiny_artwork_falls_back_to_the_normal_palette() {
+        let both = detail_with_sprites(Some("front.png"), Some("shiny.png"));
+        assert_eq!(both.sprite_url_for(SpriteVariant::Shiny), Some("shiny.png"));
+        assert_eq!(
+            both.sprite_url_for(SpriteVariant::Normal),
+            Some("front.png")
+        );
+
+        // No shiny art: show the normal sprite rather than an empty card.
+        let normal_only = detail_with_sprites(Some("front.png"), None);
+        assert_eq!(
+            normal_only.sprite_url_for(SpriteVariant::Shiny),
+            Some("front.png")
+        );
+
+        // No art at all stays "no art" in either palette.
+        let neither = detail_with_sprites(None, None);
+        assert_eq!(neither.sprite_url_for(SpriteVariant::Shiny), None);
     }
 
     #[test]
