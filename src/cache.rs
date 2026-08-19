@@ -17,12 +17,14 @@ use std::time::{Duration, SystemTime};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::models::{AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite};
+use crate::models::{
+    AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
+};
 
 /// Bumped whenever the cached representation changes shape. Files written by
 /// an older build are treated as misses and overwritten on the next fetch,
 /// which saves us from ever deserializing stale data into the wrong struct.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// How long the master species list stays fresh. Individual records never
 /// expire — PokeAPI does not rewrite history, it only appends new species, and
@@ -122,13 +124,13 @@ pub async fn store_type_members(type_name: &str, members: &[String]) {
     write_json(&path, &members.to_vec()).await;
 }
 
-/// A decoded sprite, if one has ever been cached for `name`.
+/// A decoded sprite, if one has ever been cached for `name` in `variant`.
 ///
 /// Sprites are stored re-encoded as PNG rather than as raw RGBA: a species'
 /// artwork is a few kilobytes compressed against ~36 KB flattened, and the
 /// decoder is already a dependency.
-pub async fn load_sprite(name: &str) -> Option<Sprite> {
-    let path = sprite_path(name)?;
+pub async fn load_sprite(name: &str, variant: SpriteVariant) -> Option<Sprite> {
+    let path = sprite_path(name, variant)?;
     let bytes = tokio::fs::read(&path).await.ok()?;
     let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (width, height) = image.dimensions();
@@ -139,8 +141,8 @@ pub async fn load_sprite(name: &str) -> Option<Sprite> {
     })
 }
 
-pub async fn store_sprite(name: &str, sprite: &Sprite) {
-    let Some(path) = sprite_path(name) else {
+pub async fn store_sprite(name: &str, sprite: &Sprite, variant: SpriteVariant) {
+    let Some(path) = sprite_path(name, variant) else {
         return;
     };
     let Some(bytes) = encode_png(sprite) else {
@@ -149,20 +151,22 @@ pub async fn store_sprite(name: &str, sprite: &Sprite) {
     write_atomic(&path, &bytes).await;
 }
 
-/// Records that `name` has no artwork at all, so we do not re-ask the network
-/// on every run. Stored as an empty file, which [`load_sprite`] fails to decode
-/// and therefore reports as "no sprite" — the same answer, without the request.
-pub async fn store_missing_sprite(name: &str) {
-    let Some(path) = sprite_path(name) else {
+/// Records that `name` has no artwork in `variant`, so we do not re-ask the
+/// network on every run. Stored as an empty file, which [`load_sprite`] fails to
+/// decode and therefore reports as "no sprite" — the same answer, without the
+/// request.
+pub async fn store_missing_sprite(name: &str, variant: SpriteVariant) {
+    let Some(path) = sprite_path(name, variant) else {
         return;
     };
     write_atomic(&path, &[]).await;
 }
 
-/// Whether we have already resolved `name`'s artwork one way or the other.
-/// Distinguishes "never looked" from "looked, and there is none".
-pub async fn has_sprite_answer(name: &str) -> bool {
-    match sprite_path(name) {
+/// Whether we have already resolved `name`'s artwork in `variant` one way or
+/// the other. Distinguishes "never looked" from "looked, and there is none",
+/// per palette: a species can be cached in one and unknown in the other.
+pub async fn has_sprite_answer(name: &str, variant: SpriteVariant) -> bool {
+    match sprite_path(name, variant) {
         Some(path) => tokio::fs::metadata(&path).await.is_ok(),
         None => false,
     }
@@ -218,8 +222,14 @@ fn type_path(type_name: &str) -> Option<PathBuf> {
     )
 }
 
-fn sprite_path(name: &str) -> Option<PathBuf> {
-    Some(root()?.join("sprites").join(format!("{}.png", slug(name))))
+fn sprite_path(name: &str, variant: SpriteVariant) -> Option<PathBuf> {
+    Some(root()?.join("sprites").join(sprite_file(name, variant)))
+}
+
+/// Filename one species' artwork is stored under. The palette is part of the
+/// name, or a shiny PNG would silently overwrite the normal one.
+fn sprite_file(name: &str, variant: SpriteVariant) -> String {
+    format!("{}{}.png", slug(name), variant.file_suffix())
 }
 
 fn translation_path(name: &str, lang: &str) -> Option<PathBuf> {
@@ -317,6 +327,15 @@ mod tests {
     fn slug_neutralises_path_separators() {
         assert_eq!(slug("../../etc/passwd"), "______etc_passwd");
         assert!(!slug("a/b").contains('/'));
+    }
+
+    #[test]
+    fn shiny_artwork_gets_its_own_filename() {
+        assert_eq!(sprite_file("pikachu", SpriteVariant::Normal), "pikachu.png");
+        assert_eq!(
+            sprite_file("pikachu", SpriteVariant::Shiny),
+            "pikachu.shiny.png"
+        );
     }
 
     #[test]
