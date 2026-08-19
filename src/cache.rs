@@ -31,6 +31,16 @@ const VERSION: u32 = 4;
 /// those show up when the list is refreshed.
 const LIST_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
+/// How long a recorded "this species has no artwork" answer is trusted.
+///
+/// The reasoning that makes every other record permanent — PokeAPI appends, it
+/// does not rewrite — does not hold for artwork: sprites get backfilled for
+/// newly added species, and those are exactly the ones likely to be missing art
+/// the first time anyone looks. Without an expiry that species stays blank on
+/// this install forever, with no way for the user to know why. A successfully
+/// decoded sprite still never expires; only the negative answer does.
+const MISSING_SPRITE_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// A cached copy of the master list, plus whether it is still within
 /// [`LIST_TTL`]. A stale list is still returned: it is a far better starting
 /// point than an empty sidebar, and the caller can refresh in the background
@@ -165,11 +175,48 @@ pub async fn store_missing_sprite(name: &str, variant: SpriteVariant) {
 /// Whether we have already resolved `name`'s artwork in `variant` one way or
 /// the other. Distinguishes "never looked" from "looked, and there is none",
 /// per palette: a species can be cached in one and unknown in the other.
+///
+/// A third state sits between them — "looked a while ago, and there was none",
+/// which reads as a miss so the question gets asked again. See
+/// [`MISSING_SPRITE_TTL`].
 pub async fn has_sprite_answer(name: &str, variant: SpriteVariant) -> bool {
     match sprite_path(name, variant) {
-        Some(path) => tokio::fs::metadata(&path).await.is_ok(),
+        Some(path) => sprite_answer_is_current(&path).await,
         None => false,
     }
+}
+
+/// Whether the answer stored at `path` is still one we are willing to reuse.
+///
+/// Split out from [`has_sprite_answer`] so the expiry can be tested against a
+/// real file without going through the process-wide cache root.
+async fn sprite_answer_is_current(path: &Path) -> bool {
+    let Ok(meta) = tokio::fs::metadata(path).await else {
+        return false; // never looked
+    };
+    // A decoded PNG is final. Only the empty marker written by
+    // `store_missing_sprite` is allowed to go stale.
+    if meta.len() > 0 {
+        return true;
+    }
+    age(path).await.is_some_and(|a| a < MISSING_SPRITE_TTL)
+}
+
+/// The `/pokemon` name a species' artwork is filed under, if we have ever
+/// resolved it. The mapping is a property of the species and never changes, so
+/// it is stored without an expiry — one request per species per install.
+pub async fn load_default_variety(species: &str) -> Option<String> {
+    let path = variety_path(species)?;
+    let name = tokio::fs::read_to_string(&path).await.ok()?;
+    let name = name.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+pub async fn store_default_variety(species: &str, variety: &str) {
+    let Some(path) = variety_path(species) else {
+        return;
+    };
+    write_atomic(&path, variety.as_bytes()).await;
 }
 
 /// A machine translation of a flavor blurb. These cost a rate-limited
@@ -230,6 +277,14 @@ fn sprite_path(name: &str, variant: SpriteVariant) -> Option<PathBuf> {
 /// name, or a shiny PNG would silently overwrite the normal one.
 fn sprite_file(name: &str, variant: SpriteVariant) -> String {
     format!("{}{}.png", slug(name), variant.file_suffix())
+}
+
+fn variety_path(species: &str) -> Option<PathBuf> {
+    Some(
+        root()?
+            .join("varieties")
+            .join(format!("{}.txt", slug(species))),
+    )
 }
 
 fn translation_path(name: &str, lang: &str) -> Option<PathBuf> {
@@ -343,6 +398,67 @@ mod tests {
         let raw = br#"{"version":999,"data":[{"name":"bulbasaur","id":1}]}"#;
         let envelope: Envelope<Vec<PokemonEntry>> = serde_json::from_slice(raw).unwrap();
         assert_ne!(envelope.version, VERSION);
+    }
+
+    /// A directory of our own under the system temp dir. The cache root is
+    /// resolved once per process and shared by every test, so the expiry tests
+    /// work on a path they own instead.
+    fn scratch_dir(label: &str) -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "pokeductor-test-{}-{label}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Rewinds a file's mtime, which is the only input to [`age`].
+    fn backdate(path: &Path, by: Duration) {
+        let file = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open for touch");
+        let when = SystemTime::now() - by;
+        file.set_times(std::fs::FileTimes::new().set_modified(when))
+            .expect("backdate mtime");
+    }
+
+    #[tokio::test]
+    async fn a_species_never_looked_up_reads_as_a_miss() {
+        let dir = scratch_dir("never");
+        assert!(!sprite_answer_is_current(&dir.join("absent.png")).await);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_no_artwork_answer_still_suppresses_the_request() {
+        let dir = scratch_dir("fresh");
+        let path = dir.join("marker.png");
+        std::fs::write(&path, []).expect("write marker");
+        assert!(sprite_answer_is_current(&path).await);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_stale_no_artwork_answer_is_asked_again() {
+        let dir = scratch_dir("stale");
+        let path = dir.join("marker.png");
+        std::fs::write(&path, []).expect("write marker");
+        backdate(&path, MISSING_SPRITE_TTL + Duration::from_secs(60));
+        assert!(!sprite_answer_is_current(&path).await);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_cached_sprite_never_expires() {
+        let dir = scratch_dir("kept");
+        let path = dir.join("sprite.png");
+        std::fs::write(&path, b"not really a png, but not empty").expect("write sprite");
+        backdate(&path, MISSING_SPRITE_TTL * 52);
+        assert!(sprite_answer_is_current(&path).await);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

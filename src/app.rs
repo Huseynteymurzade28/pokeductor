@@ -15,6 +15,7 @@ use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
 use crate::api;
+use crate::api::ApiError;
 use crate::cache;
 use crate::i18n::Language;
 use crate::models::{
@@ -1046,15 +1047,52 @@ async fn resolve_named_sprite(
     if cache::has_sprite_answer(name, variant).await {
         return None;
     }
-    match api::fetch_named_sprite(client, name, variant).await {
+    // Chain members arrive as species names, which are not always valid
+    // `/pokemon` keys — see `resolve_default_variety`. The answer is cached
+    // under the species name either way, since that is what the UI asks for.
+    let variety = resolve_default_variety(client, name).await?;
+
+    match api::fetch_named_sprite(client, &variety, variant).await {
         Ok(sprite) => {
             record_sprite(name, sprite.as_ref(), variant).await;
             sprite
+        }
+        // A 404 is a permanent answer about the name, so it is worth writing
+        // down rather than re-asking on every run.
+        Err(ApiError::NotFound(_)) => {
+            record_sprite(name, None, variant).await;
+            None
         }
         // A transient failure must not be written down as "no artwork", or the
         // species would stay blank for as long as the cache lives.
         Err(_) => None,
     }
+}
+
+/// The `/pokemon` key a species' artwork is filed under, cache first.
+///
+/// Most of the time this is the species name itself, but a species whose
+/// default form has its own name (`giratina` -> `giratina-altered`) has no
+/// `/pokemon` entry under the bare name at all, and its card would otherwise
+/// stay blank forever.
+///
+/// `name` can also arrive already being a variety (`raichu-alola`, straight out
+/// of the master list), which has no species record of its own. That 404 means
+/// "the name is its own key" — cached like any other answer, so the failing
+/// request happens once per install rather than once per view.
+async fn resolve_default_variety(client: &reqwest::Client, name: &str) -> Option<String> {
+    if let Some(variety) = cache::load_default_variety(name).await {
+        return Some(variety);
+    }
+    let variety = match api::fetch_default_variety(client, name).await {
+        Ok(variety) => variety,
+        Err(ApiError::NotFound(_)) => name.to_string(),
+        // Nothing was learned, so nothing is written down; the next run asks
+        // again rather than filing a network hiccup as a fact.
+        Err(_) => return None,
+    };
+    cache::store_default_variety(name, &variety).await;
+    Some(variety)
 }
 
 /// Resolves one ability's localized text, cache first.

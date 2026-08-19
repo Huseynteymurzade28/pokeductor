@@ -45,6 +45,13 @@ pub enum ApiError {
     Network(#[from] reqwest::Error),
     #[error("could not locate the evolution chain for this Pokemon")]
     MissingEvolutionChain,
+    /// The server answered 404. Unlike the transport failures [`Network`]
+    /// covers, this is a permanent answer about a name, so callers can write it
+    /// down instead of re-asking on every run.
+    ///
+    /// [`Network`]: ApiError::Network
+    #[error("no such resource: {0}")]
+    NotFound(String),
     #[error("could not decode sprite image: {0}")]
     Image(#[from] image::ImageError),
 }
@@ -67,6 +74,22 @@ pub fn build_client() -> Result<reqwest::Client, ApiError> {
 fn request_permits() -> &'static Semaphore {
     static PERMITS: OnceLock<Semaphore> = OnceLock::new();
     PERMITS.get_or_init(|| Semaphore::new(MAX_CONCURRENT_REQUESTS))
+}
+
+/// Wraps a failed request in the error the caller sees.
+///
+/// A 404 is separated out because it is the one failure that says something
+/// durable about the *name* rather than about the connection: callers may cache
+/// it, which they must never do for a timeout.
+fn api_error(err: reqwest::Error) -> ApiError {
+    if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+        let what = err
+            .url()
+            .map(|u| u.path().trim_start_matches("/api/v2/").to_string())
+            .unwrap_or_else(|| "resource".to_string());
+        return ApiError::NotFound(what);
+    }
+    ApiError::Network(err)
 }
 
 /// Sorts a `reqwest` failure into the classes the retry policy reasons about.
@@ -121,7 +144,7 @@ where
 
         let last_attempt = attempt + 1 >= retry::MAX_ATTEMPTS;
         if last_attempt || !retry::is_retryable(classify(&err)) {
-            return Err(ApiError::Network(err));
+            return Err(api_error(err));
         }
 
         tokio::time::sleep(retry::backoff_delay(attempt, jitter_fraction())).await;
@@ -279,9 +302,12 @@ pub async fn fetch_ability(client: &reqwest::Client, name: &str) -> Result<Abili
     })
 }
 
-/// Fetches and decodes just the sprite for a named species, in the requested
+/// Fetches and decodes just the sprite for a named Pokemon, in the requested
 /// palette. Used to lazily populate the evolution overlay, where every member
 /// of the chain needs art.
+///
+/// `name` is a `/pokemon` key, i.e. a *variety* name — callers holding a
+/// species name resolve it through [`fetch_default_variety`] first.
 pub async fn fetch_named_sprite(
     client: &reqwest::Client,
     name: &str,
@@ -380,6 +406,34 @@ struct SpeciesInfo {
     is_baby: bool,
     genera: HashMap<String, String>,
     flavors: HashMap<String, String>,
+}
+
+/// Resolves the `/pokemon` key a species' artwork is filed under.
+///
+/// Evolution chains name *species* (`giratina`), but sprites hang off
+/// varieties (`giratina-altered`), and for a species whose default form has its
+/// own name the two differ — `/pokemon/giratina` is a 404. The species record
+/// carries the mapping, so ask it rather than guessing.
+pub async fn fetch_default_variety(
+    client: &reqwest::Client,
+    species: &str,
+) -> Result<String, ApiError> {
+    let url = format!("{BASE_URL}/pokemon-species/{species}");
+    let raw: RawSpecies = get_json(client, &url).await?;
+    Ok(default_variety_name(&raw.varieties, species))
+}
+
+/// Picks the default variety out of a species' form list.
+///
+/// Falling back to the species name covers the ordinary case where the two
+/// names agree, and is the right answer for a payload that marks no default at
+/// all — better a request that may work than none.
+fn default_variety_name(varieties: &[RawVariety], species: &str) -> String {
+    varieties
+        .iter()
+        .find(|v| v.is_default)
+        .map(|v| v.pokemon.name.clone())
+        .unwrap_or_else(|| species.to_string())
 }
 
 /// Fetches a species record, pulling out the evolution-chain URL plus the genus
@@ -578,6 +632,17 @@ struct RawSpecies {
     genera: Vec<RawGenus>,
     #[serde(default)]
     flavor_text_entries: Vec<RawFlavorText>,
+    #[serde(default)]
+    varieties: Vec<RawVariety>,
+}
+
+/// One entry of a species' `varieties` list: the forms it ships as, exactly one
+/// of which is the default.
+#[derive(serde::Deserialize)]
+struct RawVariety {
+    #[serde(default)]
+    is_default: bool,
+    pokemon: NamedResource,
 }
 
 #[derive(serde::Deserialize)]
@@ -686,17 +751,83 @@ mod tests {
             tree.leaf_count()
         );
 
+        // The fact the evolution-card fix rests on: a species whose default
+        // form is named after that form resolves to the form's name, which is
+        // the only one `/pokemon` will answer to.
+        let variety = fetch_default_variety(&client, "giratina")
+            .await
+            .expect("species fetch");
+        assert_eq!(variety, "giratina-altered");
+        assert!(
+            fetch_named_sprite(&client, &variety, SpriteVariant::Normal)
+                .await
+                .expect("sprite fetch")
+                .is_some(),
+            "giratina-altered should have artwork"
+        );
+
         // A name that does not exist must fail fast rather than burn the full
         // retry budget on an answer that will not change.
         let started = std::time::Instant::now();
         let missing =
             fetch_pokemon_bundle(&client, "missingno-not-a-species", SpriteVariant::Normal).await;
-        assert!(missing.is_err(), "a bogus species should not resolve");
+        assert!(
+            matches!(missing, Err(ApiError::NotFound(_))),
+            "a bogus species should read as a 404, not a transport failure"
+        );
         assert!(
             started.elapsed() < REQUEST_TIMEOUT,
             "a 404 took {:?}, so it was retried",
             started.elapsed()
         );
+    }
+
+    /// Parses just the `varieties` list out of a `/pokemon-species` payload,
+    /// which is all `default_variety_name` reads.
+    fn varieties(json: &str) -> Vec<RawVariety> {
+        serde_json::from_str::<RawSpecies>(json)
+            .expect("species payload parses")
+            .varieties
+    }
+
+    #[test]
+    fn a_species_named_after_its_form_resolves_to_the_form() {
+        let raw = varieties(
+            r#"{
+              "id": 487,
+              "evolution_chain": { "url": "" },
+              "varieties": [
+                { "is_default": true,  "pokemon": { "name": "giratina-altered" } },
+                { "is_default": false, "pokemon": { "name": "giratina-origin"  } }
+              ]
+            }"#,
+        );
+        assert_eq!(default_variety_name(&raw, "giratina"), "giratina-altered");
+    }
+
+    #[test]
+    fn an_ordinary_species_resolves_to_its_own_name() {
+        let raw = varieties(
+            r#"{
+              "id": 483,
+              "evolution_chain": { "url": "" },
+              "varieties": [{ "is_default": true, "pokemon": { "name": "dialga" } }]
+            }"#,
+        );
+        assert_eq!(default_variety_name(&raw, "dialga"), "dialga");
+    }
+
+    #[test]
+    fn a_payload_marking_no_default_falls_back_to_the_species_name() {
+        let raw = varieties(
+            r#"{
+              "id": 1,
+              "evolution_chain": { "url": "" },
+              "varieties": [{ "is_default": false, "pokemon": { "name": "odd-form" } }]
+            }"#,
+        );
+        assert_eq!(default_variety_name(&raw, "bulbasaur"), "bulbasaur");
+        assert_eq!(default_variety_name(&[], "bulbasaur"), "bulbasaur");
     }
 
     /// A trimmed `/evolution-chain` payload in the exact shape PokeAPI sends:
