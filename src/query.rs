@@ -143,6 +143,15 @@ fn parse_dex_range(value: &str) -> Option<RangeInclusive<u32>> {
 mod tests {
     use super::*;
 
+    /// The `dex` field a single `dex:` term parses to.
+    ///
+    /// Spelled as a helper because a bare `[1..=151]` reads as a range to
+    /// collect rather than an array holding one, and clippy rejects the
+    /// ambiguity.
+    fn one_range(range: RangeInclusive<u32>) -> Vec<RangeInclusive<u32>> {
+        vec![range]
+    }
+
     /// The two fields a filter reads, and nothing else the list response
     /// carries.
     fn entry(name: &str, id: u32) -> PokemonEntry {
@@ -170,7 +179,7 @@ mod tests {
         let query = Query::parse("t:fire g:2 d:25");
         assert_eq!(query.types, ["fire"]);
         assert_eq!(query.generations, [2]);
-        assert_eq!(query.dex, [25..=25]);
+        assert_eq!(query.dex, one_range(25..=25));
     }
 
     #[test]
@@ -201,8 +210,8 @@ mod tests {
 
     #[test]
     fn a_dex_range_is_read_in_either_direction() {
-        assert_eq!(Query::parse("dex:1-151").dex, [1..=151]);
-        assert_eq!(Query::parse("dex:151-1").dex, [1..=151]);
+        assert_eq!(Query::parse("dex:1-151").dex, one_range(1..=151));
+        assert_eq!(Query::parse("dex:151-1").dex, one_range(1..=151));
     }
 
     #[test]
