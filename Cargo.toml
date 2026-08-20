@@ -1,6 +1,6 @@
 [package]
 name = "pokeductor"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 # Set by our dependency floor rather than by anything we use directly:
 # `image` and `darling` both require 1.88. Enforced by the `msrv` CI job.
