@@ -127,8 +127,8 @@ pub struct Strings {
     /// to find it.
     pub help: &'static str,
     /// Placeholder shown in an empty, unfocused search box. Doubles as the
-    /// only place the `type:` / `gen:` syntax is advertised, so it names them
-    /// literally — those keywords are not translated.
+    /// only place the `dex:` / `type:` / `gen:` syntax is advertised, so it
+    /// names them literally — those keywords are not translated.
     pub search_hint: &'static str,
     /// Sidebar sort-order badges.
     pub sort_dex: &'static str,
@@ -386,7 +386,7 @@ impl Strings {
             stat_sp_defense: "Sp. Def",
             stat_speed: "Speed",
             help: " ↑/↓ Navigate · Enter Select · / Search · ? Help · Q Quit ",
-            search_hint: "name · type:water · gen:1",
+            search_hint: "name · dex:25 · type:water · gen:1",
             sort_dex: "Dex",
             sort_name: "A–Z",
             team_title: " Party ",
@@ -496,7 +496,7 @@ impl Strings {
             stat_sp_defense: "Öz. Sav",
             stat_speed: "Hız",
             help: " ↑/↓ Gezin · Enter Seç · / Ara · ? Yardım · Q Çıkış ",
-            search_hint: "isim · type:water · gen:1",
+            search_hint: "isim · dex:25 · type:water · gen:1",
             sort_dex: "Dex",
             sort_name: "A–Z",
             team_title: " Takım ",
@@ -606,7 +606,7 @@ impl Strings {
             stat_sp_defense: "Sp. Vert",
             stat_speed: "Tempo",
             help: " ↑/↓ Navigieren · Enter Wählen · / Suche · ? Hilfe · Q Beenden ",
-            search_hint: "Name · type:water · gen:1",
+            search_hint: "Name · dex:25 · type:water · gen:1",
             sort_dex: "Dex",
             sort_name: "A–Z",
             team_title: " Team ",
@@ -716,7 +716,7 @@ impl Strings {
             stat_sp_defense: "Déf. Sp",
             stat_speed: "Vitesse",
             help: " ↑/↓ Naviguer · Entrée Choisir · / Recherche · ? Aide · Q Quitter ",
-            search_hint: "nom · type:water · gen:1",
+            search_hint: "nom · dex:25 · type:water · gen:1",
             sort_dex: "Dex",
             sort_name: "A–Z",
             team_title: " Équipe ",
@@ -826,7 +826,7 @@ impl Strings {
             stat_sp_defense: "Def. Esp",
             stat_speed: "Velocid.",
             help: " ↑/↓ Navegar · Enter Elegir · / Buscar · ? Ayuda · Q Salir ",
-            search_hint: "nombre · type:water · gen:1",
+            search_hint: "nombre · dex:25 · type:water · gen:1",
             sort_dex: "Dex",
             sort_name: "A–Z",
             team_title: " Equipo ",
@@ -936,7 +936,7 @@ impl Strings {
             stat_sp_defense: "Dif. Sp",
             stat_speed: "Velocità",
             help: " ↑/↓ Naviga · Invio Scegli · / Cerca · ? Aiuto · Q Esci ",
-            search_hint: "nome · type:water · gen:1",
+            search_hint: "nome · dex:25 · type:water · gen:1",
             sort_dex: "Dex",
             sort_name: "A–Z",
             team_title: " Squadra ",

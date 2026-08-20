@@ -871,10 +871,7 @@ impl App {
             .all_pokemon
             .iter()
             .enumerate()
-            .filter(|(_, p)| {
-                query.matches_name_and_generation(&p.name, p.generation())
-                    && self.has_every_type(&query, &p.name)
-            })
+            .filter(|(_, p)| query.matches_entry(p) && self.has_every_type(&query, &p.name))
             .map(|(idx, _)| idx)
             .collect();
 

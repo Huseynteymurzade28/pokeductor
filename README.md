@@ -66,14 +66,16 @@ the list loads each Pokémon's details, evolution chain and artwork on demand.
 ### Browsing and filtering
 
 The sidebar lists all 1302 entries PokeAPI serves, with National Pokédex
-numbers. Beyond plain name matching, the search box takes `type:` and `gen:`
+numbers. A bare number looks up that Pokédex number — `25` finds Pikachu —
+and beyond plain name matching the search box takes `dex:`, `type:` and `gen:`
 terms:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-search.png" alt="Searching for type:ghost gen:1, narrowing the list to Gastly, Haunter and Gengar" width="900">
 
 `type:` terms combine with **AND**, so `type:water type:flying` finds the
-dual-typed ones. `gen:` terms combine with **OR**, since a species belongs to
-exactly one generation and requiring two at once could only ever match nothing.
+dual-typed ones. `gen:` and `dex:` terms combine with **OR**, since a species
+belongs to exactly one generation and carries exactly one number, so requiring
+two at once could only ever match nothing.
 Anything that is not a recognised term is treated as ordinary text, so a stray
 colon degrades to a name search instead of an error. `S` cycles the sort between
 Pokédex order and alphabetical; the highlighted species stays under the cursor
@@ -205,14 +207,18 @@ no refetch:
 | Query | Matches |
 |---|---|
 | `char` | names containing "char" |
+| `25` | Pokédex number 25 — Pikachu — **or** a name containing "25" |
+| `dex:25` | Pokédex number 25, without the name fallback (`d:` also works) |
+| `dex:1-151` | every number in that range — the Kanto dex |
 | `type:water` | every Water Pokémon (`t:` also works) |
 | `type:water type:flying` | Water **and** Flying — Gyarados, Mantine, … |
 | `gen:1` | introduced in Generation I (`g:` also works) |
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
 
-A `gen:` filter skips alternate forms such as `raichu-alola`: their ids sit
-above 10000 and carry no dex number to derive a generation from.
+`dex:` and `gen:` filters skip alternate forms such as `raichu-alola`: their
+ids sit above 10000 and are not dex numbers, so there is nothing to test a range
+or derive a generation from. A bare number still reaches them by name.
 
 ---
 
@@ -228,7 +234,7 @@ through to disk.
 | `models.rs` | API-agnostic domain types (`PokemonDetail`, `EvolutionTree`, `Sprite`, `Ability`). |
 | `api.rs` | Async PokeAPI client, evolution-chain parser, sprite decode, translation. |
 | `cache.rs` | On-disk cache of every fetched response, for instant and offline starts. |
-| `query.rs` | Search-box syntax (`type:`, `gen:`) parsing. |
+| `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`) parsing. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
 | `typechart.rs` | Offline Generation VI+ type-effectiveness chart and matchup analysis. |
@@ -320,7 +326,7 @@ single keypress.
 Forms such as `raichu-alola` resolve their species and evolution data via the
 base species name carried in the Pokémon payload, so they do not 404. Their ids
 sit above 10000 and carry no dex meaning, so they show a blank dex column and
-are excluded from `gen:` filters rather than being guessed at.
+are excluded from `dex:` and `gen:` filters rather than being guessed at.
 
 ### Evolution requirements
 
