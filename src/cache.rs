@@ -333,7 +333,10 @@ async fn write_json<T: Serialize>(path: &Path, data: &T) {
 /// Writes `bytes` to `path` via a temporary file and a rename, so an
 /// interrupted run can never leave a half-written entry behind for the next
 /// one to read back as valid.
-async fn write_atomic(path: &Path, bytes: &[u8]) {
+///
+/// Shared with [`crate::session`], which writes outside this tree but wants
+/// exactly the same guarantee.
+pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) {
     let Some(dir) = path.parent() else {
         return;
     };

@@ -59,6 +59,16 @@ impl Language {
         }
     }
 
+    /// The inverse of [`flavor_code`](Self::flavor_code), for reading a
+    /// language back out of a stored session. An unknown code — a file written
+    /// by a build that shipped a language this one does not — is `None`, and
+    /// the caller keeps its default rather than failing.
+    pub fn from_code(code: &str) -> Option<Language> {
+        Language::ALL
+            .into_iter()
+            .find(|language| language.flavor_code() == code)
+    }
+
     /// Short tag shown in the status bar, e.g. `EN`.
     pub fn tag(self) -> &'static str {
         match self {
@@ -1026,6 +1036,19 @@ impl Strings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_language_reads_back_out_of_its_code() {
+        for language in Language::ALL {
+            assert_eq!(Language::from_code(language.flavor_code()), Some(language));
+        }
+    }
+
+    #[test]
+    fn an_unknown_language_code_is_not_guessed_at() {
+        assert_eq!(Language::from_code("xx"), None);
+        assert_eq!(Language::from_code(""), None);
+    }
 
     fn umbreon() -> EvolutionCondition {
         EvolutionCondition {

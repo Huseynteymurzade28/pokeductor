@@ -22,6 +22,7 @@ use crate::models::{
     AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
 };
 use crate::query::Query;
+use crate::session::{self, Session};
 use crate::team;
 
 /// Messages sent from background fetch tasks to the UI loop. The payloads are
@@ -94,6 +95,25 @@ impl SortKey {
         match self {
             SortKey::Dex => SortKey::Name,
             SortKey::Name => SortKey::Dex,
+        }
+    }
+
+    /// Stable name used to record the ordering in a session file, so that
+    /// reordering this enum can never change what a stored session means.
+    pub fn code(self) -> &'static str {
+        match self {
+            SortKey::Dex => "dex",
+            SortKey::Name => "name",
+        }
+    }
+
+    /// The inverse of [`code`](Self::code). An unrecognised value is `None`,
+    /// and the caller keeps the default ordering.
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "dex" => Some(SortKey::Dex),
+            "name" => Some(SortKey::Name),
+            _ => None,
         }
     }
 }
@@ -225,6 +245,9 @@ impl App {
         mut terminal: DefaultTerminal,
         mut rx: mpsc::Receiver<Message>,
     ) -> anyhow::Result<()> {
+        // Before the first frame, so the restored language and palette are
+        // already in place by the time anything is drawn or fetched.
+        self.restore(session::load().await);
         self.fetch_list();
 
         let mut events = EventStream::new();
@@ -255,7 +278,47 @@ impl App {
                 }
             }
         }
+
+        session::store(&self.snapshot()).await;
         Ok(())
+    }
+
+    // --- Session persistence ---------------------------------------------
+
+    /// What this run hands to the next one.
+    fn snapshot(&self) -> Session {
+        Session {
+            team: self.team.clone(),
+            language: Some(self.language.flavor_code().to_string()),
+            sort: Some(self.sort.code().to_string()),
+            shiny: self.sprite_variant.is_shiny(),
+        }
+    }
+
+    /// Applies a restored session over the defaults [`App::new`] set.
+    ///
+    /// Anything the file leaves out, or records in terms this build no longer
+    /// recognises, keeps its default rather than rejecting the file: a session
+    /// is a convenience, and a partly understood one still beats starting over.
+    fn restore(&mut self, session: Session) {
+        if let Some(language) = session.language.as_deref().and_then(Language::from_code) {
+            self.language = language;
+        }
+        if let Some(sort) = session.sort.as_deref().and_then(SortKey::from_code) {
+            self.sort = sort;
+        }
+        if session.shiny {
+            self.sprite_variant = SpriteVariant::Shiny;
+        }
+        self.team = session.team;
+
+        // The party card reads typings out of `details`, which is empty on a
+        // cold start, so a restored member contributes nothing to the analysis
+        // until its record is back. These are cache hits on any install that
+        // has seen the member before, which is every install that stored it.
+        for name in self.team.clone() {
+            self.request_team_member(name);
+        }
     }
 
     // --- Async fetch dispatch --------------------------------------------
@@ -668,7 +731,12 @@ impl App {
             return; // party is full; drop someone first
         }
         self.team.push(name.clone());
+        self.request_team_member(name);
+    }
 
+    /// Pulls in a party member's record in the background, unless it is
+    /// already loaded or in flight.
+    fn request_team_member(&mut self, name: String) {
         if self.details.contains_key(&name) || self.team_loading.contains(&name) {
             return;
         }
@@ -1127,5 +1195,23 @@ async fn record_sprite(name: &str, sprite: Option<&Sprite>, variant: SpriteVaria
     match sprite {
         Some(sprite) => cache::store_sprite(name, sprite, variant).await,
         None => cache::store_missing_sprite(name, variant).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_sort_key_reads_back_out_of_its_code() {
+        for sort in [SortKey::Dex, SortKey::Name] {
+            assert_eq!(SortKey::from_code(sort.code()), Some(sort));
+        }
+    }
+
+    #[test]
+    fn an_unknown_sort_code_is_not_guessed_at() {
+        assert_eq!(SortKey::from_code("stat-total"), None);
+        assert_eq!(SortKey::from_code(""), None);
     }
 }

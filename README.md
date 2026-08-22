@@ -159,6 +159,10 @@ when the species had no other ability it could have had — anything else is
 flagged as merely possible. Folding that uncertainty into the counts would make
 the card claim something the data does not support.
 
+The party is picked up where it was left: it is written out on exit and
+restored on the next run, along with the language, the palette and the sort
+order. See [Session state](#session-state).
+
 ### Help
 
 Every binding in one place, grouped by where it applies:
@@ -234,6 +238,7 @@ through to disk.
 | `models.rs` | API-agnostic domain types (`PokemonDetail`, `EvolutionTree`, `Sprite`, `Ability`). |
 | `api.rs` | Async PokeAPI client, evolution-chain parser, sprite decode, translation. |
 | `cache.rs` | On-disk cache of every fetched response, for instant and offline starts. |
+| `session.rs` | Party and preferences carried over from the previous run. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`) parsing. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
@@ -279,6 +284,32 @@ is version-stamped: a build whose cached representation has changed shape treats
 older files as misses instead of mis-parsing them. The whole layer is
 best-effort — a cache that cannot be read or written is a miss, never an error
 the user sees. It is safe to delete at any time; it refills itself.
+
+### Session state
+
+What the cache holds is a second copy of something PokeAPI already knows, so
+deleting it costs nothing but a refetch. The choices made during a run are the
+opposite — nothing can reconstruct the party someone assembled — so they are
+kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
+`~/.local/state/pokeductor`):
+
+```
+session.json              party, language, sort order, shiny toggle
+```
+
+Written once, as the app exits, and read once, before the first frame. A run
+that is killed rather than quit therefore leaves the previous session in place,
+and of two instances quitting in turn the last one wins — both acceptable for a
+convenience that never holds anything the user cannot rebuild in a few
+keystrokes.
+
+The file is version-stamped and pretty-printed, and read back defensively: it
+sits in a directory users are invited to look inside, so a party longer than
+the six-member limit is trimmed rather than rejected, and a setting recorded in
+terms this build does not recognise — a language it no longer ships, say —
+leaves that setting at its default instead of discarding the whole file.
+Preferences are stored as codes (`"tr"`, `"name"`) rather than as enum indices,
+so reordering an enum in Rust can never silently switch somebody's language.
 
 ### Sprite pipeline
 
