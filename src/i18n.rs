@@ -157,11 +157,13 @@ pub struct Strings {
     pub team_offense_gaps: &'static str,
     /// Reassurance shown in place of an empty weakness/gap section.
     pub team_all_clear: &'static str,
-    /// Heading above immunities the members' abilities grant.
-    pub team_ability_immunity: &'static str,
+    /// Heading above the immunities a Pokemon's abilities grant — on the party
+    /// card and on the single-species matchup card alike, since both report
+    /// them and neither should word it differently.
+    pub immune_by_ability: &'static str,
     /// Marker on an immunity the species might not actually have, because the
     /// ability granting it is only one of several it could carry.
-    pub team_maybe: &'static str,
+    pub immunity_maybe: &'static str,
     /// Hint at the foot of the team card.
     pub team_close_hint: &'static str,
     /// Label for the ability row on the info card.
@@ -409,8 +411,8 @@ impl Strings {
             abilities_title: " Abilities ",
             ability_hidden: "hidden",
             ability_close_hint: "Esc / A to close",
-            team_ability_immunity: "Immune by ability",
-            team_maybe: "possible",
+            immune_by_ability: "Immune by ability",
+            immunity_maybe: "possible",
             team_close_hint: "Esc / P to close",
             loading_types: "Fetching type list",
             expand_hint: "Press E to browse evolutions",
@@ -519,8 +521,8 @@ impl Strings {
             abilities_title: " Yetenekler ",
             ability_hidden: "gizli",
             ability_close_hint: "Kapatmak için Esc / A",
-            team_ability_immunity: "Yetenekle bağışık",
-            team_maybe: "olası",
+            immune_by_ability: "Yetenekle bağışık",
+            immunity_maybe: "olası",
             team_close_hint: "Kapatmak için Esc / P",
             loading_types: "Tip listesi getiriliyor",
             expand_hint: "Evrimlere göz atmak için E'ye basın",
@@ -629,8 +631,8 @@ impl Strings {
             abilities_title: " Fähigkeiten ",
             ability_hidden: "versteckt",
             ability_close_hint: "Esc / A zum Schließen",
-            team_ability_immunity: "Immun durch Fähigkeit",
-            team_maybe: "möglich",
+            immune_by_ability: "Immun durch Fähigkeit",
+            immunity_maybe: "möglich",
             team_close_hint: "Esc / P zum Schließen",
             loading_types: "Typliste wird geladen",
             expand_hint: "Drücke E für die Entwicklungsreihe",
@@ -739,8 +741,8 @@ impl Strings {
             abilities_title: " Talents ",
             ability_hidden: "caché",
             ability_close_hint: "Esc / A pour fermer",
-            team_ability_immunity: "Immunisé par talent",
-            team_maybe: "possible",
+            immune_by_ability: "Immunisé par talent",
+            immunity_maybe: "possible",
             team_close_hint: "Esc / P pour fermer",
             loading_types: "Chargement des types",
             expand_hint: "Appuie sur E pour les évolutions",
@@ -849,8 +851,8 @@ impl Strings {
             abilities_title: " Habilidades ",
             ability_hidden: "oculta",
             ability_close_hint: "Esc / A para cerrar",
-            team_ability_immunity: "Inmune por habilidad",
-            team_maybe: "posible",
+            immune_by_ability: "Inmune por habilidad",
+            immunity_maybe: "posible",
             team_close_hint: "Esc / P para cerrar",
             loading_types: "Cargando lista de tipos",
             expand_hint: "Pulsa E para ver las evoluciones",
@@ -959,8 +961,8 @@ impl Strings {
             abilities_title: " Abilità ",
             ability_hidden: "nascosta",
             ability_close_hint: "Esc / A per chiudere",
-            team_ability_immunity: "Immune per abilità",
-            team_maybe: "possibile",
+            immune_by_ability: "Immune per abilità",
+            immunity_maybe: "possibile",
             team_close_hint: "Esc / P per chiudere",
             loading_types: "Caricamento dei tipi",
             expand_hint: "Premi E per le evoluzioni",

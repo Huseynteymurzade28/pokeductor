@@ -118,14 +118,29 @@ const BUCKETS: [(f32, &str); 5] = [
 /// `defender_types`. Neutral (1×) matchups are omitted — they are the default
 /// and listing them would bury the interesting rows. Empty groups are dropped,
 /// so the caller can render the result directly.
-pub fn defensive_groups(defender_types: &[String]) -> Vec<MatchupGroup> {
+///
+/// Every type in `immune_to` lands in the ×0 row whatever the chart makes of
+/// it. The chart knows typings and nothing else, and an ability can overrule
+/// it outright: Ground is ×2 on an Electric/Ghost body and 0× on Rotom, which
+/// carries that body and Levitate. Taking the overrides here rather than
+/// letting callers patch the rows afterwards is what guarantees a type moved
+/// into ×0 also leaves the row it came from, instead of being listed twice
+/// with two different answers.
+///
+/// Only immunities the Pokemon certainly has belong in `immune_to`. One it
+/// might not have is not a multiplier at all, and saying so is the caller's
+/// job.
+pub fn defensive_groups(defender_types: &[String], immune_to: &[&str]) -> Vec<MatchupGroup> {
     BUCKETS
         .iter()
         .filter_map(|&(multiplier, label)| {
             let types: Vec<&'static str> = TYPES
                 .iter()
                 .copied()
-                .filter(|attacker| same_multiplier(combined(attacker, defender_types), multiplier))
+                .filter(|attacker| match immune_to.contains(attacker) {
+                    true => same_multiplier(multiplier, 0.0),
+                    false => same_multiplier(combined(attacker, defender_types), multiplier),
+                })
                 .collect();
             (!types.is_empty()).then_some(MatchupGroup { label, types })
         })
@@ -197,7 +212,7 @@ mod tests {
 
     #[test]
     fn defensive_groups_cover_charizard() {
-        let groups = defensive_groups(&types(&["fire", "flying"]));
+        let groups = defensive_groups(&types(&["fire", "flying"]), &[]);
         let find = |label: &str| {
             groups
                 .iter()
@@ -212,8 +227,43 @@ mod tests {
     }
 
     #[test]
+    fn a_forced_immunity_moves_its_type_out_of_the_row_it_was_in() {
+        // Rotom's Electric/Ghost body takes ×2 from Ground. Rotom does not.
+        let rotom = types(&["electric", "ghost"]);
+        let groups = defensive_groups(&rotom, &["ground"]);
+        let find = |label: &str| {
+            groups
+                .iter()
+                .find(|g| g.label == label)
+                .map(|g| g.types.clone())
+                .unwrap_or_default()
+        };
+
+        assert!(find("×0").contains(&"ground"));
+        assert!(
+            !find("×2").contains(&"ground"),
+            "a type cannot be both ×2 and immune"
+        );
+        // The rest of the card is the chart's business and stays untouched.
+        assert_eq!(find("×2"), vec!["ghost", "dark"]);
+        assert!(find("×0").contains(&"normal"), "ghost still ignores normal");
+    }
+
+    #[test]
+    fn a_forced_immunity_the_chart_already_knew_is_not_listed_twice() {
+        // Flying is immune to Ground on its own; Levitate on top changes
+        // nothing, least of all the number of rows Ground appears in.
+        let groups = defensive_groups(&types(&["flying"]), &["ground"]);
+        let ground_rows: usize = groups
+            .iter()
+            .filter(|g| g.types.contains(&"ground"))
+            .count();
+        assert_eq!(ground_rows, 1);
+    }
+
+    #[test]
     fn neutral_matchups_are_omitted() {
-        let groups = defensive_groups(&types(&["normal"]));
+        let groups = defensive_groups(&types(&["normal"]), &[]);
         let listed: usize = groups.iter().map(|g| g.types.len()).sum();
         // Normal only cares about fighting (2×) and ghost (0×).
         assert_eq!(listed, 2);

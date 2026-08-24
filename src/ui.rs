@@ -10,7 +10,7 @@ use ratatui::Frame;
 use crate::app::{App, Focus, SortKey};
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
-use crate::team;
+use crate::team::{self, AbilityImmunity};
 use crate::theme;
 use crate::typechart;
 
@@ -1124,9 +1124,32 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     // Defensive view: incoming damage, worst multiplier first. Neutral matchups
     // are omitted by `defensive_groups`, so every row here is worth reading.
+    //
+    // Abilities are read first because a certain one rewrites the rows: a
+    // species that cannot *not* have Levitate is simply not hit by Ground, and
+    // the chart on its own would say otherwise. One it merely might have is
+    // left out of the numbers and annotated below instead.
+    let immunities = team::ability_immunities(detail);
+    let certain: Vec<&str> = immunities
+        .iter()
+        .filter(|immunity| immunity.certain)
+        .map(|immunity| immunity.immune_to)
+        .collect();
+
     lines.push(section_heading(s.matchups_defense));
-    for group in typechart::defensive_groups(&detail.types) {
+    for group in typechart::defensive_groups(&detail.types, &certain) {
         lines.extend(chip_rows(group.label, &group.types, text_w));
+    }
+
+    // Directly under the numbers, because it is the numbers this explains:
+    // why a row moved, or what would move if the species turned out to carry
+    // the other ability.
+    if !immunities.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section_heading(s.immune_by_ability));
+        for immunity in &immunities {
+            lines.push(ability_immunity_row(app, s, immunity, "  "));
+        }
     }
 
     // Offensive view: what its own same-type moves are strong against.
@@ -1442,6 +1465,44 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 /// An ability's name in the active language, falling back to its slug until
 /// the localized text has been fetched. Callers add the hidden marker
 /// themselves, since the two cards place it differently.
+/// One `ability → type` row, drawn identically wherever an immunity is
+/// reported. `lead` is whatever precedes the ability name: the party card
+/// names the member it belongs to, the single-species card is already about
+/// one Pokemon and has nothing to disambiguate.
+///
+/// An immunity the species might not have is marked rather than asserted. A
+/// species carries one of its listed abilities, not all of them, and a card
+/// that quietly dropped that distinction would promise a certainty the data
+/// does not support.
+fn ability_immunity_row(
+    app: &App,
+    s: &Strings,
+    immunity: &AbilityImmunity,
+    lead: &str,
+) -> Line<'static> {
+    let mut row = vec![
+        Span::styled(lead.to_string(), Style::default().fg(theme::TEXT)),
+        Span::styled(
+            ability_display_name(app, &immunity.ability),
+            Style::default().fg(theme::SUBTEXT),
+        ),
+        Span::styled(" → ", Style::default().fg(theme::OVERLAY)),
+        Span::styled(
+            format!(" {} ", title_case(immunity.immune_to)),
+            Style::default()
+                .fg(theme::BASE)
+                .bg(theme::type_color(immunity.immune_to)),
+        ),
+    ];
+    if !immunity.certain {
+        row.push(Span::styled(
+            format!("  ({})", s.immunity_maybe),
+            Style::default().fg(theme::OVERLAY),
+        ));
+    }
+    Line::from(row)
+}
+
 fn ability_display_name(app: &App, slug: &str) -> String {
     match app.abilities.get(slug) {
         Some(info) => info.name_for(app.language.flavor_code()),
@@ -1543,32 +1604,12 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         // type may still have an answer sitting right here.
         if !analysis.ability_immunities.is_empty() {
             lines.push(Line::raw(""));
-            lines.push(section_heading(s.team_ability_immunity));
+            lines.push(section_heading(s.immune_by_ability));
             for immunity in &analysis.ability_immunities {
-                let mut row = vec![
-                    Span::styled(
-                        format!("  {} · ", title_case(&immunity.member)),
-                        Style::default().fg(theme::TEXT),
-                    ),
-                    Span::styled(
-                        ability_display_name(app, &immunity.ability),
-                        Style::default().fg(theme::SUBTEXT),
-                    ),
-                    Span::styled(" → ", Style::default().fg(theme::OVERLAY)),
-                    Span::styled(
-                        format!(" {} ", title_case(immunity.immune_to)),
-                        Style::default()
-                            .fg(theme::BASE)
-                            .bg(theme::type_color(immunity.immune_to)),
-                    ),
-                ];
-                if !immunity.certain {
-                    row.push(Span::styled(
-                        format!("  ({})", s.team_maybe),
-                        Style::default().fg(theme::OVERLAY),
-                    ));
-                }
-                lines.push(Line::from(row));
+                // Led by the member's name: this card lists six Pokemon, so an
+                // unattributed row would not say whose immunity it is.
+                let lead = format!("  {} · ", title_case(&immunity.pokemon));
+                lines.push(ability_immunity_row(app, s, immunity, &lead));
             }
         }
 

@@ -64,16 +64,17 @@ pub struct ThreatRow {
     pub weak: usize,
 }
 
-/// An immunity a member owes to an ability rather than to its typing.
+/// An immunity a Pokemon owes to an ability rather than to its typing.
 ///
-/// These are deliberately kept out of the numbers above. A species has one of
-/// its listed abilities, not all of them, so an immunity is only guaranteed
-/// when there is nothing else it could have had — anything else would make the
-/// chart claim a certainty the data does not support.
+/// These are deliberately kept out of the team numbers above. A species has
+/// one of its listed abilities, not all of them, so an immunity is only
+/// guaranteed when there is nothing else it could have had — anything else
+/// would make the chart claim a certainty the data does not support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbilityImmunity {
-    /// API name of the member that has it.
-    pub member: String,
+    /// API name of the Pokemon that has it. A party member on the team card,
+    /// the species the card is about on the single-species one.
+    pub pokemon: String,
     /// API slug of the ability granting it.
     pub ability: String,
     pub immune_to: &'static str,
@@ -96,6 +97,32 @@ pub struct TeamAnalysis {
     /// Immunities the members' abilities grant, which the type chart cannot
     /// see. Reported alongside the lists above rather than folded into them.
     pub ability_immunities: Vec<AbilityImmunity>,
+}
+
+/// The immunities `species` owes to its abilities, in the order PokeAPI lists
+/// them. A species whose abilities grant none yields an empty list.
+///
+/// Both cards read the table through this one function on purpose. They used
+/// to answer "what is this immune to?" separately, and only the team card knew
+/// abilities existed, so the card that was *about* one species was the less
+/// accurate of the two. One mapping is what keeps them from drifting apart
+/// again.
+pub fn ability_immunities(species: &PokemonDetail) -> Vec<AbilityImmunity> {
+    // Certain only when the species has nowhere else to land: with one
+    // possible ability it must have this one.
+    let certain = species.abilities.len() == 1;
+    species
+        .abilities
+        .iter()
+        .filter_map(|ability| {
+            Some(AbilityImmunity {
+                pokemon: species.name.clone(),
+                ability: ability.name.clone(),
+                immune_to: immunity_from(&ability.name)?,
+                certain,
+            })
+        })
+        .collect()
 }
 
 /// Analyses a party. An empty team yields an empty analysis rather than
@@ -147,21 +174,13 @@ pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
         })
         .collect();
 
+    // Every member's, in party order, through the same mapping the
+    // single-species card reads. Spelled out as a path because the binding
+    // below shares its name.
     let ability_immunities = team
         .iter()
-        .flat_map(|member| {
-            // Certain only when the species has nowhere else to land: with one
-            // possible ability it must have this one.
-            let certain = member.abilities.len() == 1;
-            member.abilities.iter().filter_map(move |ability| {
-                Some(AbilityImmunity {
-                    member: member.name.clone(),
-                    ability: ability.name.clone(),
-                    immune_to: immunity_from(&ability.name)?,
-                    certain,
-                })
-            })
-        })
+        .copied()
+        .flat_map(self::ability_immunities)
         .collect();
 
     TeamAnalysis {
@@ -299,7 +318,7 @@ mod tests {
         assert_eq!(
             analysis.ability_immunities,
             vec![AbilityImmunity {
-                member: "rotom".to_string(),
+                pokemon: "rotom".to_string(),
                 ability: "levitate".to_string(),
                 immune_to: "ground",
                 certain: true,
@@ -334,6 +353,63 @@ mod tests {
 
         assert!(analysis.unresisted.contains(&"ground"));
         assert_eq!(analysis.ability_immunities[0].immune_to, "ground");
+    }
+
+    #[test]
+    fn both_cards_read_the_same_immunities() {
+        // The regression this guards: the single-species card once answered
+        // from the type chart alone and disagreed with the party card about
+        // the very same Rotom.
+        let rotom = with_abilities("rotom", &["electric", "ghost"], &["levitate"]);
+        assert_eq!(
+            ability_immunities(&rotom),
+            analyse(&[&rotom]).ability_immunities
+        );
+    }
+
+    #[test]
+    fn a_certain_immunity_answers_the_chart_on_the_single_species_card() {
+        // What the `T` card draws: the certain immunities, folded into the
+        // rows, leave nothing claiming Ground still lands on Rotom.
+        let rotom = with_abilities("rotom", &["electric", "ghost"], &["levitate"]);
+        let certain: Vec<&str> = ability_immunities(&rotom)
+            .iter()
+            .filter(|immunity| immunity.certain)
+            .map(|immunity| immunity.immune_to)
+            .collect();
+        let groups = typechart::defensive_groups(&rotom.types, &certain);
+
+        for group in &groups {
+            assert_eq!(
+                group.types.contains(&"ground"),
+                group.label == "×0",
+                "ground belongs in ×0 and nowhere else"
+            );
+        }
+    }
+
+    #[test]
+    fn a_possible_immunity_is_left_out_of_the_rows() {
+        // Vaporeon might have Hydration instead, so the chart keeps its say:
+        // Water stays where the typing puts it, and the card annotates it.
+        let vaporeon = with_abilities("vaporeon", &["water"], &["water-absorb", "hydration"]);
+        let certain: Vec<&str> = ability_immunities(&vaporeon)
+            .iter()
+            .filter(|immunity| immunity.certain)
+            .map(|immunity| immunity.immune_to)
+            .collect();
+
+        assert!(certain.is_empty());
+        assert_eq!(
+            typechart::defensive_groups(&vaporeon.types, &certain)
+                .iter()
+                .map(|g| (g.label, g.types.clone()))
+                .collect::<Vec<_>>(),
+            typechart::defensive_groups(&vaporeon.types, &[])
+                .iter()
+                .map(|g| (g.label, g.types.clone()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
