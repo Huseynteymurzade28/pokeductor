@@ -410,6 +410,12 @@ half-block cells, foreground being the top pixel and background the bottom.
 Area averaging rather than nearest-neighbour sampling is what keeps downscaled
 sprites smooth instead of leaving the hard outline pixels as ragged lines.
 
+The crop box is a property of the pixels, so it is worked out once when the
+sprite is decoded rather than on every draw. It used to be a full 96×96 scan per
+sprite per frame, and a frame showing an evolution chain draws ten of them —
+measured at 16.8 µs against the 16.9 µs the downsample itself costs, so caching
+it halves the sprite work in a frame. `Sprite`'s fields are private for the same
+reason: a crop box stored beside the pixels must not be able to outlive them.
 Sprites are cached re-encoded as PNG rather than as raw RGBA: a few kilobytes
 compressed against ~36 KB flattened, and the decoder is already a dependency.
 

@@ -359,15 +359,50 @@ impl EvolutionTree {
 ///
 /// Sprites are tiny (PokeAPI's `front_default` is 96×96), so we keep the full
 /// image in memory and downsample at draw time to whatever space is available.
+/// The fields are private because [`bounds`](Self::content_bounds) is derived
+/// from the pixels: letting anything rewrite them after the fact would leave a
+/// crop box describing an image that no longer exists.
 #[derive(Debug, Clone)]
 pub struct Sprite {
-    pub width: u32,
-    pub height: u32,
+    width: u32,
+    height: u32,
     /// Row-major RGBA, four bytes per pixel.
-    pub pixels: Vec<[u8; 4]>,
+    pixels: Vec<[u8; 4]>,
+    /// Tight bounding box of the opaque pixels, computed once here rather than
+    /// on every frame. See [`content_bounds`](Self::content_bounds).
+    bounds: (u32, u32, u32, u32),
 }
 
 impl Sprite {
+    /// Decodes into a sprite, working out the crop box as it goes.
+    ///
+    /// The box is a property of the pixels and nothing else, so computing it
+    /// here costs one pass over an image we have just finished decoding
+    /// anyway — against a full 96x96 scan per sprite per frame, which is what
+    /// it replaces.
+    pub fn new(width: u32, height: u32, pixels: Vec<[u8; 4]>) -> Self {
+        let bounds = compute_content_bounds(width, height, &pixels);
+        Sprite {
+            width,
+            height,
+            pixels,
+            bounds,
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Row-major RGBA, for re-encoding the image on its way to the cache.
+    pub fn pixels(&self) -> &[[u8; 4]] {
+        &self.pixels
+    }
+
     /// Average RGBA over the source box `[x0..=x1] × [y0..=y1]`, weighting color
     /// by alpha so transparent pixels don't muddy the result. The returned alpha
     /// is the box's mean coverage. Averaging (rather than nearest-neighbour point
@@ -396,32 +431,40 @@ impl Sprite {
 
     /// Tight bounding box `(x0, y0, x1, y1)` (inclusive) of the non-transparent
     /// pixels. PokeAPI artwork sits in a large transparent margin; cropping to
-    /// this box lets the visible Pokemon fill its on-screen cell. Falls back to
-    /// the full image if nothing is opaque.
+    /// this box lets the visible Pokemon fill its on-screen cell.
+    ///
+    /// Read straight off the struct. It used to be a full scan of the image,
+    /// run afresh every time the sprite was drawn — which meant once per frame
+    /// per sprite, and a frame showing an evolution chain draws ten of them.
+    /// Nothing about the answer depends on anything that changes between
+    /// frames, so it is worked out once in [`Sprite::new`] instead.
     pub fn content_bounds(&self) -> (u32, u32, u32, u32) {
-        let (mut x0, mut y0, mut x1, mut y1) = (self.width, self.height, 0u32, 0u32);
-        let mut found = false;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.pixels[(y * self.width + x) as usize][3] >= 128 {
-                    found = true;
-                    x0 = x0.min(x);
-                    y0 = y0.min(y);
-                    x1 = x1.max(x);
-                    y1 = y1.max(y);
-                }
+        self.bounds
+    }
+}
+
+/// The scan behind [`Sprite::content_bounds`], as a free function so it can run
+/// before there is a `Sprite` to call it on. Falls back to the whole image when
+/// nothing is opaque, which keeps a fully transparent sprite renderable rather
+/// than making it a special case downstream.
+fn compute_content_bounds(width: u32, height: u32, pixels: &[[u8; 4]]) -> (u32, u32, u32, u32) {
+    let (mut x0, mut y0, mut x1, mut y1) = (width, height, 0u32, 0u32);
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            if pixels[(y * width + x) as usize][3] >= 128 {
+                found = true;
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
             }
         }
-        if found {
-            (x0, y0, x1, y1)
-        } else {
-            (
-                0,
-                0,
-                self.width.saturating_sub(1),
-                self.height.saturating_sub(1),
-            )
-        }
+    }
+    if found {
+        (x0, y0, x1, y1)
+    } else {
+        (0, 0, width.saturating_sub(1), height.saturating_sub(1))
     }
 }
 
@@ -443,6 +486,54 @@ pub fn title_case(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sprite with one opaque rectangle inside a transparent margin, which is
+    /// the shape every PokeAPI sprite has.
+    fn framed_sprite(width: u32, height: u32, box_: (u32, u32, u32, u32)) -> Sprite {
+        let (x0, y0, x1, y1) = box_;
+        let pixels = (0..width * height)
+            .map(|i| {
+                let (x, y) = (i % width, i / width);
+                let opaque = (x0..=x1).contains(&x) && (y0..=y1).contains(&y);
+                [10, 20, 30, if opaque { 255 } else { 0 }]
+            })
+            .collect();
+        Sprite::new(width, height, pixels)
+    }
+
+    #[test]
+    fn the_stored_crop_box_is_the_one_a_scan_would_have_found() {
+        for box_ in [(18, 13, 77, 82), (0, 0, 95, 95), (40, 40, 41, 41)] {
+            let sprite = framed_sprite(96, 96, box_);
+            assert_eq!(sprite.content_bounds(), box_);
+            assert_eq!(
+                sprite.content_bounds(),
+                compute_content_bounds(sprite.width(), sprite.height(), sprite.pixels()),
+                "the box on the struct must not drift from the pixels it describes"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sprite_with_nothing_opaque_falls_back_to_the_whole_image() {
+        let sprite = Sprite::new(4, 3, vec![[0, 0, 0, 0]; 12]);
+        assert_eq!(sprite.content_bounds(), (0, 0, 3, 2));
+        assert_eq!(
+            sprite.content_bounds(),
+            compute_content_bounds(4, 3, sprite.pixels())
+        );
+    }
+
+    #[test]
+    fn half_transparent_pixels_do_not_count_towards_the_crop() {
+        // The scan's threshold is alpha >= 128, so a faint edge does not drag
+        // the box back out to the margin it was cropped away from.
+        let mut pixels = vec![[0u8, 0, 0, 0]; 16];
+        pixels[5] = [10, 20, 30, 255];
+        pixels[0] = [10, 20, 30, 127];
+        let sprite = Sprite::new(4, 4, pixels);
+        assert_eq!(sprite.content_bounds(), (1, 1, 1, 1));
+    }
 
     fn entry(id: u32) -> PokemonEntry {
         PokemonEntry {
