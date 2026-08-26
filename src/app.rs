@@ -13,6 +13,7 @@ use futures::StreamExt;
 use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 
 use crate::api;
 use crate::api::ApiError;
@@ -26,6 +27,9 @@ use crate::models::{
 use crate::query::Query;
 use crate::session::{self, Session};
 use crate::team;
+
+/// How often the loading spinner advances, while there is one to advance.
+const SPINNER_TICK: Duration = Duration::from_millis(120);
 
 /// Messages sent from background fetch tasks to the UI loop. The payloads are
 /// large but short-lived and low-frequency, so the size difference between
@@ -272,7 +276,15 @@ impl App {
         self.fetch_list();
 
         let mut events = EventStream::new();
-        let mut ticker = tokio::time::interval(Duration::from_millis(120));
+        let mut ticker = tokio::time::interval(SPINNER_TICK);
+        // Nothing polls the ticker while the app is idle, so by the time it is
+        // wanted again its deadline is far in the past. `Burst` — the default —
+        // would answer that by firing every tick it missed back to back,
+        // spinning the wheel through a whole sleep's worth of frames the moment
+        // a request starts. `Delay` fires once and schedules the next a full
+        // period out, which is what makes waking up look like starting rather
+        // than catching up.
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         while !self.should_quit {
             // Cheap, idempotent: requests a translation only when the current
@@ -290,6 +302,14 @@ impl App {
                 color::degrade(frame.buffer_mut(), depth);
             })?;
 
+            // The ticker exists to animate the spinner, and the spinner is
+            // only on screen while something is in flight. Selecting on it
+            // unconditionally is what made an idle Pokedex — the kind of thing
+            // left open in a split for hours — redraw itself eight times a
+            // second forever. Idle, the loop now blocks on input and messages
+            // alone, and draws when one of them says something changed.
+            let animating = self.is_busy();
+
             tokio::select! {
                 maybe_msg = rx.recv() => {
                     if let Some(msg) = maybe_msg {
@@ -303,7 +323,7 @@ impl App {
                         None => self.should_quit = true,
                     }
                 }
-                _ = ticker.tick() => {
+                _ = ticker.tick(), if animating => {
                     self.spinner = self.spinner.wrapping_add(1);
                 }
             }
@@ -311,6 +331,26 @@ impl App {
 
         session::store(&self.snapshot()).await;
         Ok(())
+    }
+
+    /// Whether anything is in flight — which is exactly when a spinner is on
+    /// screen, and so exactly when there is any reason to redraw on a timer.
+    ///
+    /// Every field here is the pending set of one kind of request, so "is
+    /// anything loading" is the union of them being non-empty. `team_loading`
+    /// counts too: a party member's record is fetched without the detail panel
+    /// waiting on it, but the party card draws a spinner for it just the same.
+    pub fn is_busy(&self) -> bool {
+        self.list_loading
+            || self.loading_detail.is_some()
+            || !self.type_loading.is_empty()
+            || !self.ability_loading.is_empty()
+            || !self.translating.is_empty()
+            || !self.team_loading.is_empty()
+            || self
+                .sprite_loading
+                .values()
+                .any(|pending| !pending.is_empty())
     }
 
     // --- Session persistence ---------------------------------------------
@@ -1310,6 +1350,65 @@ mod tests {
             })
             .collect();
         app
+    }
+
+    #[test]
+    fn an_app_with_nothing_in_flight_is_idle() {
+        assert!(!app_listing(&[]).is_busy());
+    }
+
+    #[test]
+    fn any_one_pending_request_is_enough_to_keep_the_spinner_turning() {
+        // One arm per kind of request. All of them put a spinner on screen, so
+        // all of them have to keep the ticker alive; a kind missing from
+        // `is_busy` would show as a frozen spinner, which is the failure this
+        // pins down.
+        /// What kind of request to start, and how to start it.
+        type Pending = (&'static str, fn(&mut App));
+
+        let cases: [Pending; 7] = [
+            ("list", |app| app.list_loading = true),
+            ("detail", |app| app.loading_detail = Some("mew".to_string())),
+            ("type roster", |app| {
+                app.type_loading.insert("ghost".to_string());
+            }),
+            ("ability", |app| {
+                app.ability_loading.insert("levitate".to_string());
+            }),
+            ("translation", |app| {
+                app.translating
+                    .insert(("mew".to_string(), "tr".to_string()));
+            }),
+            ("party member", |app| {
+                app.team_loading.insert("mew".to_string());
+            }),
+            ("sprite", |app| {
+                app.sprite_loading
+                    .entry(SpriteVariant::Normal)
+                    .or_default()
+                    .insert("mew".to_string());
+            }),
+        ];
+
+        for (kind, begin) in cases {
+            let mut app = app_listing(&[]);
+            begin(&mut app);
+            assert!(
+                app.is_busy(),
+                "a pending {kind} request should read as busy"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pending_set_that_has_drained_stops_counting() {
+        // `sprite_loading` keeps one set per palette and the sets outlive their
+        // contents. Testing the map for emptiness rather than its sets would
+        // leave the app busy — and redrawing on a timer — forever after the
+        // first sprite it ever fetched.
+        let mut app = app_listing(&[]);
+        app.sprite_loading.entry(SpriteVariant::Normal).or_default();
+        assert!(!app.is_busy());
     }
 
     #[test]
