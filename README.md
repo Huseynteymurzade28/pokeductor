@@ -25,6 +25,30 @@ building a party, and the help overlay:
 
 ## Install
 
+### Prebuilt binaries
+
+No toolchain needed. Each [release](https://github.com/Huseynteymurzade28/pokeductor/releases)
+carries an archive per platform, with a `.sha256` beside it:
+
+| Platform | Archive |
+|---|---|
+| Linux (any distribution) | `x86_64-unknown-linux-musl.tar.gz` |
+| Linux (glibc) | `x86_64-unknown-linux-gnu.tar.gz` |
+| macOS (Apple silicon) | `aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `x86_64-apple-darwin.tar.gz` |
+| Windows | `x86_64-pc-windows-msvc.zip` |
+
+Take the **musl** one on Linux unless you have a reason not to: it is statically
+linked and carries no glibc floor, so it runs on distributions older than the
+machine it was built on. Both Linux builds link no system OpenSSL.
+
+```bash
+tar xzf pokeductor-v0.3.1-x86_64-unknown-linux-musl.tar.gz
+./pokeductor-v0.3.1-x86_64-unknown-linux-musl/pokeductor
+```
+
+### With cargo
+
 ```bash
 cargo install pokeductor
 ```
@@ -46,8 +70,9 @@ yay -S pokeductor
 
 ### Requirements
 
-- **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/). Not
-  needed for the AUR package, which builds it for you.
+- **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/).
+  Only for building it yourself: the prebuilt binaries and the AUR package need
+  no toolchain.
 - A **truecolor (24-bit) terminal** for sprites at their best. Not a
   requirement: a 256-colour terminal gets the artwork quantized to its palette,
   and one with no colour at all gets the interface without sprites rather than a
@@ -552,6 +577,28 @@ manifest changes.
 Everything under `typechart.rs`, `team.rs`, `query.rs` and `models.rs` is pure
 and unit-tested; new logic belongs there rather than in `app.rs` or `ui.rs`
 wherever it can be expressed without a terminal or a network.
+
+### Releasing
+
+Changes are recorded in [`CHANGELOG.md`](CHANGELOG.md) under `Unreleased` as
+they land. A release moves that section under its version number, bumps
+`Cargo.toml`, and is tagged:
+
+```bash
+git tag -a v0.4.0 -m "v0.4.0"
+git push origin v0.4.0
+```
+
+The tag is the only manual step. Pushing it runs `.github/workflows/release.yml`,
+which re-runs the full check suite against the tagged tree, refuses to go on if
+the tag and the manifest disagree about the version or the changelog has no
+section for it, cross-compiles the five targets, attaches them with checksums to
+a GitHub release whose notes are that changelog section, and finally publishes to
+crates.io. Publishing needs a `CARGO_REGISTRY_TOKEN` repository secret.
+
+crates.io is last because it is the step that cannot be undone, only yanked. The
+AUR package is updated by hand afterwards, since it builds from the crates.io
+tarball and cannot be prepared before it exists.
 
 ## Credits
 

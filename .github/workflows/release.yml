@@ -1,0 +1,182 @@
+name: Release
+
+# Driven by the tag, which is the one deliberate "this is a release" gesture.
+# Everything after it — verifying, cross-compiling, the GitHub release, and
+# crates.io — happens here, so the crate and the binaries can never drift apart
+# in version.
+on:
+  push:
+    tags: ["v*"]
+  # Lets the build matrix be exercised without cutting a release. Only the two
+  # publishing jobs are gated on a tag, so a manual run answers "does this still
+  # cross-compile" — the question you want settled *before* tagging, since a tag
+  # that fails halfway leaves a release half-made.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Nothing irreversible happens before this passes. CI already runs on every
+  # push, but a tag can point at any commit, so the check is repeated against
+  # the exact tree about to be published rather than assumed from a green run
+  # somewhere upstream.
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # A tag naming a version the manifest does not agree with would publish a
+      # crate under one number and binaries under another. Cheaper to catch here
+      # than to yank afterwards.
+      - name: Tag matches the manifest version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          manifest=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
+          echo "tag $tagged, manifest $manifest"
+          [ "$tagged" = "$manifest" ] || {
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $manifest"
+            exit 1
+          }
+
+      - name: The changelog has an entry for this version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}"
+            exit 1
+          }
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-features
+
+  build:
+    name: ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The gnu build carries the runner's glibc floor with it, so the musl
+          # one is the Linux binary that actually runs anywhere. Both ship:
+          # `rustls-tls` means neither needs a system OpenSSL.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install the musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # tar on Unix, zip on Windows — each platform's `curl | extract` habit.
+      # The checksum sits beside the archive rather than in one combined file so
+      # a single download can be verified without fetching anything else.
+      - name: Package
+        shell: bash
+        run: |
+          name="pokeductor-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/pokeductor.exe" "dist/$name/"
+          else
+            cp "target/${{ matrix.target }}/release/pokeductor" "dist/$name/"
+          fi
+          cp README.md LICENSE CHANGELOG.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "$name" > /dev/null
+            archive="$name.zip"
+          else
+            tar czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          cat "$archive.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The notes are the changelog's section for this version, so the two are
+      # written once rather than kept in step by hand.
+      - name: Take the release notes from the changelog
+        run: |
+          awk -v version="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" version "\\]" { collecting = 1; next }
+            collecting && /^## / { exit }
+            collecting { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || {
+            echo "::error::no changelog section for ${GITHUB_REF_NAME#v}"
+            exit 1
+          }
+          cat notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
+
+  # Last, and only once the binaries exist: a crates.io publish cannot be undone,
+  # only yanked.
+  crates-io:
+    name: crates.io
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

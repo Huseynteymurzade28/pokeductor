@@ -19,7 +19,11 @@ exclude = ["assets/", ".github/"]
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }
-reqwest = { version = "0.12", features = ["json"] }
+# `rustls-tls` rather than the default `native-tls`: it is what lets a release
+# binary be built once and run anywhere, since it links no system OpenSSL and
+# carries its own root certificates. It is also what makes the musl target
+# possible at all.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures = "0.3"
