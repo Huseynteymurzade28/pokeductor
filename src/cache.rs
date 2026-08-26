@@ -233,6 +233,35 @@ pub async fn store_translation(name: &str, lang: &str, text: &str) {
     write_atomic(&path, text.as_bytes()).await;
 }
 
+// --- Cache management ----------------------------------------------------
+
+/// Where this build keeps its cache, if a directory could be worked out.
+///
+/// Exposed for the `--cache-dir` and `--clear-cache` commands, which exist
+/// because the answer was previously a matter of reading this file's docs and
+/// guessing at environment variables.
+pub fn dir() -> Option<&'static Path> {
+    root()
+}
+
+/// Removes the cache tree, reporting whether there was one to remove.
+///
+/// The only function here that is not best-effort. Everywhere else a failed
+/// filesystem operation is a cache miss and the app carries on; this one runs
+/// because the user named it, so "I could not delete it" is an answer they
+/// need rather than one to swallow. An absent directory is not a failure —
+/// the tree is gone either way, which is what was asked for.
+///
+/// Takes the path rather than reading [`root`] so a test can point it at a
+/// directory it owns.
+pub async fn clear(dir: &Path) -> std::io::Result<bool> {
+    match tokio::fs::remove_dir_all(dir).await {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 // --- Paths ---------------------------------------------------------------
 
 /// Root of the cache tree, resolved once per process.
@@ -394,6 +423,27 @@ mod tests {
             sprite_file("pikachu", SpriteVariant::Shiny),
             "pikachu.shiny.png"
         );
+    }
+
+    #[tokio::test]
+    async fn clearing_removes_the_tree_and_reports_that_it_did() {
+        let dir = scratch_dir("clear");
+        std::fs::create_dir_all(dir.join("species")).expect("nested entry");
+        std::fs::write(dir.join("species").join("mew.json"), b"{}").expect("entry");
+
+        assert!(
+            clear(&dir).await.expect("removable"),
+            "found a tree to remove"
+        );
+        assert!(!dir.exists());
+    }
+
+    #[tokio::test]
+    async fn clearing_a_cache_that_was_never_written_is_not_a_failure() {
+        let dir = scratch_dir("clear-absent");
+        std::fs::remove_dir_all(&dir).expect("start from nothing");
+
+        assert!(!clear(&dir).await.expect("absence is not an error"));
     }
 
     #[test]
