@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap
 use ratatui::Frame;
 
 use crate::app::{App, Focus, SortKey};
+use crate::color;
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{title_case, EvolutionTree, Sprite};
 use crate::team::{self, AbilityImmunity};
@@ -178,12 +179,9 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).highlight_symbol("▶ ").highlight_style(
-        Style::default()
-            .fg(theme::BASE)
-            .bg(theme::MAUVE)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items)
+        .highlight_symbol("▶ ")
+        .highlight_style(color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, inner, &mut app.list_state);
 }
 
@@ -958,10 +956,7 @@ fn draw_card(
     let is_cursor = cursor == Some(node.name.as_str());
     let is_current = current == Some(node.name.as_str());
     let style = if is_cursor {
-        Style::default()
-            .fg(theme::BASE)
-            .bg(theme::YELLOW)
-            .add_modifier(Modifier::BOLD)
+        color::highlight(theme::YELLOW).add_modifier(Modifier::BOLD)
     } else if is_current {
         Style::default()
             .fg(theme::YELLOW)
@@ -1692,10 +1687,7 @@ fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect)
         let marker = if active { "●" } else { "○" };
         let label = format!(" {marker} {:<10} {} ", lang.label(), lang.tag());
         let style = if selected {
-            Style::default()
-                .fg(theme::BASE)
-                .bg(theme::MAUVE)
-                .add_modifier(Modifier::BOLD)
+            color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD)
         } else if active {
             Style::default().fg(theme::MAUVE)
         } else {

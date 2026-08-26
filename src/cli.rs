@@ -17,6 +17,7 @@ use clap::builder::PossibleValue;
 use clap::{Parser, ValueEnum};
 
 use crate::cache;
+use crate::color::Choice;
 use crate::i18n::Language;
 
 /// A terminal Pokedex and evolution analyzer.
@@ -35,12 +36,16 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "LANG")]
     lang: Option<Language>,
 
+    /// How much colour the terminal can show
+    #[arg(long, value_enum, value_name = "WHEN", default_value = "auto")]
+    color: Choice,
+
     /// Delete the on-disk cache and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "cache_dir"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color", "cache_dir"])]
     clear_cache: bool,
 
     /// Print the cache directory and exit
-    #[arg(long, conflicts_with_all = ["name", "lang"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color"])]
     cache_dir: bool,
 }
 
@@ -53,6 +58,10 @@ pub struct Cli {
 pub struct Startup {
     pub language: Option<Language>,
     pub species: Option<String>,
+    /// Colour depth to force, or [`Choice::Auto`] to work it out from the
+    /// environment. Unlike the other two this is never `None`: "detect it"
+    /// is itself one of the answers rather than the absence of one.
+    pub color: Choice,
 }
 
 /// What the arguments amounted to.
@@ -92,6 +101,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
     Ok(Outcome::Launch(Startup {
         language: cli.lang,
         species: cli.name,
+        color: cli.color,
     }))
 }
 
@@ -108,6 +118,30 @@ fn cache_dir() -> anyhow::Result<&'static Path> {
              (LOCALAPPDATA on Windows)"
         )
     })
+}
+
+/// The `--color` values. Spelled for the command line rather than after the
+/// variants: `256` is what anyone reaching for this flag would type, and
+/// `never` says what it does to the interface rather than which encoding it
+/// stops using.
+impl ValueEnum for Choice {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Choice::Auto,
+            Choice::Truecolor,
+            Choice::Ansi256,
+            Choice::Never,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Choice::Auto => PossibleValue::new("auto").help("Detect from COLORTERM and TERM"),
+            Choice::Truecolor => PossibleValue::new("truecolor").help("Force 24-bit colour"),
+            Choice::Ansi256 => PossibleValue::new("256").help("Force the 256-colour palette"),
+            Choice::Never => PossibleValue::new("never").help("No colour, and no sprites"),
+        })
+    }
 }
 
 /// Accepted `--lang` values are derived from [`Language::ALL`] and the codes
@@ -170,11 +204,41 @@ mod tests {
     }
 
     #[test]
+    fn colour_defaults_to_working_it_out_from_the_environment() {
+        assert_eq!(parse(&[]).unwrap().color, Choice::Auto);
+    }
+
+    #[test]
+    fn every_colour_depth_is_reachable_by_the_name_it_is_offered_under() {
+        let expected = [
+            ("auto", Choice::Auto),
+            ("truecolor", Choice::Truecolor),
+            ("256", Choice::Ansi256),
+            ("never", Choice::Never),
+        ];
+        for (value, choice) in expected {
+            assert_eq!(parse(&["--color", value]).unwrap().color, choice);
+        }
+        assert_eq!(
+            expected.len(),
+            Choice::value_variants().len(),
+            "every variant should have a spelling the tests cover"
+        );
+    }
+
+    #[test]
+    fn a_colour_depth_we_cannot_render_is_rejected() {
+        assert!(parse(&["--color", "16"]).is_err());
+        assert!(parse(&["--color", "always"]).is_err());
+    }
+
+    #[test]
     fn the_cache_commands_refuse_arguments_they_would_ignore() {
         assert!(parse(&["--clear-cache", "--cache-dir"]).is_err());
         assert!(parse(&["--clear-cache", "gengar"]).is_err());
         assert!(parse(&["--cache-dir", "gengar"]).is_err());
         assert!(parse(&["--cache-dir", "--lang", "tr"]).is_err());
+        assert!(parse(&["--clear-cache", "--color", "never"]).is_err());
     }
 
     #[test]
@@ -191,6 +255,7 @@ mod tests {
             Outcome::Launch(startup) => {
                 assert_eq!(startup.species.as_deref(), Some("gengar"));
                 assert_eq!(startup.language, Some(Language::Turkish));
+                assert_eq!(startup.color, Choice::Auto);
             }
             Outcome::Handled => panic!("nothing here is handled on the command line"),
         }

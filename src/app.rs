@@ -18,6 +18,7 @@ use crate::api;
 use crate::api::ApiError;
 use crate::cache;
 use crate::cli::Startup;
+use crate::color::{self, Depth};
 use crate::i18n::Language;
 use crate::models::{
     AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
@@ -181,6 +182,10 @@ pub struct App {
     pub translating: HashSet<(String, String)>,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
+    /// What the terminal can show, resolved once at startup from `--color` and
+    /// the environment. Every frame is rewritten into it on the way out, and
+    /// sprites are skipped entirely when it is [`Depth::None`].
+    pub color_depth: Depth,
     /// Language named on the command line, if any. Kept rather than merely
     /// applied because the restored session carries a language too, and this
     /// one has to outrank it.
@@ -208,6 +213,8 @@ impl App {
     /// bare invocation is the same call with nothing to override.
     pub fn new(startup: Startup) -> anyhow::Result<(Self, mpsc::Receiver<Message>)> {
         let client = api::build_client()?;
+        let color_depth = color::resolve(startup.color, &color::Env::from_process());
+        color::enforce(startup.color, color_depth);
         let (tx, rx) = mpsc::channel(64);
         let app = App {
             language: startup.language.unwrap_or(Language::English),
@@ -239,6 +246,7 @@ impl App {
             translations: HashMap::new(),
             translating: HashSet::new(),
             selected_name: None,
+            color_depth,
             cli_language: startup.language,
             startup_species: startup.species,
             loading_detail: None,
@@ -271,7 +279,16 @@ impl App {
             // selection+language needs one and none is cached or in flight.
             self.ensure_translation();
             self.ensure_ability_info();
-            terminal.draw(|frame| crate::ui::render(frame, &mut self))?;
+            // Rendering always writes 24-bit colour; this is where the frame
+            // is rewritten into what the terminal can actually show. Doing it
+            // over the finished buffer keeps every widget — and every sprite
+            // pixel — degrading by one rule instead of each checking for
+            // itself.
+            let depth = self.color_depth;
+            terminal.draw(|frame| {
+                crate::ui::render(frame, &mut self);
+                color::degrade(frame.buffer_mut(), depth);
+            })?;
 
             tokio::select! {
                 maybe_msg = rx.recv() => {
@@ -505,6 +522,14 @@ impl App {
     /// an alternate form (`raichu-alola`) does not appear in it under its own
     /// name — the chain carries the base species.
     fn ensure_visible_sprites(&mut self) {
+        // Nothing on screen will show them, and `sprite_for` says as much, so
+        // without this the loop below would re-request every chain member on
+        // every frame and never be satisfied. The artwork arriving inside a
+        // species bundle is still kept: it costs no request of its own, and it
+        // means a later run with colour opens instantly.
+        if self.color_depth == Depth::None {
+            return;
+        }
         let variant = self.sprite_variant;
         let names: Vec<String> = self
             .selected_name
@@ -558,6 +583,12 @@ impl App {
 
     /// Decoded artwork for `name` in the palette currently on display.
     pub fn sprite_for(&self, name: &str) -> Option<&Sprite> {
+        // A sprite drawn without colour is a rectangle of identical blocks,
+        // which says less than the placeholder the panels already fall back
+        // to. Answering `None` here is what routes both of them to it.
+        if self.color_depth == Depth::None {
+            return None;
+        }
         self.sprites.get(&self.sprite_variant)?.get(name)
     }
 
@@ -1313,7 +1344,7 @@ mod tests {
     fn a_lang_flag_outranks_the_language_the_last_run_left_behind() {
         let (mut app, _rx) = App::new(Startup {
             language: Some(Language::Turkish),
-            species: None,
+            ..Startup::default()
         })
         .expect("client builds");
         app.restore(Session {
