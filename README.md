@@ -56,8 +56,10 @@ yay -S pokeductor
   has been viewed once it opens with no network at all; see
   [Caching](#caching).
 
-The first launch fetches the species list and opens on Bulbasaur. Moving through
-the list loads each Pokémon's details, evolution chain and artwork on demand.
+The first launch fetches the species list and opens on Bulbasaur — or on
+whatever you name, `pokeductor gengar`. Moving through the list loads each
+Pokémon's details, evolution chain and artwork on demand. See [Command
+line](#command-line) for the full set of flags.
 
 ---
 
@@ -226,6 +228,52 @@ or derive a generation from. A bare number still reaches them by name.
 
 ---
 
+## Command line
+
+```
+Usage: pokeductor [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]  Open directly on this species, e.g. `pokeductor gengar`
+
+Options:
+      --lang <LANG>  Start in this UI language [possible values: en, tr, de, fr, es, it]
+      --clear-cache  Delete the on-disk cache and exit
+      --cache-dir    Print the cache directory and exit
+  -h, --help         Print help (see more with '--help')
+  -V, --version      Print version
+```
+
+`NAME` goes into the search box rather than through a parser of its own, so
+everything [the search syntax](#search-syntax) understands works here too:
+
+```bash
+pokeductor gengar          # straight to Gengar
+pokeductor 25              # Pokedex number 25 — Pikachu
+pokeductor type:ghost      # open with the list already filtered
+```
+
+An exact name wins the cursor even when something longer sorts ahead of it —
+`pokeductor mew` opens Mew, not Mewtwo — and a name that matches nothing leaves
+you on the same empty list typing it would have, with the query still in the
+box saying why.
+
+`--lang` outranks the language [the previous run left
+behind](#session-state) for this run, and being an ordinary choice like any
+made from the picker, it is what gets stored on the way out.
+
+The two cache commands answer the question this README used to answer with a
+path and a `rm -rf`. Both print what they touched:
+
+```console
+$ pokeductor --cache-dir
+/home/you/.cache/pokeductor
+$ pokeductor --clear-cache
+Removed /home/you/.cache/pokeductor
+```
+
+---
+
 ## Architecture
 
 A layered design. The rendering layer is a pure function of application state,
@@ -234,10 +282,11 @@ through to disk.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs` | Entry point; terminal setup and the `tokio` runtime. |
+| `main.rs` | Entry point; argument handling, terminal setup and the `tokio` runtime. |
 | `models.rs` | API-agnostic domain types (`PokemonDetail`, `EvolutionTree`, `Sprite`, `Ability`). |
 | `api.rs` | Async PokeAPI client, evolution-chain parser, sprite decode, translation. |
 | `cache.rs` | On-disk cache of every fetched response, for instant and offline starts. |
+| `cli.rs` | Argument parsing, and the commands that answer without a terminal. |
 | `session.rs` | Party and preferences carried over from the previous run. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`) parsing. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
@@ -283,7 +332,8 @@ leave a half-written entry for the next one to read back as valid. Every entry
 is version-stamped: a build whose cached representation has changed shape treats
 older files as misses instead of mis-parsing them. The whole layer is
 best-effort — a cache that cannot be read or written is a miss, never an error
-the user sees. It is safe to delete at any time; it refills itself.
+the user sees. It is safe to delete at any time; it refills itself, and
+`--clear-cache` does it without anyone having to work out the path first.
 
 ### Session state
 
@@ -395,6 +445,7 @@ shown.
 
 [`ratatui`](https://crates.io/crates/ratatui) ·
 [`crossterm`](https://crates.io/crates/crossterm) ·
+[`clap`](https://crates.io/crates/clap) ·
 [`tokio`](https://crates.io/crates/tokio) ·
 [`reqwest`](https://crates.io/crates/reqwest) ·
 [`serde`](https://crates.io/crates/serde) ·

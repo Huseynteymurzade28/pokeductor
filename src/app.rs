@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use crate::api;
 use crate::api::ApiError;
 use crate::cache;
+use crate::cli::Startup;
 use crate::i18n::Language;
 use crate::models::{
     AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
@@ -180,6 +181,13 @@ pub struct App {
     pub translating: HashSet<(String, String)>,
     /// Name of the Pokemon currently shown in the detail panel.
     pub selected_name: Option<String>,
+    /// Language named on the command line, if any. Kept rather than merely
+    /// applied because the restored session carries a language too, and this
+    /// one has to outrank it.
+    cli_language: Option<Language>,
+    /// Species named on the command line, opened once the list arrives — the
+    /// first moment there is anything to resolve a name against.
+    startup_species: Option<String>,
     /// Name currently being fetched, if any (drives the detail spinner).
     pub loading_detail: Option<String>,
     pub list_loading: bool,
@@ -195,11 +203,14 @@ pub struct App {
 impl App {
     /// Builds the app and returns it alongside the receiver half of the
     /// message channel (handed back to [`App::run`]).
-    pub fn new() -> anyhow::Result<(Self, mpsc::Receiver<Message>)> {
+    ///
+    /// `startup` carries the command-line overrides. Each is optional, so a
+    /// bare invocation is the same call with nothing to override.
+    pub fn new(startup: Startup) -> anyhow::Result<(Self, mpsc::Receiver<Message>)> {
         let client = api::build_client()?;
         let (tx, rx) = mpsc::channel(64);
         let app = App {
-            language: Language::English,
+            language: startup.language.unwrap_or(Language::English),
             all_pokemon: Vec::new(),
             filtered: Vec::new(),
             list_state: ListState::default(),
@@ -228,6 +239,8 @@ impl App {
             translations: HashMap::new(),
             translating: HashSet::new(),
             selected_name: None,
+            cli_language: startup.language,
+            startup_species: startup.species,
             loading_detail: None,
             list_loading: false,
             error: None,
@@ -301,8 +314,14 @@ impl App {
     /// recognises, keeps its default rather than rejecting the file: a session
     /// is a convenience, and a partly understood one still beats starting over.
     fn restore(&mut self, session: Session) {
-        if let Some(language) = session.language.as_deref().and_then(Language::from_code) {
-            self.language = language;
+        // `--lang` is an explicit choice made for this run, so it outranks the
+        // one carried over from the last. What the run *ends* in is still what
+        // gets stored on the way out, which makes the flag behave exactly like
+        // opening the picker and choosing that language would.
+        if self.cli_language.is_none() {
+            if let Some(language) = session.language.as_deref().and_then(Language::from_code) {
+                self.language = language;
+            }
         }
         if let Some(sort) = session.sort.as_deref().and_then(SortKey::from_code) {
             self.sort = sort;
@@ -556,6 +575,30 @@ impl App {
             .insert(name, sprite);
     }
 
+    /// Puts the species named on the command line under the cursor, down the
+    /// same path a search-box query takes: the name goes into the box and the
+    /// list narrows to it. That is what makes `pokeductor 25` and
+    /// `pokeductor type:ghost` work without a second parser, and what keeps an
+    /// unknown name on the one "no results" path the TUI already has rather
+    /// than inventing a command-line error beside it. The query stays in the
+    /// box, so a list that narrowed to nothing says why it did.
+    ///
+    /// The one thing the search box cannot do here is prefer an exact match:
+    /// `mew` narrows to Mew and Mewtwo, and dex order puts Mewtwo first. That
+    /// is right when a human is about to press `↓`, and wrong as the answer to
+    /// `pokeductor mew`, so an exact name takes the cursor.
+    fn select_named_species(&mut self, name: String) {
+        self.query = name.trim().to_lowercase();
+        self.recompute_filter();
+        let exact = self
+            .filtered
+            .iter()
+            .position(|&idx| self.all_pokemon[idx].name == self.query);
+        if let Some(pos) = exact {
+            self.list_state.select(Some(pos));
+        }
+    }
+
     /// Loads the chain member currently under the evolution cursor — the quick
     /// "jump to my next evolution" action.
     fn jump_to_evolution_member(&mut self) {
@@ -582,8 +625,16 @@ impl App {
             Message::ListLoaded(list) => {
                 self.all_pokemon = list;
                 self.list_loading = false;
-                self.recompute_filter();
-                // Open on the first species (Bulbasaur) instead of an empty
+                // A species named on the command line goes through the
+                // search box, which is what narrows the list to it. With no
+                // argument the box is empty and the filter is the whole list.
+                if let Some(name) = self.startup_species.take() {
+                    self.select_named_species(name);
+                } else {
+                    self.recompute_filter();
+                }
+                // Open on whatever ended up under the cursor — the argument's
+                // species, or the first entry (Bulbasaur) — instead of an empty
                 // panel, so there is something to look at before any keypress.
                 if self.selected_name.is_none() {
                     self.request_selected();
@@ -1213,5 +1264,74 @@ mod tests {
     fn an_unknown_sort_code_is_not_guessed_at() {
         assert_eq!(SortKey::from_code("stat-total"), None);
         assert_eq!(SortKey::from_code(""), None);
+    }
+
+    /// An app with a list already in it and nothing in flight. `App::new`
+    /// touches no network of its own — it only builds the client the fetch
+    /// tasks would use — so this stays a plain unit test.
+    fn app_listing(entries: &[(u32, &str)]) -> App {
+        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+        app.all_pokemon = entries
+            .iter()
+            .map(|&(id, name)| PokemonEntry {
+                name: name.to_string(),
+                id,
+            })
+            .collect();
+        app
+    }
+
+    #[test]
+    fn a_named_species_wins_the_cursor_over_the_longer_name_that_sorts_first() {
+        let mut app = app_listing(&[(150, "mewtwo"), (151, "mew")]);
+        app.select_named_species("Mew".to_string());
+
+        assert_eq!(app.query, "mew", "the box shows what narrowed the list");
+        assert_eq!(app.filtered.len(), 2, "Mewtwo still matches the text");
+        assert_eq!(app.current_name().as_deref(), Some("mew"));
+    }
+
+    #[test]
+    fn a_name_reaching_the_box_carries_its_search_syntax_with_it() {
+        let mut app = app_listing(&[(25, "pikachu"), (26, "raichu")]);
+        app.select_named_species("dex:26".to_string());
+
+        assert_eq!(app.current_name().as_deref(), Some("raichu"));
+    }
+
+    #[test]
+    fn a_name_matching_nothing_lands_on_the_empty_list_rather_than_an_error() {
+        let mut app = app_listing(&[(1, "bulbasaur")]);
+        app.select_named_species("gengr".to_string());
+
+        assert!(app.filtered.is_empty());
+        assert_eq!(app.current_name(), None, "nothing to load, nothing loaded");
+        assert_eq!(app.query, "gengr", "and the box says why the list is empty");
+    }
+
+    #[test]
+    fn a_lang_flag_outranks_the_language_the_last_run_left_behind() {
+        let (mut app, _rx) = App::new(Startup {
+            language: Some(Language::Turkish),
+            species: None,
+        })
+        .expect("client builds");
+        app.restore(Session {
+            language: Some("de".to_string()),
+            ..Session::default()
+        });
+
+        assert_eq!(app.language, Language::Turkish);
+    }
+
+    #[test]
+    fn without_the_flag_the_stored_language_is_still_what_comes_back() {
+        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+        app.restore(Session {
+            language: Some("de".to_string()),
+            ..Session::default()
+        });
+
+        assert_eq!(app.language, Language::German);
     }
 }
