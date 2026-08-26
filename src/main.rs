@@ -4,6 +4,7 @@
 //! - `models`  : API-agnostic domain types (the data domain layer).
 //! - `cache`   : on-disk cache of everything fetched, for instant/offline starts.
 //! - `cli`     : argument parsing and the commands that need no terminal.
+//! - `color`   : terminal colour-depth detection and per-frame degradation.
 //! - `i18n`    : `Language` enum + translation tables (EN / TR / DE).
 //! - `theme`   : Catppuccin Mocha palette and per-type colors.
 //! - `api`     : async PokeAPI client and evolution-chain parser.
@@ -19,6 +20,7 @@ mod api;
 mod app;
 mod cache;
 mod cli;
+mod color;
 mod i18n;
 mod models;
 mod query;
