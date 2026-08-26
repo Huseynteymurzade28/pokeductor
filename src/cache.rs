@@ -144,11 +144,11 @@ pub async fn load_sprite(name: &str, variant: SpriteVariant) -> Option<Sprite> {
     let bytes = tokio::fs::read(&path).await.ok()?;
     let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (width, height) = image.dimensions();
-    Some(Sprite {
+    Some(Sprite::new(
         width,
         height,
-        pixels: image.pixels().map(|p| p.0).collect(),
-    })
+        image.pixels().map(|p| p.0).collect(),
+    ))
 }
 
 pub async fn store_sprite(name: &str, sprite: &Sprite, variant: SpriteVariant) {
@@ -390,8 +390,8 @@ async fn age(path: &Path) -> Option<Duration> {
 }
 
 fn encode_png(sprite: &Sprite) -> Option<Vec<u8>> {
-    let flat: Vec<u8> = sprite.pixels.iter().flatten().copied().collect();
-    let buffer = image::RgbaImage::from_raw(sprite.width, sprite.height, flat)?;
+    let flat: Vec<u8> = sprite.pixels().iter().flatten().copied().collect();
+    let buffer = image::RgbaImage::from_raw(sprite.width(), sprite.height(), flat)?;
     let mut out = Vec::new();
     image::DynamicImage::ImageRgba8(buffer)
         .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
@@ -516,17 +516,13 @@ mod tests {
 
     #[test]
     fn sprites_survive_a_png_round_trip() {
-        let sprite = Sprite {
-            width: 2,
-            height: 1,
-            pixels: vec![[255, 0, 0, 255], [0, 128, 255, 128]],
-        };
+        let sprite = Sprite::new(2, 1, vec![[255, 0, 0, 255], [0, 128, 255, 128]]);
         let bytes = encode_png(&sprite).unwrap();
         let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(decoded.dimensions(), (2, 1));
         assert_eq!(
             decoded.pixels().map(|p| p.0).collect::<Vec<_>>(),
-            sprite.pixels
+            sprite.pixels()
         );
     }
 }

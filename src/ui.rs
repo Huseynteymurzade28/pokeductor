@@ -443,7 +443,7 @@ fn render_sprite(frame: &mut Frame, area: Rect, sprite: &Sprite) {
 /// and `max_cols` *while preserving aspect ratio* — accounting for terminal
 /// cells being roughly twice as tall as they are wide — and finally centred.
 fn render_sprite_capped(frame: &mut Frame, area: Rect, sprite: &Sprite, max_cols: u16) {
-    if area.width < 2 || area.height < 1 || sprite.width == 0 || sprite.height == 0 {
+    if area.width < 2 || area.height < 1 || sprite.width() == 0 || sprite.height() == 0 {
         return;
     }
 

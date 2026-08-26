@@ -326,11 +326,7 @@ pub async fn fetch_sprite(client: &reqwest::Client, url: &str) -> Result<Sprite,
     let image = image::load_from_memory(&bytes)?.to_rgba8();
     let (width, height) = image.dimensions();
     let pixels = image.pixels().map(|p| p.0).collect();
-    Ok(Sprite {
-        width,
-        height,
-        pixels,
-    })
+    Ok(Sprite::new(width, height, pixels))
 }
 
 async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDetail, ApiError> {
