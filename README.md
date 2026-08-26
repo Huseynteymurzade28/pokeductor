@@ -48,8 +48,10 @@ yay -S pokeductor
 
 - **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/). Not
   needed for the AUR package, which builds it for you.
-- A **truecolor (24-bit) terminal**. Sprites are drawn as RGB half-blocks and
-  will look wrong on a 256-colour terminal.
+- A **truecolor (24-bit) terminal** for sprites at their best. Not a
+  requirement: a 256-colour terminal gets the artwork quantized to its palette,
+  and one with no colour at all gets the interface without sprites rather than a
+  field of blank blocks. See [Colour](#colour).
 - A font with **Unicode block and box-drawing glyphs** — any Nerd Font, Fira
   Code, JetBrains Mono, and most modern monospace fonts qualify.
 - An **internet connection** for anything not already cached. After a species
@@ -123,6 +125,29 @@ rendering bug.
 Only the palette on screen is fetched, so flipping the toggle never pulls down
 two full sets of artwork, and both are cached separately on disk. A species
 PokeAPI ships no shiny sprite for falls back to its normal one.
+
+### Colour
+
+Sprites are RGB half-blocks, so how they land depends on what the terminal can
+show. Rather than requiring 24-bit colour, Pokeductor works out what it has and
+renders to it:
+
+| Terminal | What you get |
+|---|---|
+| Truecolor (`COLORTERM=truecolor`) | The artwork as decoded, 24-bit. |
+| 256 colours | Sprites quantized to the xterm palette — the 6×6×6 cube plus the greyscale ramp — so they stay readable instead of being dropped by a terminal that cannot parse the escape. |
+| No colour (`NO_COLOR`, `TERM=dumb`, `--color=never`) | The full interface without sprites. A sprite with no colour is a rectangle of identical blocks, which says less than the placeholder the panels already fall back to. |
+
+Detection is deliberately conservative: `COLORTERM` is the only positive claim
+of 24-bit support that gets taken at its word, so a terminal announcing itself
+through `TERM` alone gets the 256-colour path even when it would in fact have
+managed truecolor. A coarser sprite is a much smaller cost than an unreadable
+one, and `--color=truecolor` is there for anyone who knows better.
+
+`NO_COLOR` is honoured, and `--color` outranks it — naming a depth on the
+command line answers the question the environment is being consulted about.
+With no colour to work with, the list cursor and the evolution highlight fall
+back to reverse video, so there is still always something showing where you are.
 
 ### Type matchups
 
@@ -237,11 +262,12 @@ Arguments:
   [NAME]  Open directly on this species, e.g. `pokeductor gengar`
 
 Options:
-      --lang <LANG>  Start in this UI language [possible values: en, tr, de, fr, es, it]
-      --clear-cache  Delete the on-disk cache and exit
-      --cache-dir    Print the cache directory and exit
-  -h, --help         Print help (see more with '--help')
-  -V, --version      Print version
+      --lang <LANG>   Start in this UI language [possible values: en, tr, de, fr, es, it]
+      --color <WHEN>  How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
+      --clear-cache   Delete the on-disk cache and exit
+      --cache-dir     Print the cache directory and exit
+  -h, --help          Print help (see more with '--help')
+  -V, --version       Print version
 ```
 
 `NAME` goes into the search box rather than through a parser of its own, so
@@ -261,6 +287,10 @@ box saying why.
 `--lang` outranks the language [the previous run left
 behind](#session-state) for this run, and being an ordinary choice like any
 made from the picker, it is what gets stored on the way out.
+
+`--color` overrides what [colour detection](#colour) concluded, in either
+direction: `--color=truecolor` on a terminal that never advertised it, or
+`--color=never` on one that did.
 
 The two cache commands answer the question this README used to answer with a
 path and a `rm -rf`. Both print what they touched:
@@ -287,6 +317,7 @@ through to disk.
 | `api.rs` | Async PokeAPI client, evolution-chain parser, sprite decode, translation. |
 | `cache.rs` | On-disk cache of every fetched response, for instant and offline starts. |
 | `cli.rs` | Argument parsing, and the commands that answer without a terminal. |
+| `color.rs` | Terminal colour-depth detection, and the per-frame degradation pass. |
 | `session.rs` | Party and preferences carried over from the previous run. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`) parsing. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
@@ -372,6 +403,36 @@ Area averaging rather than nearest-neighbour sampling is what keeps downscaled
 sprites smooth instead of leaving the hard outline pixels as ragged lines.
 Sprites are cached re-encoded as PNG rather than as raw RGBA: a few kilobytes
 compressed against ~36 KB flattened, and the decoder is already a dependency.
+
+### Colour depth
+
+Detection resolves once at startup — `COLORTERM`, then `TERM`, with `NO_COLOR`
+and `--color` on top — into a single `Depth` carried on the app. The renderer
+never sees it: every widget writes 24-bit colour as before, and the finished
+buffer is rewritten on its way out of `terminal.draw`, mapping each cell's
+foreground and background to a palette index or to nothing at all.
+
+Doing it over the buffer rather than at each call site is what makes it one rule
+instead of a condition threaded through nineteen hundred lines of rendering —
+and it catches the sprite cells for free, since by then they are ordinary
+coloured cells like any other.
+
+Quantization compares two candidates: the nearest colour in the xterm 6×6×6 cube
+and the nearest step on the 24-entry greyscale ramp. Both are needed because the
+ramp is far finer than the cube's diagonal, so a mid-grey has a near-exact match
+on one and a visible cast on the other. Every palette entry quantizes to itself,
+which is the invariant the tests pin down.
+
+One thing survives the loss of colour deliberately. The list cursor and the
+evolution highlight are written as a foreground/background pair *plus*
+`REVERSED` — which a coloured terminal simply swaps back, drawing exactly what
+it drew before, and a colourless one renders as reverse video. Written the
+usual way round the highlight bar would vanish under `--color=never`, and with
+it any way to tell where the cursor is.
+
+crossterm reads `NO_COLOR` itself and strips colour sequences when it is set, so
+an explicit `--color` also calls `force_color_output` to say which of the two
+answers won.
 
 ### Type and team analysis
 
