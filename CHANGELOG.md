@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 history, so they are summaries rather than the record kept as the work landed.
 Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
-## [Unreleased]
+## [0.4.0] - 2026-09-01
 
 ### Added
 
@@ -117,7 +117,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   Unicode half-blocks, evolution chains as connected cards, a language menu, and
   the retro colour palette.
 
-[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/77c1e8d...v0.3.0
 [0.2.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/94eadb8...77c1e8d

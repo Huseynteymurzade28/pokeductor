@@ -43,8 +43,8 @@ linked and carries no glibc floor, so it runs on distributions older than the
 machine it was built on. Both Linux builds link no system OpenSSL.
 
 ```bash
-tar xzf pokeductor-v0.3.1-x86_64-unknown-linux-musl.tar.gz
-./pokeductor-v0.3.1-x86_64-unknown-linux-musl/pokeductor
+tar xzf pokeductor-v0.4.0-x86_64-unknown-linux-musl.tar.gz
+./pokeductor-v0.4.0-x86_64-unknown-linux-musl/pokeductor
 ```
 
 ### With cargo
