@@ -10,6 +10,8 @@
 //! dex:1-151            every dex number in that range — generation 1
 //! type:water           every Water Pokemon
 //! type:water type:fly  Water *and* Flying — Gyarados, Mantine, ...
+//! ability:levitate     every Pokemon that can have Levitate
+//! egg:dragon           every species in the Dragon breeding group
 //! gen:1 gen:2          introduced in either generation
 //! gen:1 type:ghost ga  all three, combined
 //! ```
@@ -19,7 +21,7 @@
 
 use std::ops::RangeInclusive;
 
-use crate::models::PokemonEntry;
+use crate::models::{PokemonEntry, RosterKind, RosterTerm};
 
 /// A parsed search query. The default value matches everything.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -32,12 +34,14 @@ pub struct Query {
     /// instead of it: `2` should still find `porygon2`, and only the user
     /// knows which of the two they meant.
     pub text_dex: Option<u32>,
-    /// Types from `type:` terms, lowercased.
+    /// Membership terms — `type:`, `ability:`, `egg:` — each of which needs a
+    /// roster the caller fetches separately.
     ///
-    /// Combined with AND: a Pokemon must carry *every* one of them. That is
-    /// the useful reading, because searching two types is how you look for a
-    /// specific dual typing.
-    pub types: Vec<String>,
+    /// Combined with AND, across kinds as well as within one: a Pokemon must
+    /// satisfy *every* term. That is the useful reading, because searching two
+    /// types is how you look for a specific dual typing, and pairing a type
+    /// with an ability is how you narrow rather than widen.
+    pub rosters: Vec<RosterTerm>,
     /// Generations from `gen:` terms.
     ///
     /// Combined with OR — unlike types, since a species belongs to exactly one
@@ -57,8 +61,19 @@ impl Query {
 
         for token in raw.split_whitespace() {
             match token.split_once(':') {
-                Some(("type" | "t", value)) if !value.is_empty() => {
-                    query.types.push(value.to_lowercase());
+                // A roster term with nothing after the colon is one the user is
+                // still typing, and is dropped for the same reason `gen:` is
+                // below: filtering on the empty string, or falling back to
+                // searching names for "type:", both answer a question nobody
+                // asked.
+                Some(("type" | "t", value)) => {
+                    query.push_roster(RosterKind::Type, value);
+                }
+                Some(("ability" | "a", value)) => {
+                    query.push_roster(RosterKind::Ability, value);
+                }
+                Some(("egg" | "e", value)) => {
+                    query.push_roster(RosterKind::EggGroup, &egg_group_slug(value));
                 }
                 // `gen:` with nothing usable after it is still a filter the
                 // user is in the middle of typing, not a name to search for —
@@ -85,8 +100,20 @@ impl Query {
         query
     }
 
-    /// Whether `entry` satisfies everything except the type terms, which need
-    /// a roster the caller has to supply separately.
+    /// Records a roster term, ignoring an empty value and any repeat of a term
+    /// already present — `type:fire type:fire` narrows no further than one.
+    fn push_roster(&mut self, kind: RosterKind, value: &str) {
+        if value.is_empty() {
+            return;
+        }
+        let term = RosterTerm::new(kind, value.to_lowercase());
+        if !self.rosters.contains(&term) {
+            self.rosters.push(term);
+        }
+    }
+
+    /// Whether `entry` satisfies everything except the roster terms, which need
+    /// membership lists the caller has to supply separately.
     pub fn matches_entry(&self, entry: &PokemonEntry) -> bool {
         // An alternate form has no dex number and no generation to test, so
         // both filters exclude it rather than guessing which species it
@@ -117,6 +144,24 @@ impl Query {
             }
         }
         true
+    }
+}
+
+/// Translates the breeding groups' in-game names into the slugs PokeAPI uses
+/// for them, which are a layer of history older: the Grass group is `plant`
+/// there, Field is `ground`, and so on. Anything without a translation is
+/// passed through, so the API's own spelling keeps working.
+fn egg_group_slug(value: &str) -> String {
+    let lowered = value.to_lowercase();
+    match lowered.as_str() {
+        "grass" => "plant".to_string(),
+        "field" => "ground".to_string(),
+        "human-like" | "humanlike" | "human" => "humanshape".to_string(),
+        "amorphous" => "indeterminate".to_string(),
+        "water-1" => "water1".to_string(),
+        "water-2" => "water2".to_string(),
+        "water-3" => "water3".to_string(),
+        _ => lowered,
     }
 }
 
@@ -152,6 +197,12 @@ mod tests {
         vec![range]
     }
 
+    /// The roster term `type:ghost` parses to, spelled once because several
+    /// tests need it.
+    fn ghost() -> RosterTerm {
+        RosterTerm::new(RosterKind::Type, "ghost")
+    }
+
     /// The two fields a filter reads, and nothing else the list response
     /// carries.
     fn entry(name: &str, id: u32) -> PokemonEntry {
@@ -170,14 +221,14 @@ mod tests {
     fn terms_are_lifted_out_of_the_text() {
         let query = Query::parse("gen:1 type:Ghost ga");
         assert_eq!(query.text, "ga");
-        assert_eq!(query.types, ["ghost"]);
+        assert_eq!(query.rosters, [ghost()]);
         assert_eq!(query.generations, [1]);
     }
 
     #[test]
     fn short_forms_are_accepted() {
         let query = Query::parse("t:fire g:2 d:25");
-        assert_eq!(query.types, ["fire"]);
+        assert_eq!(query.rosters, [RosterTerm::new(RosterKind::Type, "fire")]);
         assert_eq!(query.generations, [2]);
         assert_eq!(query.dex, one_range(25..=25));
     }
@@ -185,7 +236,13 @@ mod tests {
     #[test]
     fn repeated_terms_accumulate() {
         let query = Query::parse("type:water type:flying gen:1 gen:2");
-        assert_eq!(query.types, ["water", "flying"]);
+        assert_eq!(
+            query.rosters,
+            [
+                RosterTerm::new(RosterKind::Type, "water"),
+                RosterTerm::new(RosterKind::Type, "flying"),
+            ]
+        );
         assert_eq!(query.generations, [1, 2]);
     }
 
@@ -193,7 +250,56 @@ mod tests {
     fn unrecognised_terms_stay_searchable_text() {
         let query = Query::parse("colour:red");
         assert_eq!(query.text, "colour:red");
-        assert!(query.types.is_empty());
+        assert!(query.rosters.is_empty());
+    }
+
+    #[test]
+    fn abilities_and_egg_groups_are_terms_of_their_own() {
+        let query = Query::parse("ability:Levitate egg:dragon");
+        assert_eq!(
+            query.rosters,
+            [
+                RosterTerm::new(RosterKind::Ability, "levitate"),
+                RosterTerm::new(RosterKind::EggGroup, "dragon"),
+            ]
+        );
+        assert!(query.text.is_empty());
+    }
+
+    #[test]
+    fn ability_and_egg_have_short_forms_too() {
+        let query = Query::parse("a:levitate e:dragon");
+        assert_eq!(
+            query.rosters,
+            [
+                RosterTerm::new(RosterKind::Ability, "levitate"),
+                RosterTerm::new(RosterKind::EggGroup, "dragon"),
+            ]
+        );
+    }
+
+    #[test]
+    fn egg_groups_accept_their_in_game_names() {
+        let slug = |raw: &str| Query::parse(raw).rosters[0].value.clone();
+        assert_eq!(slug("egg:grass"), "plant");
+        assert_eq!(slug("egg:Field"), "ground");
+        assert_eq!(slug("egg:human-like"), "humanshape");
+        assert_eq!(slug("egg:amorphous"), "indeterminate");
+        assert_eq!(slug("egg:water-1"), "water1");
+        // The API's own spelling still works.
+        assert_eq!(slug("egg:monster"), "monster");
+    }
+
+    #[test]
+    fn a_repeated_roster_term_is_recorded_once() {
+        assert_eq!(Query::parse("type:ghost t:Ghost").rosters, [ghost()]);
+    }
+
+    #[test]
+    fn a_half_typed_roster_term_filters_nothing_extra() {
+        assert_eq!(Query::parse("type:"), Query::default());
+        assert_eq!(Query::parse("ability:"), Query::default());
+        assert_eq!(Query::parse("egg:"), Query::default());
     }
 
     #[test]

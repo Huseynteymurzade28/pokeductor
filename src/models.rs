@@ -42,6 +42,41 @@ impl PokemonEntry {
     }
 }
 
+/// A property of a species that the master list cannot answer on its own.
+///
+/// The list response carries a name and an id and nothing else, so a filter
+/// like `type:ghost` has to be resolved against a *roster*: the membership
+/// list an endpoint returns when asked which species carry that property. One
+/// request answers a whole roster, and rosters only ever grow with a new
+/// generation, so each is fetched at most once per install.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RosterKind {
+    /// `type:ghost` — every Pokemon of that type.
+    Type,
+    /// `ability:levitate` — every Pokemon that can have that ability, hidden
+    /// slots included.
+    Ability,
+    /// `egg:dragon` — every species in that breeding group.
+    EggGroup,
+}
+
+/// One roster filter: a kind and the value asked of it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RosterTerm {
+    pub kind: RosterKind,
+    /// The API slug, lowercased — `"ghost"`, `"levitate"`, `"monster"`.
+    pub value: String,
+}
+
+impl RosterTerm {
+    pub fn new(kind: RosterKind, value: impl Into<String>) -> Self {
+        Self {
+            kind,
+            value: value.into(),
+        }
+    }
+}
+
 /// Highest National Pokedex number PokeAPI currently carries.
 const MAX_DEX_NUMBER: u32 = 1025;
 
@@ -178,6 +213,102 @@ impl SpriteVariant {
 }
 
 /// Fully resolved details for one Pokemon, ready to render.
+/// How a Pokemon comes to know a move, in the games this app reports on.
+///
+/// PokeAPI names a few more — `form-change`, `train`, the transfer-only ones —
+/// which say nothing about a learnset and are dropped on the way in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LearnMethod {
+    /// Learned on levelling up, at [`LearnedMove::level`].
+    LevelUp,
+    /// Taught from a TM/HM.
+    Machine,
+    /// Inherited by breeding.
+    Egg,
+    /// Taught by a move tutor.
+    Tutor,
+}
+
+impl LearnMethod {
+    pub fn from_api(slug: &str) -> Option<Self> {
+        match slug {
+            "level-up" => Some(LearnMethod::LevelUp),
+            "machine" => Some(LearnMethod::Machine),
+            "egg" => Some(LearnMethod::Egg),
+            "tutor" => Some(LearnMethod::Tutor),
+            _ => None,
+        }
+    }
+
+    /// Order the methods are grouped in on the moves card: the level-up set
+    /// first, because it is the one that describes the species rather than the
+    /// player's bag.
+    pub fn order(self) -> u8 {
+        match self {
+            LearnMethod::LevelUp => 0,
+            LearnMethod::Egg => 1,
+            LearnMethod::Machine => 2,
+            LearnMethod::Tutor => 3,
+        }
+    }
+}
+
+/// One move in a species' learnset, as the species record carries it: which
+/// move, how it is learned, and at what level when that is the answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LearnedMove {
+    /// API slug, e.g. `"shadow-ball"`.
+    pub name: String,
+    pub method: LearnMethod,
+    /// Level it is learned at, for [`LearnMethod::LevelUp`] only. Zero
+    /// elsewhere — and for the moves a species starts out knowing, which the
+    /// games and PokeAPI both record as level zero.
+    pub level: u32,
+}
+
+/// A move's own record, fetched per move rather than per species: a learnset
+/// runs to eighty entries or more, and asking for all of them to open a card
+/// nobody may scroll would cost eighty requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoveInfo {
+    /// API slug, matching [`LearnedMove::name`].
+    pub name: String,
+    /// Display name per language, e.g. `de -> "Spukball"`.
+    pub names: HashMap<String, String>,
+    /// Short description per language.
+    pub flavors: HashMap<String, String>,
+    /// Elemental type, lowercased — the same vocabulary as
+    /// [`PokemonDetail::types`], so the type palette applies unchanged.
+    pub type_name: String,
+    /// `"physical"`, `"special"` or `"status"`.
+    pub damage_class: String,
+    /// Absent for status moves, and for the few whose power is situational.
+    pub power: Option<u16>,
+    /// Absent for the moves that cannot miss.
+    pub accuracy: Option<u16>,
+    pub pp: Option<u16>,
+}
+
+impl MoveInfo {
+    /// Display name in the requested language, falling back to English and
+    /// then to a title-cased slug.
+    pub fn name_for(&self, code: &str) -> String {
+        self.names
+            .get(code)
+            .or_else(|| self.names.get("en"))
+            .cloned()
+            .unwrap_or_else(|| title_case(&self.name))
+    }
+
+    /// Description in the requested language, falling back to English.
+    pub fn flavor_for(&self, code: &str) -> Option<&str> {
+        self.flavors
+            .get(code)
+            .or_else(|| self.flavors.get("en"))
+            .map(String::as_str)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PokemonDetail {
     /// Raw API name (lowercase). Use [`title_case`] for display.
@@ -211,6 +342,15 @@ pub struct PokemonDetail {
     /// Pokedex flavor-text blurbs, cleaned of control characters, keyed by
     /// PokeAPI language code.
     pub flavors: HashMap<String, String>,
+    /// The learnset from the newest games this species appears in, grouped by
+    /// method and then in reading order within each group. Carried on the
+    /// species record because `/pokemon/{name}` already answers with it — the
+    /// moves card costs no request of its own to open.
+    pub moves: Vec<LearnedMove>,
+    /// Which games [`moves`](Self::moves) is the learnset from, as PokeAPI's
+    /// version-group slug (`"scarlet-violet"`). Shown on the card, because a
+    /// learnset means little without knowing which games it belongs to.
+    pub learnset_games: Option<String>,
 }
 
 impl PokemonDetail {
@@ -586,6 +726,8 @@ mod tests {
             shiny_sprite_url: shiny.map(str::to_string),
             genera: HashMap::new(),
             flavors: HashMap::new(),
+            moves: Vec::new(),
+            learnset_games: None,
         }
     }
 

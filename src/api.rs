@@ -11,8 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 
 use crate::models::{
-    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail,
-    PokemonEntry, Sprite, SpriteVariant, Stat, StatKind,
+    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, LearnMethod,
+    LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterKind, RosterTerm, Sprite,
+    SpriteVariant, Stat, StatKind,
 };
 use crate::retry::{self, FailureKind};
 
@@ -182,18 +183,149 @@ pub async fn fetch_pokemon_list(client: &reqwest::Client) -> Result<Vec<PokemonE
     Ok(entries)
 }
 
-/// Every name PokeAPI files under a given type, e.g. every Water Pokemon.
+/// Every name PokeAPI files under one roster — every Water Pokemon, everything
+/// that can have Levitate, every species in the Dragon breeding group.
 ///
-/// One request answers a whole `type:` filter, which is why the sidebar can
-/// offer type filtering at all: the alternative would be fetching all 1300
-/// species just to read their typing.
-pub async fn fetch_type_members(
+/// One request answers a whole filter, which is why the sidebar can offer these
+/// at all: the alternative would be fetching all 1300 species just to read a
+/// field off each. The three endpoints differ only in where they bury the
+/// names, which is the whole reason this is a match rather than one request.
+pub async fn fetch_roster(
     client: &reqwest::Client,
-    type_name: &str,
+    term: &RosterTerm,
 ) -> Result<Vec<String>, ApiError> {
-    let url = format!("{BASE_URL}/type/{type_name}");
-    let raw: RawType = get_json(client, &url).await?;
-    Ok(raw.pokemon.into_iter().map(|p| p.pokemon.name).collect())
+    let value = &term.value;
+    match term.kind {
+        RosterKind::Type => {
+            let url = format!("{BASE_URL}/type/{value}");
+            let raw: RawType = get_json(client, &url).await?;
+            Ok(raw.pokemon.into_iter().map(|p| p.pokemon.name).collect())
+        }
+        RosterKind::Ability => {
+            let url = format!("{BASE_URL}/ability/{value}");
+            let raw: RawAbilityMembers = get_json(client, &url).await?;
+            Ok(raw.pokemon.into_iter().map(|p| p.pokemon.name).collect())
+        }
+        // Egg groups are recorded against *species* rather than against the
+        // forms the list also carries, so an alternate form is never in one.
+        // That matches how `dex:` and `gen:` treat forms, which have no
+        // species-level answer to give either.
+        RosterKind::EggGroup => {
+            let url = format!("{BASE_URL}/egg-group/{value}");
+            let raw: RawEggGroup = get_json(client, &url).await?;
+            Ok(raw.pokemon_species.into_iter().map(|s| s.name).collect())
+        }
+    }
+}
+
+/// The two version groups whose ids sit out of chronological order: PokeAPI
+/// appended the Japanese Generation I releases long after the games they belong
+/// beside, so their ids are higher than modern ones. Skipping them is what lets
+/// [`learnset`] read "newest" straight off the id.
+const OUT_OF_ORDER_VERSION_GROUPS: [&str; 2] = ["red-green-japan", "blue-japan"];
+
+/// The newest games a species has a learnset in, as `(version group id, slug)`.
+///
+/// "Newest" is the highest version-group id that teaches *something* by
+/// levelling up. The level-up test matters: the most recent groups include ones
+/// like `champions`, which files a species' whole movepool under a method that
+/// carries no level and so describes no learnset at all.
+fn newest_version_group(raw: &[RawMoveSlot]) -> Option<(u32, String)> {
+    raw.iter()
+        .flat_map(|slot| &slot.version_group_details)
+        .filter(|detail| {
+            detail.move_learn_method.name == "level-up"
+                && !OUT_OF_ORDER_VERSION_GROUPS.contains(&detail.version_group.name.as_str())
+        })
+        .map(|detail| {
+            (
+                id_from_url(&detail.version_group.url),
+                detail.version_group.name.clone(),
+            )
+        })
+        .max_by_key(|(id, _)| *id)
+}
+
+/// Reduces the wall of per-game learn data on a species record to one coherent
+/// learnset: the one from the newest games it appears in.
+///
+/// PokeAPI repeats every move once per version group, which for an old species
+/// is twenty-odd copies of the same entry — showing them all would be unusable,
+/// and merging them would invent a movepool no game has. Picking the newest is
+/// the same choice the evolution panel makes in showing the current-generation
+/// route. Which games that is comes from [`newest_version_group`].
+fn learnset(raw: Vec<RawMoveSlot>) -> Vec<LearnedMove> {
+    let Some((newest, _)) = newest_version_group(&raw) else {
+        return Vec::new();
+    };
+
+    let mut moves: Vec<LearnedMove> = raw
+        .into_iter()
+        .filter_map(|slot| {
+            // A move can be listed twice for one version group — learned by
+            // levelling *and* from a machine — and the first listing wins, which
+            // is the level-up one wherever both exist.
+            let detail = slot
+                .version_group_details
+                .iter()
+                .find(|detail| id_from_url(&detail.version_group.url) == newest)?;
+            Some(LearnedMove {
+                name: slot.move_.name,
+                method: LearnMethod::from_api(&detail.move_learn_method.name)?,
+                level: detail.level_learned_at,
+            })
+        })
+        .collect();
+
+    // Level-up moves in the order they are learned, everything else
+    // alphabetically — the games print a TM list sorted by number, which we do
+    // not carry, and a name is the next most findable thing.
+    moves.sort_by(|a, b| {
+        a.method
+            .order()
+            .cmp(&b.method.order())
+            .then(a.level.cmp(&b.level))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    moves
+}
+
+/// Fetches one move's own record: its typing, category and numbers, plus the
+/// localized name and description the card shows.
+pub async fn fetch_move(client: &reqwest::Client, name: &str) -> Result<MoveInfo, ApiError> {
+    let url = format!("{BASE_URL}/move/{name}");
+    let raw: RawMove = get_json(client, &url).await?;
+
+    let mut names = HashMap::new();
+    for n in &raw.names {
+        if CARD_LANGS.contains(&n.language.name.as_str()) {
+            names
+                .entry(n.language.name.clone())
+                .or_insert_with(|| n.name.clone());
+        }
+    }
+
+    // One entry per game per language; the first is a fine representative,
+    // exactly as for abilities and species flavor text.
+    let mut flavors = HashMap::new();
+    for e in &raw.flavor_text_entries {
+        if CARD_LANGS.contains(&e.language.name.as_str()) {
+            flavors
+                .entry(e.language.name.clone())
+                .or_insert_with(|| clean_flavor(&e.flavor_text));
+        }
+    }
+
+    Ok(MoveInfo {
+        name: raw.name,
+        names,
+        flavors,
+        type_name: raw.type_.name,
+        damage_class: raw.damage_class.name,
+        power: raw.power,
+        accuracy: raw.accuracy,
+        pp: raw.pp,
+    })
 }
 
 /// Reads the trailing numeric id out of a PokeAPI resource URL, which always
@@ -385,6 +517,8 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         shiny_sprite_url: raw.sprites.front_shiny,
         genera: HashMap::new(),
         flavors: HashMap::new(),
+        learnset_games: newest_version_group(&raw.moves).map(|(_, name)| name),
+        moves: learnset(raw.moves),
     })
 }
 
@@ -553,30 +687,48 @@ struct RawAbilitySlot {
 #[derive(serde::Deserialize)]
 struct RawAbility {
     name: String,
-    names: Vec<RawAbilityName>,
-    flavor_text_entries: Vec<RawAbilityFlavor>,
+    names: Vec<RawLocalizedName>,
+    flavor_text_entries: Vec<RawLocalizedFlavor>,
 }
 
+/// A display name in one language. Abilities and moves both answer with a list
+/// of these.
 #[derive(serde::Deserialize)]
-struct RawAbilityName {
+struct RawLocalizedName {
     name: String,
     language: NamedResource,
 }
 
+/// A flavor-text entry in one language, per game. Same shape everywhere it
+/// appears.
 #[derive(serde::Deserialize)]
-struct RawAbilityFlavor {
+struct RawLocalizedFlavor {
     flavor_text: String,
     language: NamedResource,
 }
 
 #[derive(serde::Deserialize)]
 struct RawType {
-    pokemon: Vec<RawTypeMember>,
+    pokemon: Vec<RawMember>,
+}
+
+/// One row of a roster that lists Pokemon rather than species — the shape both
+/// `/type/{name}` and `/ability/{name}` wrap their members in.
+#[derive(serde::Deserialize)]
+struct RawMember {
+    pokemon: NamedResource,
 }
 
 #[derive(serde::Deserialize)]
-struct RawTypeMember {
-    pokemon: NamedResource,
+struct RawAbilityMembers {
+    #[serde(default)]
+    pokemon: Vec<RawMember>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawEggGroup {
+    #[serde(default)]
+    pokemon_species: Vec<NamedResource>,
 }
 
 #[derive(serde::Deserialize)]
@@ -591,6 +743,39 @@ struct RawPokemon {
     stats: Vec<RawStatSlot>,
     sprites: RawSprites,
     species: NamedResource,
+    #[serde(default)]
+    moves: Vec<RawMoveSlot>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawMoveSlot {
+    #[serde(rename = "move")]
+    move_: NamedResource,
+    #[serde(default)]
+    version_group_details: Vec<RawMoveVersion>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawMoveVersion {
+    #[serde(default)]
+    level_learned_at: u32,
+    version_group: NamedResource,
+    move_learn_method: NamedResource,
+}
+
+#[derive(serde::Deserialize)]
+struct RawMove {
+    name: String,
+    #[serde(default)]
+    names: Vec<RawLocalizedName>,
+    #[serde(default)]
+    flavor_text_entries: Vec<RawLocalizedFlavor>,
+    #[serde(rename = "type")]
+    type_: NamedResource,
+    damage_class: NamedResource,
+    power: Option<u16>,
+    accuracy: Option<u16>,
+    pp: Option<u16>,
 }
 
 #[derive(serde::Deserialize)]
@@ -747,6 +932,40 @@ mod tests {
             tree.leaf_count()
         );
 
+        // The learnset rides along on the species record, and the version group
+        // it was read from has to be one that teaches by levelling.
+        assert!(!detail.moves.is_empty(), "eevee learns moves");
+        assert!(detail.learnset_games.is_some());
+        assert!(detail
+            .moves
+            .iter()
+            .any(|m| m.method == LearnMethod::LevelUp && m.level > 0));
+
+        let shadow_ball = fetch_move(&client, "shadow-ball")
+            .await
+            .expect("move fetch");
+        assert_eq!(shadow_ball.type_name, "ghost");
+        assert_eq!(shadow_ball.damage_class, "special");
+        assert!(shadow_ball.power.is_some() && shadow_ball.pp.is_some());
+        assert!(shadow_ball.flavor_for("en").is_some());
+
+        // One roster of each kind, since they read three differently shaped
+        // payloads for the same answer.
+        for (kind, value, expected) in [
+            (RosterKind::Type, "ghost", "gengar"),
+            // Haunter rather than Gengar: Gengar lost Levitate in Generation
+            // VII, and PokeAPI lists what a species has now.
+            (RosterKind::Ability, "levitate", "haunter"),
+            (RosterKind::EggGroup, "plant", "bulbasaur"),
+        ] {
+            let term = RosterTerm::new(kind, value);
+            let members = fetch_roster(&client, &term).await.expect("roster fetch");
+            assert!(
+                members.iter().any(|m| m == expected),
+                "{value} roster should contain {expected}"
+            );
+        }
+
         // The fact the evolution-card fix rests on: a species whose default
         // form is named after that form resolves to the form's name, which is
         // the only one `/pokemon` will answer to.
@@ -776,6 +995,107 @@ mod tests {
             "a 404 took {:?}, so it was retried",
             started.elapsed()
         );
+    }
+
+    /// Builds one entry of a `/pokemon` payload's `moves` list.
+    fn move_slot(name: &str, details: &[(u32, &str, &str, u32)]) -> RawMoveSlot {
+        let rows: Vec<String> = details
+            .iter()
+            .map(|(id, group, method, level)| {
+                format!(
+                    r#"{{
+                      "level_learned_at": {level},
+                      "version_group": {{ "name": "{group}", "url": "https://pokeapi.co/api/v2/version-group/{id}/" }},
+                      "move_learn_method": {{ "name": "{method}", "url": "" }}
+                    }}"#
+                )
+            })
+            .collect();
+        serde_json::from_str(&format!(
+            r#"{{
+              "move": {{ "name": "{name}", "url": "" }},
+              "version_group_details": [{}]
+            }}"#,
+            rows.join(",")
+        ))
+        .expect("move slot parses")
+    }
+
+    #[test]
+    fn a_learnset_is_read_from_the_newest_games_alone() {
+        // The same move in three generations: only the newest listing survives,
+        // and it brings that generation's level with it.
+        let raw = vec![move_slot(
+            "shadow-ball",
+            &[
+                (1, "red-blue", "machine", 0),
+                (15, "x-y", "level-up", 45),
+                (25, "scarlet-violet", "level-up", 48),
+            ],
+        )];
+        let learned = learnset(raw);
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].level, 48);
+        assert_eq!(learned[0].method, LearnMethod::LevelUp);
+    }
+
+    #[test]
+    fn the_newest_games_are_the_newest_that_teach_by_levelling() {
+        // `champions` is newer than `scarlet-violet` and files a whole movepool
+        // under `train`, which carries no level and so describes no learnset.
+        // Reading it as the newest games would empty the card.
+        let raw = vec![
+            move_slot(
+                "hex",
+                &[
+                    (25, "scarlet-violet", "level-up", 24),
+                    (32, "champions", "train", 0),
+                ],
+            ),
+            move_slot("facade", &[(32, "champions", "train", 0)]),
+        ];
+        let learned = learnset(raw);
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].name, "hex");
+    }
+
+    #[test]
+    fn the_japanese_generation_one_releases_do_not_count_as_newest() {
+        // Their version-group ids were appended long after the games they sit
+        // beside, so id order alone would hand Gengar a Red/Green learnset.
+        let raw = vec![move_slot(
+            "night-shade",
+            &[
+                (25, "scarlet-violet", "level-up", 30),
+                (28, "red-green-japan", "level-up", 21),
+            ],
+        )];
+        let learned = learnset(raw);
+        assert_eq!(learned[0].level, 30);
+    }
+
+    #[test]
+    fn a_learnset_leads_with_the_level_up_moves_in_order() {
+        let raw = vec![
+            move_slot("focus-blast", &[(25, "scarlet-violet", "machine", 0)]),
+            move_slot("hex", &[(25, "scarlet-violet", "level-up", 24)]),
+            move_slot("acid-spray", &[(25, "scarlet-violet", "machine", 0)]),
+            move_slot("clear-smog", &[(25, "scarlet-violet", "egg", 0)]),
+            move_slot("lick", &[(25, "scarlet-violet", "level-up", 1)]),
+        ];
+        let learned = learnset(raw);
+        let names: Vec<&str> = learned.iter().map(|m| m.name.as_str()).collect();
+        // Level-up first and by level, then egg, then machines alphabetically.
+        assert_eq!(
+            names,
+            ["lick", "hex", "clear-smog", "acid-spray", "focus-blast"]
+        );
+    }
+
+    #[test]
+    fn a_species_with_no_level_up_data_has_no_learnset_to_show() {
+        let raw = vec![move_slot("facade", &[(32, "champions", "train", 0)])];
+        assert!(learnset(raw).is_empty());
     }
 
     /// Parses just the `varieties` list out of a `/pokemon-species` payload,

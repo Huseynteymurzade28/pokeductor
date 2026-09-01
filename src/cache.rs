@@ -18,13 +18,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
+    AbilityInfo, EvolutionTree, MoveInfo, PokemonDetail, PokemonEntry, RosterKind, RosterTerm,
+    Sprite, SpriteVariant,
 };
 
 /// Bumped whenever the cached representation changes shape. Files written by
 /// an older build are treated as misses and overwritten on the next fetch,
 /// which saves us from ever deserializing stale data into the wrong struct.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 /// How long the master species list stays fresh. Individual records never
 /// expire — PokeAPI does not rewrite history, it only appends new species, and
@@ -120,15 +121,30 @@ pub async fn store_ability(name: &str, info: &AbilityInfo) {
     write_json(&path, info).await;
 }
 
-/// The membership list for a type (`"water"`, `"ghost"`, ...), if cached.
-/// A type's roster only grows with a new generation, so it never expires.
-pub async fn load_type_members(type_name: &str) -> Option<Vec<String>> {
-    let path = type_path(type_name)?;
+/// One move's record, if cached. A move's typing and numbers are as fixed as a
+/// species' are, so this never expires either.
+pub async fn load_move(name: &str) -> Option<MoveInfo> {
+    let path = move_path(name)?;
     read_json(&path).await
 }
 
-pub async fn store_type_members(type_name: &str, members: &[String]) {
-    let Some(path) = type_path(type_name) else {
+pub async fn store_move(name: &str, info: &MoveInfo) {
+    let Some(path) = move_path(name) else {
+        return;
+    };
+    write_json(&path, info).await;
+}
+
+/// The membership list behind one filter term — `type:water`, `egg:monster`,
+/// `ability:levitate` — if cached. A roster only grows with a new generation,
+/// so it never expires.
+pub async fn load_roster(term: &RosterTerm) -> Option<Vec<String>> {
+    let path = roster_path(term)?;
+    read_json(&path).await
+}
+
+pub async fn store_roster(term: &RosterTerm, members: &[String]) {
+    let Some(path) = roster_path(term) else {
         return;
     };
     write_json(&path, &members.to_vec()).await;
@@ -290,11 +306,24 @@ fn ability_path(name: &str) -> Option<PathBuf> {
     )
 }
 
-fn type_path(type_name: &str) -> Option<PathBuf> {
+/// Where one roster is stored. Each kind gets its own directory, because the
+/// same word means different things to two of them — `poison` is a type and an
+/// ability both — and because `abilities/` already holds ability *descriptions*
+/// rather than membership lists.
+fn move_path(name: &str) -> Option<PathBuf> {
+    Some(root()?.join("moves").join(format!("{}.json", slug(name))))
+}
+
+fn roster_path(term: &RosterTerm) -> Option<PathBuf> {
+    let dir = match term.kind {
+        RosterKind::Type => "types",
+        RosterKind::Ability => "ability-members",
+        RosterKind::EggGroup => "egg-groups",
+    };
     Some(
         root()?
-            .join("types")
-            .join(format!("{}.json", slug(type_name))),
+            .join(dir)
+            .join(format!("{}.json", slug(&term.value))),
     )
 }
 

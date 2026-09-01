@@ -96,15 +96,17 @@ line](#command-line) for the full set of flags.
 
 The sidebar lists all 1302 entries PokeAPI serves, with National Pokédex
 numbers. A bare number looks up that Pokédex number — `25` finds Pikachu —
-and beyond plain name matching the search box takes `dex:`, `type:` and `gen:`
-terms:
+and beyond plain name matching the search box takes `dex:`, `type:`, `ability:`,
+`egg:` and `gen:` terms:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-search.png" alt="Searching for type:ghost gen:1, narrowing the list to Gastly, Haunter and Gengar" width="900">
 
-`type:` terms combine with **AND**, so `type:water type:flying` finds the
-dual-typed ones. `gen:` and `dex:` terms combine with **OR**, since a species
-belongs to exactly one generation and carries exactly one number, so requiring
-two at once could only ever match nothing.
+`type:`, `ability:` and `egg:` terms combine with **AND**, within one kind and
+across kinds: `type:water type:flying` finds the dual-typed ones, and
+`type:dragon ability:levitate` finds the two conditions met at once. `gen:` and
+`dex:` terms combine with **OR**, since a species belongs to exactly one
+generation and carries exactly one number, so requiring two at once could only
+ever match nothing.
 Anything that is not a recognised term is treated as ordinary text, so a stray
 colon degrades to a name search instead of an error. `S` cycles the sort between
 Pokédex order and alphabetical; the highlighted species stays under the cursor
@@ -122,6 +124,26 @@ Ability *names* arrive inside the payload every species fetch pulls down
 already, so listing them on the info card costs nothing. Their descriptions live
 behind one request each and are cached permanently. Hidden abilities are marked:
 they are only obtainable by special means, which is worth knowing at a glance.
+
+### Moves
+
+`M` opens the learnset: what the species learns, how, and at what level, with
+each move's type, category, power, accuracy and PP, and a description of the
+one under the cursor.
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-moves.png" alt="Gengar's moves card: level-up moves from Scarlet and Violet followed by its TMs, each with type, category, power, accuracy and PP" width="900">
+
+The rows come free with the species record — `/pokemon/{name}` already answers
+with them — so the card costs no request to open. What it does not carry is what
+each move *does*, which lives on `/move/{name}`; those are fetched a screenful at
+a time as you scroll, and cached permanently, so a species read twice is read
+offline the second time.
+
+PokeAPI repeats a learnset once per set of games, which for a Generation I
+species is twenty-odd copies of the same list. The card shows one: the newest
+games the species appears in, named beside its own name so there is no doubt
+which. Level-up moves come first and in the order they are learned, then egg
+moves, then TMs and tutor moves alphabetically.
 
 ### Evolution chains
 
@@ -241,6 +263,7 @@ no refetch:
 | | `E` | Focus the evolution panel |
 | | `T` | Type matchup card |
 | | `A` | Ability card |
+| | `M` | Moves card |
 | | `X` | Toggle shiny artwork |
 | | `Space` | Add / remove from the party |
 | | `P` | Party card |
@@ -255,6 +278,9 @@ no refetch:
 | | `Enter` | Jump to the highlighted stage |
 | | `X` | Toggle shiny artwork |
 | | `Esc` · `Tab` | Back to the list |
+| **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
+| | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
+| | `M` · `Esc` | Close |
 | **Any card** | `Esc` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
 
@@ -268,13 +294,22 @@ no refetch:
 | `dex:1-151` | every number in that range — the Kanto dex |
 | `type:water` | every Water Pokémon (`t:` also works) |
 | `type:water type:flying` | Water **and** Flying — Gyarados, Mantine, … |
+| `ability:levitate` | every Pokémon that can have Levitate (`a:` also works) |
+| `egg:dragon` | every species in the Dragon breeding group (`e:` also works) |
 | `gen:1` | introduced in Generation I (`g:` also works) |
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
 
 `dex:` and `gen:` filters skip alternate forms such as `raichu-alola`: their
 ids sit above 10000 and are not dex numbers, so there is nothing to test a range
-or derive a generation from. A bare number still reaches them by name.
+or derive a generation from. A bare number still reaches them by name. `egg:`
+skips them too, for the same kind of reason: breeding groups are recorded
+against species rather than against forms.
+
+Breeding groups answer to their in-game names as well as to PokeAPI's older
+spellings, so `egg:grass`, `egg:field`, `egg:human-like` and `egg:amorphous`
+reach the groups the API files under `plant`, `ground`, `humanshape` and
+`indeterminate`.
 
 ---
 
@@ -376,11 +411,14 @@ In memory, a given Pokémon is fetched at most once per session. On disk, under
 `$XDG_CACHE_HOME/pokeductor` (falling back to `~/.cache/pokeductor`):
 
 ```
-list.json                 master species list, 30-day TTL
-species/<name>.json       details + parsed evolution tree
-sprites/<name>.png        decoded artwork, re-encoded as PNG
-types/<type>.json         roster backing a type: filter
-abilities/<slug>.json     localized ability name and description
+list.json                    master species list, 30-day TTL
+species/<name>.json          details + parsed evolution tree
+sprites/<name>.png           decoded artwork, re-encoded as PNG
+types/<type>.json            roster backing a type: filter
+ability-members/<slug>.json  roster backing an ability: filter
+egg-groups/<slug>.json       roster backing an egg: filter
+abilities/<slug>.json        localized ability name and description
+moves/<slug>.json            one move's typing, numbers and description
 translations/<name>.<lang>.txt
 ```
 
@@ -492,16 +530,39 @@ belong to multipliers, and abilities keyed to a class of move rather than a type
 ### Filtering and sorting
 
 Generations are derived locally from a fixed table of dex ranges — released
-generations never gain or lose species — so `gen:` costs no request. `type:`
-needs a roster, but `/type/{name}` answers a whole filter in one request that is
-then cached permanently; the alternative would be fetching ~1300 species just to
-read their typings.
+generations never gain or lose species — so `gen:` costs no request. `type:`,
+`ability:` and `egg:` each need a *roster*: the membership list `/type/{name}`,
+`/ability/{name}` and `/egg-group/{name}` return. One request answers a whole
+filter and is then cached permanently, which is what makes these filters
+affordable at all — the alternative would be fetching ~1300 species just to read
+one field off each. Rosters are stored a directory per kind, since the same word
+can name two of them: `poison` is a type and an ability both.
 
 Sorting is deliberately limited to keys the list response already carries. Each
 entry's id is parsed out of the URL PokeAPI returns, which is what puts dex
 numbers in the sidebar for free and gives the generation filter something to
 work from. Ordering by base-stat total would mean those same ~1300 fetches for a
 single keypress.
+
+### Learnsets
+
+A species record carries every move it has ever learned, listed once per set of
+games — for a Generation I species that is twenty-odd copies of the same entry.
+Showing them all would be unreadable and merging them would invent a movepool no
+game has, so one is chosen: the newest games the species appears in, which is the
+same reading the evolution panel takes in showing the current-generation route.
+
+"Newest" is the highest version-group id that teaches something by levelling up.
+Both halves of that matter. The ids run in release order with two exceptions —
+PokeAPI appended the Japanese Generation I releases long after the fact, so their
+ids outrank modern ones and they are skipped by name. And the newest groups
+include ones like `champions`, which file a species' whole movepool under a
+method that carries no level; requiring a level-up entry is what keeps those from
+being read as a learnset.
+
+Each move's own record is a request of its own, and a learnset runs past a
+hundred entries, so they are fetched a bandful at a time around the cursor rather
+than all at once when the card opens. Everything fetched is cached permanently.
 
 ### Alternate forms
 

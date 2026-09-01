@@ -10,7 +10,7 @@ use ratatui::Frame;
 use crate::app::{App, Focus, SortKey};
 use crate::color;
 use crate::i18n::{EvoStrings, Language, Strings};
-use crate::models::{title_case, EvolutionTree, Sprite};
+use crate::models::{title_case, EvolutionTree, LearnMethod, LearnedMove, Sprite};
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
 use crate::typechart;
@@ -57,6 +57,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.ability_card {
         render_abilities(frame, app, &strings, area);
+    }
+    if app.moves_card {
+        render_moves(frame, app, &strings, area);
     }
     if app.team_card {
         render_team(frame, app, &strings, area);
@@ -145,10 +148,11 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         render_centered_loading(frame, inner, s.loading_list, app.spinner);
         return;
     }
-    // A `type:` filter cannot match anything until its roster arrives, so say
-    // that rather than claiming the search found nothing.
-    if app.awaiting_type_roster() {
-        render_centered_loading(frame, inner, s.loading_types, app.spinner);
+    // A `type:`, `ability:` or `egg:` filter cannot match anything until its
+    // roster arrives, so say that rather than claiming the search found
+    // nothing.
+    if app.awaiting_roster() {
+        render_centered_loading(frame, inner, s.loading_filter, app.spinner);
         return;
     }
     if app.filtered.is_empty() {
@@ -1086,6 +1090,11 @@ const MATCHUP_CARD_W: u16 = 48;
 const TEAM_CARD_W: u16 = 56;
 /// The ability card holds wrapped prose, so it is wider still.
 const ABILITY_CARD_W: u16 = 60;
+/// The moves card is the widest of them: seven columns, and a description
+/// underneath that wants the same room the ability card's prose does.
+const MOVES_CARD_W: u16 = 66;
+/// Columns each of the moves card's numeric fields is padded to.
+const MOVE_NUM_W: usize = 5;
 /// Columns reserved for a multiplier label (`" ×4  "`), which also sets the
 /// indent used when a group of chips wraps onto another row.
 const MATCHUP_LABEL_W: usize = 5;
@@ -1271,6 +1280,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("E", h.act_evolutions),
         ("T", h.act_types),
         ("A", h.act_abilities),
+        ("M", h.act_moves),
         ("X", h.act_shiny),
         ("Space", h.act_party_toggle),
         ("P", h.act_party_card),
@@ -1284,6 +1294,8 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("Enter", h.act_load_back),
         ("Esc · Tab", h.act_back),
         ("type:water", h.act_by_type),
+        ("ability:levitate", h.act_by_ability),
+        ("egg:dragon", h.act_by_egg),
         ("gen:1", h.act_by_generation),
         ("", ""),
         ("", h.ctx_evolution),
@@ -1367,6 +1379,272 @@ fn help_lines(rows: &[(&str, &str)]) -> Vec<Line<'static>> {
             ])
         })
         .collect()
+}
+
+/// Draws the modal card listing the selected Pokemon's learnset: what it learns,
+/// how, and — for whichever row the cursor is on — what the move actually does.
+///
+/// The rows come free with the species record. The per-move numbers do not, so
+/// a row shows what it has and fills in the rest once
+/// [`App::ensure_move_info`] has fetched it; scrolling past a row without
+/// stopping costs one request that the next visit reads from the cache.
+fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some(detail) = app.selected_detail() else {
+        return;
+    };
+    let learnset = detail.moves.as_slice();
+
+    let width = MOVES_CARD_W.min(full.width);
+    // Prose is inset from the border on both sides; the table uses the full
+    // inner width, since its own leading space is part of the format.
+    let table_w = width.saturating_sub(2) as usize;
+    let text_w = width.saturating_sub(4) as usize;
+    if text_w < 40 || full.height < 12 {
+        return; // too cramped for seven columns; leave the main view alone
+    }
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.moves_title,
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+
+    // The card claims most of the height available, leaving a margin so the
+    // list behind it stays visible — this is a card, not a second screen.
+    let height = full
+        .height
+        .saturating_sub(4)
+        .min(learnset.len() as u16 + 10);
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if learnset.is_empty() {
+        render_centered_text(frame, inner, s.moves_empty, theme::OVERLAY);
+        return;
+    }
+
+    // Header, the scrolling list, the highlighted move's description, and the
+    // hint — in that order, with the list taking whatever is left over.
+    let rows = Layout::vertical([
+        Constraint::Length(2), // species + games, then column headings
+        Constraint::Min(1),    // the learnset
+        Constraint::Length(3), // what the highlighted move does
+        Constraint::Length(1), // close hint
+    ])
+    .split(inner);
+
+    let mut heading = vec![Span::styled(
+        format!(" {}", title_case(&detail.name)),
+        Style::default()
+            .fg(theme::MAUVE)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let Some(games) = &detail.learnset_games {
+        heading.push(Span::styled(
+            format!("  ·  {}", title_case(games)),
+            Style::default().fg(theme::OVERLAY),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(heading), {
+            let (left, middle, right) = move_columns(
+                s.col_learn,
+                s.col_move,
+                s.col_type,
+                s.col_category,
+                s.col_power,
+                s.col_accuracy,
+                s.col_pp,
+                table_w,
+            );
+            Line::from(Span::styled(
+                format!("{left}{middle}{right}"),
+                Style::default().fg(theme::OVERLAY),
+            ))
+        }]),
+        rows[0],
+    );
+
+    // Centre the cursor in the window where there is room on both sides, and
+    // pin it to an end where there is not, so the last rows stay reachable.
+    let window = rows[1].height as usize;
+    let first = app
+        .move_cursor
+        .saturating_sub(window / 2)
+        .min(learnset.len().saturating_sub(window));
+    let lines: Vec<Line> = learnset
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(window)
+        .map(|(idx, learned)| move_row(app, s, learned, idx == app.move_cursor, table_w))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), rows[1]);
+
+    frame.render_widget(Paragraph::new(move_description(app, s, text_w)), rows[2]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.moves_close_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[3]);
+}
+
+/// Lays the seven columns out on one row, split either side of the type so the
+/// caller can colour that column on its own. Spelled once so the headings and
+/// the rows under them cannot drift apart.
+#[allow(clippy::too_many_arguments)]
+fn move_columns(
+    learn: &str,
+    name: &str,
+    type_name: &str,
+    category: &str,
+    power: &str,
+    accuracy: &str,
+    pp: &str,
+    width: usize,
+) -> (String, String, String) {
+    // Everything but the name is fixed-width — the leading space, the level
+    // column and its separator, the type column and its separators, and the
+    // four numeric columns — so the name absorbs whatever is left over.
+    let name_w = width.saturating_sub(12 + 4 * MOVE_NUM_W + 8).max(8);
+    (
+        format!(" {learn:>7} {name:<name_w$} "),
+        format!("{type_name:<9}"),
+        format!(
+            " {category:<MOVE_NUM_W$}{power:>MOVE_NUM_W$}{accuracy:>MOVE_NUM_W$}{pp:>MOVE_NUM_W$}"
+        ),
+    )
+}
+
+/// One row of the learnset. The type is the only part that carries colour: it
+/// is what a reader scans the list for.
+fn move_row<'a>(
+    app: &'a App,
+    s: &Strings,
+    learned: &'a LearnedMove,
+    highlighted: bool,
+    width: usize,
+) -> Line<'a> {
+    let code = app.language.flavor_code();
+    let info = app.moves.get(&learned.name);
+
+    // Levels go in bare under the level heading, the way the games print them.
+    // Level zero is how a move known from the start is recorded, and no game
+    // ever calls that level zero.
+    let learn = match learned.method {
+        LearnMethod::LevelUp if learned.level == 0 => "—".to_string(),
+        LearnMethod::LevelUp => learned.level.to_string(),
+        LearnMethod::Machine => s.learn_machine.to_string(),
+        LearnMethod::Egg => s.learn_egg.to_string(),
+        LearnMethod::Tutor => s.learn_tutor.to_string(),
+    };
+    let name = match info {
+        Some(info) => info.name_for(code),
+        None => title_case(&learned.name),
+    };
+    // A row whose record has not landed shows the two fields the species
+    // record already answered for, and blanks rather than zeros for the rest.
+    let (type_name, category, power, accuracy, pp) = match info {
+        Some(info) => (
+            info.type_name.to_uppercase(),
+            damage_class_label(s, &info.damage_class).to_string(),
+            info.power
+                .map_or_else(|| "—".to_string(), |p| p.to_string()),
+            info.accuracy
+                .map_or_else(|| "—".to_string(), |a| a.to_string()),
+            info.pp.map_or_else(|| "—".to_string(), |p| p.to_string()),
+        ),
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+    };
+
+    let (left, middle, right) = move_columns(
+        &learn, &name, &type_name, &category, &power, &accuracy, &pp, width,
+    );
+
+    // The highlighted row is painted in one piece: the selection bar is what
+    // says where the cursor is, and a type colour showing through it would only
+    // muddy that.
+    if highlighted {
+        let style = color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD);
+        return Line::from(Span::styled(format!("{left}{middle}{right}"), style));
+    }
+
+    let plain = Style::default().fg(theme::TEXT);
+    Line::from(vec![
+        Span::styled(left, plain),
+        Span::styled(
+            middle,
+            Style::default().fg(theme::type_color(&learned_type(app, learned))),
+        ),
+        Span::styled(right, Style::default().fg(theme::SUBTEXT)),
+    ])
+}
+
+/// The type slug of a move whose record has landed, or the empty string —
+/// which no type answers to, so the column simply draws unstyled.
+fn learned_type(app: &App, learned: &LearnedMove) -> String {
+    app.moves
+        .get(&learned.name)
+        .map(|info| info.type_name.clone())
+        .unwrap_or_default()
+}
+
+/// What the highlighted move does, wrapped to the card. Absent until its record
+/// lands, where the loading placeholder stands in — the same shape the ability
+/// card uses for the same reason.
+fn move_description<'a>(app: &App, s: &Strings, width: usize) -> Vec<Line<'a>> {
+    let code = app.language.flavor_code();
+    let text = app
+        .highlighted_move()
+        .and_then(|learned| app.moves.get(&learned.name))
+        .and_then(|info| info.flavor_for(code));
+
+    match text {
+        Some(text) => wrap_plain(text, width)
+            .into_iter()
+            .take(3)
+            .map(|row| {
+                Line::from(Span::styled(
+                    format!(" {row}"),
+                    Style::default().fg(theme::SUBTEXT),
+                ))
+            })
+            .collect(),
+        None => vec![Line::from(Span::styled(
+            format!(" {}…", s.loading),
+            Style::default().fg(theme::OVERLAY),
+        ))],
+    }
+}
+
+/// Localized label for a move's damage category. An unrecognised class shows
+/// its API slug rather than being dropped, which is how a new one would
+/// announce itself.
+fn damage_class_label<'a>(s: &Strings, class: &'a str) -> &'a str
+where
+    'static: 'a,
+{
+    match class {
+        "physical" => s.class_physical,
+        "special" => s.class_special,
+        "status" => s.class_status,
+        other => other,
+    }
 }
 
 fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {

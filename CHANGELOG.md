@@ -12,6 +12,16 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ### Added
 
+- A moves card, on `M`: the learnset for the newest games a species appears in,
+  with each move's type, category, power, accuracy and PP, and a description of
+  the one under the cursor. The rows come with the species record, so the card
+  costs no request to open; the per-move records are fetched as you scroll and
+  cached permanently.
+- Two more search filters: `ability:levitate` narrows the list to everything
+  that can have an ability, and `egg:dragon` to a breeding group. Both combine
+  with `type:` and with each other, and both accept the short forms `a:` and
+  `e:`. Breeding groups answer to their in-game names as well as PokeAPI's
+  older spellings, so `egg:grass` reaches the group the API files as `plant`.
 - A command-line interface: `pokeductor <name>` opens straight on a species,
   `--lang` picks the interface language, `--clear-cache` and `--cache-dir`
   manage the on-disk cache, and `--version` and `--help` answer at last. The
@@ -25,6 +35,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ### Changed
 
+- The on-disk cache format is version 5: species records now carry their
+  learnset, so entries written by an earlier build are re-fetched once.
 - `reqwest` now uses `rustls-tls` rather than the platform's TLS. Release
   binaries link no system OpenSSL and carry their own root certificates, which
   is what lets one Linux build run anywhere.

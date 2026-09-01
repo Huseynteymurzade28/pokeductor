@@ -22,11 +22,19 @@ use crate::cli::Startup;
 use crate::color::{self, Depth};
 use crate::i18n::Language;
 use crate::models::{
-    AbilityInfo, EvolutionTree, PokemonDetail, PokemonEntry, Sprite, SpriteVariant,
+    AbilityInfo, EvolutionTree, LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterTerm,
+    Sprite, SpriteVariant,
 };
 use crate::query::Query;
 use crate::session::{self, Session};
 use crate::team;
+
+/// How many learnset rows around the cursor the moves card fetches records for.
+/// Sized to cover the card on a tall terminal, so the visible table fills in
+/// together rather than a row at a time.
+const MOVE_BAND: usize = 36;
+/// How much of [`MOVE_BAND`] sits above the cursor rather than below it.
+const MOVE_LOOKBEHIND: usize = 4;
 
 /// How often the loading spinner advances, while there is one to advance.
 const SPINNER_TICK: Duration = Duration::from_millis(120);
@@ -57,9 +65,12 @@ pub enum Message {
     },
     /// An ability's localized text finished loading.
     AbilityLoaded(AbilityInfo),
-    /// The roster for a `type:` filter finished loading.
-    TypeMembersLoaded {
-        type_name: String,
+    /// One move's record finished loading.
+    MoveLoaded(MoveInfo),
+    /// The roster behind a `type:`, `ability:` or `egg:` filter finished
+    /// loading.
+    RosterLoaded {
+        term: RosterTerm,
         members: Vec<String>,
     },
     /// A machine-translated flavor blurb finished loading.
@@ -137,11 +148,11 @@ pub struct App {
     /// filter without re-parsing on every frame.
     pub parsed_query: Query,
     pub sort: SortKey,
-    /// Rosters for `type:` filters, keyed by type name. An entry that is
+    /// Membership lists for the filter terms asked for so far. An entry that is
     /// present but empty means "we asked and got nothing back".
-    pub type_members: HashMap<String, HashSet<String>>,
-    /// Type rosters currently in flight, so a filter is requested only once.
-    pub type_loading: HashSet<String>,
+    pub rosters: HashMap<RosterTerm, HashSet<String>>,
+    /// Rosters currently in flight, so a filter is requested only once.
+    pub roster_loading: HashSet<RosterTerm>,
     pub focus: Focus,
     /// In-memory cache so each Pokemon is fetched at most once per session.
     pub details: HashMap<String, PokemonDetail>,
@@ -178,6 +189,17 @@ pub struct App {
     pub ability_loading: HashSet<String>,
     /// Whether the ability card is open for the current selection.
     pub ability_card: bool,
+    /// Move records, keyed by move slug. Filled in one move at a time as the
+    /// cursor reaches each row, rather than eighty at a time when the card
+    /// opens.
+    pub moves: HashMap<String, MoveInfo>,
+    /// Move lookups in flight, so each is requested only once.
+    pub move_loading: HashSet<String>,
+    /// Whether the moves card is open for the current selection.
+    pub moves_card: bool,
+    /// Row the moves card highlights, as an index into the selection's
+    /// learnset.
+    pub move_cursor: usize,
     /// Whether the help overlay is open.
     pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
@@ -228,8 +250,8 @@ impl App {
             query: String::new(),
             parsed_query: Query::default(),
             sort: SortKey::Dex,
-            type_members: HashMap::new(),
-            type_loading: HashSet::new(),
+            rosters: HashMap::new(),
+            roster_loading: HashSet::new(),
             focus: Focus::List,
             details: HashMap::new(),
             evolutions: HashMap::new(),
@@ -246,6 +268,10 @@ impl App {
             abilities: HashMap::new(),
             ability_loading: HashSet::new(),
             ability_card: false,
+            moves: HashMap::new(),
+            move_loading: HashSet::new(),
+            moves_card: false,
+            move_cursor: 0,
             help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
@@ -291,6 +317,7 @@ impl App {
             // selection+language needs one and none is cached or in flight.
             self.ensure_translation();
             self.ensure_ability_info();
+            self.ensure_move_info();
             // Rendering always writes 24-bit colour; this is where the frame
             // is rewritten into what the terminal can actually show. Doing it
             // over the finished buffer keeps every widget — and every sprite
@@ -343,8 +370,9 @@ impl App {
     pub fn is_busy(&self) -> bool {
         self.list_loading
             || self.loading_detail.is_some()
-            || !self.type_loading.is_empty()
+            || !self.roster_loading.is_empty()
             || !self.ability_loading.is_empty()
+            || !self.move_loading.is_empty()
             || !self.translating.is_empty()
             || !self.team_loading.is_empty()
             || self
@@ -436,26 +464,24 @@ impl App {
         });
     }
 
-    /// Kicks off a roster fetch for every `type:` term we have not resolved
-    /// yet. One request answers a whole type, and the answer is cached on disk,
-    /// so this fires at most once per type per install.
-    fn request_missing_type_rosters(&mut self, query: &Query) {
-        let missing: Vec<String> = query
-            .types
+    /// Kicks off a roster fetch for every filter term we have not resolved yet.
+    /// One request answers a whole term, and the answer is cached on disk, so
+    /// this fires at most once per term per install.
+    fn request_missing_rosters(&mut self, query: &Query) {
+        let missing: Vec<RosterTerm> = query
+            .rosters
             .iter()
-            .filter(|t| !self.type_members.contains_key(*t) && !self.type_loading.contains(*t))
+            .filter(|t| !self.rosters.contains_key(*t) && !self.roster_loading.contains(*t))
             .cloned()
             .collect();
 
-        for type_name in missing {
-            self.type_loading.insert(type_name.clone());
+        for term in missing {
+            self.roster_loading.insert(term.clone());
             let tx = self.tx.clone();
             let client = self.client.clone();
             tokio::spawn(async move {
-                let members = resolve_type_members(&client, &type_name).await;
-                let _ = tx
-                    .send(Message::TypeMembersLoaded { type_name, members })
-                    .await;
+                let members = resolve_roster(&client, &term).await;
+                let _ = tx.send(Message::RosterLoaded { term, members }).await;
             });
         }
     }
@@ -752,12 +778,15 @@ impl App {
                 self.ability_loading.remove(&info.name);
                 self.abilities.insert(info.name.clone(), info);
             }
-            Message::TypeMembersLoaded { type_name, members } => {
-                self.type_loading.remove(&type_name);
-                // Recorded even when empty — a mistyped type must settle on
+            Message::MoveLoaded(info) => {
+                self.move_loading.remove(&info.name);
+                self.moves.insert(info.name.clone(), info);
+            }
+            Message::RosterLoaded { term, members } => {
+                self.roster_loading.remove(&term);
+                // Recorded even when empty — a mistyped term must settle on
                 // "no results" instead of being requested again every frame.
-                self.type_members
-                    .insert(type_name, members.into_iter().collect());
+                self.rosters.insert(term, members.into_iter().collect());
                 self.recompute_filter();
             }
             Message::FlavorTranslated { name, lang, text } => {
@@ -808,6 +837,10 @@ impl App {
             ) {
                 self.ability_card = false;
             }
+            return;
+        }
+        if self.moves_card {
+            self.handle_moves_key(key);
             return;
         }
         if self.team_card {
@@ -894,6 +927,92 @@ impl App {
         }
     }
 
+    /// Opens the moves card. The learnset came with the species record, so
+    /// there is nothing to wait for; the per-move numbers are pulled in by
+    /// [`App::ensure_move_info`] as the cursor reaches each row.
+    fn open_moves(&mut self) {
+        if self.selected_learnset().is_some_and(|set| !set.is_empty()) {
+            self.moves_card = true;
+            self.move_cursor = 0;
+        }
+    }
+
+    /// The learnset of the species currently in the detail panel.
+    pub fn selected_learnset(&self) -> Option<&[LearnedMove]> {
+        self.selected_detail().map(|detail| detail.moves.as_slice())
+    }
+
+    /// The move the card highlights, if the card has anything to highlight.
+    pub fn highlighted_move(&self) -> Option<&LearnedMove> {
+        self.selected_learnset()?.get(self.move_cursor)
+    }
+
+    fn handle_moves_key(&mut self, key: KeyEvent) {
+        let len = self.selected_learnset().map_or(0, <[LearnedMove]>::len);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('m' | 'M' | 'q' | 'Q') => self.moves_card = false,
+            KeyCode::Up | KeyCode::Char('k') => self.move_move_cursor(-1, len),
+            KeyCode::Down | KeyCode::Char('j') => self.move_move_cursor(1, len),
+            KeyCode::PageUp => self.move_move_cursor(-10, len),
+            KeyCode::PageDown => self.move_move_cursor(10, len),
+            KeyCode::Home => self.move_cursor = 0,
+            KeyCode::End => self.move_cursor = len.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    /// Moves the card's cursor, clamping at both ends rather than wrapping —
+    /// a learnset is one long list, and wrapping off the end of eighty rows
+    /// loses the reader's place.
+    fn move_move_cursor(&mut self, delta: i32, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let next = self.move_cursor as i32 + delta;
+        self.move_cursor = next.clamp(0, len as i32 - 1) as usize;
+    }
+
+    /// Requests the records for the moves around the card's cursor.
+    ///
+    /// Only while the card is open, and only for a band around what is on
+    /// screen: a full learnset runs past a hundred entries, and fetching all of
+    /// them the moment the card opens would spend a hundred requests on rows
+    /// most readers never scroll to. A band wide enough to cover the card
+    /// leaves the visible table filled in rather than showing a column of
+    /// names with the numbers still arriving one row at a time.
+    fn ensure_move_info(&mut self) {
+        if !self.moves_card {
+            return;
+        }
+        let Some(learnset) = self.selected_learnset() else {
+            return;
+        };
+        // A few rows back as well as forward, so scrolling up finds the same
+        // band already warm.
+        let start = self.move_cursor.saturating_sub(MOVE_LOOKBEHIND);
+        let missing: Vec<String> = learnset
+            .iter()
+            .skip(start)
+            .take(MOVE_BAND)
+            .map(|learned| learned.name.clone())
+            .filter(|name| !self.moves.contains_key(name) && !self.move_loading.contains(name))
+            .collect();
+
+        for name in missing {
+            self.move_loading.insert(name.clone());
+            let tx = self.tx.clone();
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                // A record we cannot fetch simply never arrives: the row keeps
+                // showing the move's name and how it is learned, which is the
+                // half that came free with the species.
+                if let Some(info) = resolve_move(&client, &name).await {
+                    let _ = tx.send(Message::MoveLoaded(info)).await;
+                }
+            });
+        }
+    }
+
     /// Requests the localized text for any ability on the current selection or
     /// in the party that we do not have yet.
     ///
@@ -976,6 +1095,7 @@ impl App {
             KeyCode::Char(' ') => self.toggle_team_membership(),
             KeyCode::Char('p') | KeyCode::Char('P') => self.team_card = true,
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
+            KeyCode::Char('m') | KeyCode::Char('M') => self.open_moves(),
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('?') => self.help_card = true,
             _ => {}
@@ -1049,7 +1169,7 @@ impl App {
     /// every keystroke: the work is one pass over ~1300 entries plus a sort.
     fn recompute_filter(&mut self) {
         let query = Query::parse(&self.query);
-        self.request_missing_type_rosters(&query);
+        self.request_missing_rosters(&query);
 
         // Remember what was highlighted so the same Pokemon stays under the
         // cursor when the list is merely re-sorted, or when it survives a
@@ -1061,7 +1181,7 @@ impl App {
             .all_pokemon
             .iter()
             .enumerate()
-            .filter(|(_, p)| query.matches_entry(p) && self.has_every_type(&query, &p.name))
+            .filter(|(_, p)| query.matches_entry(p) && self.is_in_every_roster(&query, &p.name))
             .map(|(idx, _)| idx)
             .collect();
 
@@ -1079,13 +1199,13 @@ impl App {
         self.restore_highlight(anchor);
     }
 
-    /// Whether `name` is in the roster of every type the query asks for.
+    /// Whether `name` is in the roster of every filter term the query asks for.
     /// A roster we do not have yet matches nothing, which leaves the list empty
     /// until it lands — the sidebar says as much while that is true.
-    fn has_every_type(&self, query: &Query, name: &str) -> bool {
-        query.types.iter().all(|type_name| {
-            self.type_members
-                .get(type_name)
+    fn is_in_every_roster(&self, query: &Query, name: &str) -> bool {
+        query.rosters.iter().all(|term| {
+            self.rosters
+                .get(term)
                 .is_some_and(|members| members.contains(name))
         })
     }
@@ -1103,13 +1223,13 @@ impl App {
         self.list_state.select(Some(restored.unwrap_or(0)));
     }
 
-    /// True while a `type:` filter is still waiting on its roster, so the
-    /// sidebar can say "loading" rather than "no results".
-    pub fn awaiting_type_roster(&self) -> bool {
+    /// True while a filter term is still waiting on its roster, so the sidebar
+    /// can say "loading" rather than "no results".
+    pub fn awaiting_roster(&self) -> bool {
         self.parsed_query
-            .types
+            .rosters
             .iter()
-            .any(|type_name| !self.type_members.contains_key(type_name))
+            .any(|term| !self.rosters.contains_key(term))
     }
 
     fn cycle_sort(&mut self) {
@@ -1292,18 +1412,29 @@ async fn resolve_ability(client: &reqwest::Client, name: &str) -> Option<Ability
     Some(info)
 }
 
-/// Resolves a type's roster from the cache, falling back to the network.
+/// Resolves one move's record from the cache, falling back to the network.
+async fn resolve_move(client: &reqwest::Client, name: &str) -> Option<MoveInfo> {
+    if let Some(info) = cache::load_move(name).await {
+        return Some(info);
+    }
+    let info = api::fetch_move(client, name).await.ok()?;
+    cache::store_move(name, &info).await;
+    Some(info)
+}
+
+/// Resolves one filter term's roster from the cache, falling back to the
+/// network.
 ///
 /// A failure yields an empty roster rather than an error: the only way to get
-/// here is a `type:` term, and the honest answer to a type we cannot resolve
-/// is that nothing matches it.
-async fn resolve_type_members(client: &reqwest::Client, type_name: &str) -> Vec<String> {
-    if let Some(members) = cache::load_type_members(type_name).await {
+/// here is something typed in the search box, and the honest answer to a term
+/// we cannot resolve is that nothing matches it.
+async fn resolve_roster(client: &reqwest::Client, term: &RosterTerm) -> Vec<String> {
+    if let Some(members) = cache::load_roster(term).await {
         return members;
     }
-    match api::fetch_type_members(client, type_name).await {
+    match api::fetch_roster(client, term).await {
         Ok(members) => {
-            cache::store_type_members(type_name, &members).await;
+            cache::store_roster(term, &members).await;
             members
         }
         Err(_) => Vec::new(),
@@ -1323,6 +1454,7 @@ async fn record_sprite(name: &str, sprite: Option<&Sprite>, variant: SpriteVaria
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::RosterKind;
 
     #[test]
     fn every_sort_key_reads_back_out_of_its_code() {
@@ -1352,6 +1484,79 @@ mod tests {
         app
     }
 
+    /// The membership set a roster resolves to.
+    fn members(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// The names currently visible in the sidebar, in order.
+    fn visible(app: &App) -> Vec<&str> {
+        app.filtered
+            .iter()
+            .map(|&idx| app.all_pokemon[idx].name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn roster_terms_of_different_kinds_narrow_together() {
+        // `egg:grass` also has to survive the trip through the alias table on
+        // the way to the group PokeAPI files as `plant`.
+        let mut app = app_listing(&[(1, "bulbasaur"), (43, "oddish"), (92, "gastly")]);
+        app.rosters.insert(
+            RosterTerm::new(RosterKind::Type, "poison"),
+            members(&["bulbasaur", "oddish", "gastly"]),
+        );
+        app.rosters.insert(
+            RosterTerm::new(RosterKind::EggGroup, "plant"),
+            members(&["bulbasaur", "oddish"]),
+        );
+
+        app.query = "type:poison".to_string();
+        app.recompute_filter();
+        assert_eq!(visible(&app), ["bulbasaur", "oddish", "gastly"]);
+
+        app.query = "type:poison egg:grass".to_string();
+        app.recompute_filter();
+        assert_eq!(visible(&app), ["bulbasaur", "oddish"]);
+    }
+
+    #[test]
+    fn the_list_waits_until_every_roster_it_needs_has_landed() {
+        // Each roster arrives on its own message, and until the last one does
+        // the sidebar has to say "loading" rather than "no results" — an
+        // unresolved term matches nothing, so the two look identical from the
+        // list alone.
+        let mut app = app_listing(&[]);
+        app.parsed_query = Query::parse("type:poison ability:levitate");
+        assert!(app.awaiting_roster());
+
+        app.rosters
+            .insert(RosterTerm::new(RosterKind::Type, "poison"), HashSet::new());
+        assert!(app.awaiting_roster());
+
+        app.rosters.insert(
+            RosterTerm::new(RosterKind::Ability, "levitate"),
+            HashSet::new(),
+        );
+        assert!(!app.awaiting_roster());
+    }
+
+    #[test]
+    fn the_moves_cursor_stops_at_both_ends_of_the_learnset() {
+        // Wrapping would be worse than stopping here: a learnset is one long
+        // list, and jumping from the last tutor move back to level one loses
+        // the reader's place rather than saving them a keypress.
+        let mut app = app_listing(&[]);
+        app.move_move_cursor(-1, 3);
+        assert_eq!(app.move_cursor, 0);
+        app.move_move_cursor(10, 3);
+        assert_eq!(app.move_cursor, 2);
+        // An empty learnset has no row to land on.
+        app.move_cursor = 0;
+        app.move_move_cursor(1, 0);
+        assert_eq!(app.move_cursor, 0);
+    }
+
     #[test]
     fn an_app_with_nothing_in_flight_is_idle() {
         assert!(!app_listing(&[]).is_busy());
@@ -1369,8 +1574,9 @@ mod tests {
         let cases: [Pending; 7] = [
             ("list", |app| app.list_loading = true),
             ("detail", |app| app.loading_detail = Some("mew".to_string())),
-            ("type roster", |app| {
-                app.type_loading.insert("ghost".to_string());
+            ("roster", |app| {
+                app.roster_loading
+                    .insert(RosterTerm::new(RosterKind::Type, "ghost"));
             }),
             ("ability", |app| {
                 app.ability_loading.insert("levitate".to_string());

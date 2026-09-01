@@ -224,6 +224,8 @@ mod tests {
             shiny_sprite_url: None,
             genera: HashMap::new(),
             flavors: HashMap::new(),
+            moves: Vec::new(),
+            learnset_games: None,
         }
     }
 
