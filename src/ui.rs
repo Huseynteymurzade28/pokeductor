@@ -178,18 +178,15 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
                 Some(number) => format!("{number:>4} "),
                 None => " ".repeat(5),
             };
-            // One column, two markers. The pin takes it when both apply: a
-            // comparison is the more transient of the two, and the party card
-            // lists its own members anyway.
-            let (marker, marker_color) = if app.is_pinned(&p.name) {
-                ("◆ ", theme::TEAL)
-            } else if app.is_in_team(&p.name) {
-                ("● ", theme::GREEN)
-            } else {
-                ("  ", theme::GREEN)
-            };
+            // Two slots, each with a meaning of its own: the comparison pin on
+            // the left, party membership on the right. A species can be both,
+            // and each keeps its column whether or not the other is there, so
+            // a marker always means the same thing in the same place.
+            let pin = if app.is_pinned(&p.name) { "◆" } else { " " };
+            let party = if app.is_in_team(&p.name) { "●" } else { " " };
             ListItem::new(Line::from(vec![
-                Span::styled(marker, Style::default().fg(marker_color)),
+                Span::styled(pin, Style::default().fg(theme::TEAL)),
+                Span::styled(party, Style::default().fg(theme::GREEN)),
                 Span::styled(dex, Style::default().fg(theme::OVERLAY)),
                 Span::styled(title_case(&p.name), Style::default().fg(theme::TEXT)),
             ]))

@@ -232,7 +232,8 @@ decisive number rather than a guess at a moveset, and a *certain* ability
 immunity overrules the chart here just as it does on the matchup card.
 
 The pinned species carries a `◆` in the list until it is unpinned, which `C` on
-it does. Both sides are records the app already holds, so the card costs no
+it does. It has a column of its own beside the `●` of party membership, so a
+species that is both shows both. Both sides are records the app already holds, so the card costs no
 request to open — and two is the number it takes: three or more is a table
 nobody can read in a terminal, and "how does this group look together" is the
 party card's question.
