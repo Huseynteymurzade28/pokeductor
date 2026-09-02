@@ -170,6 +170,10 @@ pub struct App {
     /// Cursor into the evolution chain (depth-first order) while the evolution
     /// panel is focused.
     pub evo_cursor: usize,
+    /// Whether the chain is expanded to the full-screen evolution view. Wide
+    /// branching chains never fit the panel, so this is where they get drawn as
+    /// sprite cards rather than as a text tree.
+    pub evo_card: bool,
     /// Whether the language-picker card is open, and which row it highlights.
     pub language_picker: bool,
     pub lang_cursor: usize,
@@ -259,6 +263,7 @@ impl App {
             sprite_loading: HashMap::new(),
             sprite_variant: SpriteVariant::Normal,
             evo_cursor: 0,
+            evo_card: false,
             language_picker: false,
             lang_cursor: 0,
             matchups: false,
@@ -861,6 +866,10 @@ impl App {
             }
             return;
         }
+        if self.evo_card {
+            self.handle_evo_card_key(key);
+            return;
+        }
         match self.focus {
             Focus::List => self.handle_list_key(key),
             Focus::Search => self.handle_search_key(key),
@@ -1088,6 +1097,7 @@ impl App {
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Enter => self.request_selected(),
             KeyCode::Char('e') | KeyCode::Char('E') => self.focus_evolution(),
+            KeyCode::Char('f') | KeyCode::Char('F') => self.open_evolution_card(),
             KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
@@ -1105,16 +1115,61 @@ impl App {
     /// Moves focus into the evolution panel, parking the cursor on the species
     /// currently shown in the detail panel.
     fn focus_evolution(&mut self) {
+        if self.park_evo_cursor() {
+            self.focus = Focus::Evolution;
+        }
+    }
+
+    /// Opens the full-screen evolution view on the current chain. Same cursor
+    /// as the panel, so expanding and collapsing never loses the reader's place.
+    fn open_evolution_card(&mut self) {
+        if self.park_evo_cursor() {
+            self.evo_card = true;
+        }
+    }
+
+    /// Parks the chain cursor on the species in the detail panel, reporting
+    /// whether there is a chain to navigate at all.
+    fn park_evo_cursor(&mut self) -> bool {
         let names = self.chain_names();
         if names.is_empty() {
-            return; // no chain to navigate yet
+            return false; // no chain to navigate yet
         }
         self.evo_cursor = self
             .selected_name
             .as_ref()
             .and_then(|sel| names.iter().position(|n| n == sel))
             .unwrap_or(0);
-        self.focus = Focus::Evolution;
+        true
+    }
+
+    /// The full-screen view is the evolution panel with room to breathe, so it
+    /// answers to the same keys — `Esc` (or `F` again) collapses it back.
+    fn handle_evo_card_key(&mut self, key: KeyEvent) {
+        let len = self.chain_names().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('f' | 'F' | 'q' | 'Q') => self.evo_card = false,
+            KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k')
+                if self.evo_cursor > 0 =>
+            {
+                self.evo_cursor -= 1;
+            }
+            KeyCode::Right | KeyCode::Down | KeyCode::Char('l') | KeyCode::Char('j')
+                if self.evo_cursor + 1 < len =>
+            {
+                self.evo_cursor += 1;
+            }
+            // Taking a stage collapses the view: what you picked is loaded on
+            // the panels behind it, and leaving the chain spread over them is
+            // the one thing the jump was for.
+            KeyCode::Enter => {
+                self.jump_to_evolution_member();
+                self.evo_card = false;
+            }
+            KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
+            KeyCode::Char('?') => self.help_card = true,
+            _ => {}
+        }
     }
 
     fn handle_evolution_key(&mut self, key: KeyEvent) {
@@ -1133,6 +1188,7 @@ impl App {
                 self.evo_cursor += 1;
             }
             KeyCode::Enter => self.jump_to_evolution_member(),
+            KeyCode::Char('f') | KeyCode::Char('F') => self.evo_card = true,
             KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('?') => self.help_card = true,
@@ -1495,6 +1551,88 @@ mod tests {
             .iter()
             .map(|&idx| app.all_pokemon[idx].name.as_str())
             .collect()
+    }
+
+    /// A chain of `names`, each stage evolving into the next.
+    fn line(names: &[&str]) -> EvolutionTree {
+        let mut node = EvolutionTree {
+            name: names[names.len() - 1].to_string(),
+            condition: None,
+            children: Vec::new(),
+        };
+        for name in names.iter().rev().skip(1) {
+            node = EvolutionTree {
+                name: (*name).to_string(),
+                condition: None,
+                children: vec![node],
+            };
+        }
+        node
+    }
+
+    /// Enough of a record to keep [`App::request_selected`] on its cache-hit
+    /// path: the fetch it would otherwise spawn wants a runtime these tests
+    /// have no reason to build.
+    fn loaded(name: &str) -> PokemonDetail {
+        PokemonDetail {
+            name: name.to_string(),
+            species: name.to_string(),
+            dex_number: 0,
+            is_legendary: false,
+            is_mythical: false,
+            is_baby: false,
+            types: Vec::new(),
+            abilities: Vec::new(),
+            stats: Vec::new(),
+            height: 0,
+            weight: 0,
+            sprite_url: None,
+            shiny_sprite_url: None,
+            genera: HashMap::new(),
+            flavors: HashMap::new(),
+            moves: Vec::new(),
+            learnset_games: None,
+        }
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn taking_a_stage_collapses_the_full_screen_chain() {
+        let mut app = app_listing(&[(1, "bulbasaur"), (2, "ivysaur")]);
+        // Artwork is the other thing a selection spawns fetches for.
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        app.details
+            .insert("bulbasaur".to_string(), loaded("bulbasaur"));
+        app.details.insert("ivysaur".to_string(), loaded("ivysaur"));
+        app.selected_name = Some("bulbasaur".to_string());
+        app.evolutions
+            .insert("bulbasaur".to_string(), line(&["bulbasaur", "ivysaur"]));
+
+        app.open_evolution_card();
+        assert!(app.evo_card);
+        // The cursor opens on the species already in the detail panel.
+        assert_eq!(app.evo_cursor, 0);
+
+        app.handle_evo_card_key(press(KeyCode::Right));
+        app.handle_evo_card_key(press(KeyCode::Enter));
+
+        // Ivysaur is loaded, and the chain is out of the way of it.
+        assert_eq!(app.selected_name.as_deref(), Some("ivysaur"));
+        assert!(!app.evo_card);
+    }
+
+    #[test]
+    fn the_full_screen_chain_does_not_open_on_a_species_with_no_chain_loaded() {
+        let mut app = app_listing(&[(1, "bulbasaur")]);
+        app.recompute_filter();
+        app.selected_name = Some("bulbasaur".to_string());
+
+        app.open_evolution_card();
+        assert!(!app.evo_card);
     }
 
     #[test]

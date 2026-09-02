@@ -160,6 +160,15 @@ panel falls back to a labelled list rather than truncating:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-branching.png" alt="Eevee's eight-way evolution chain listed with the requirement for each branch" width="900">
 
+`F` expands the chain to the full terminal, which is how the widest lines get
+to use the card layout at all: every branch needs its own lane, so Eevee's eight
+want more rows than the panel is ever given. The cursor and the requirement
+readout work exactly as they do in the panel; `Enter` loads the stage under the
+cursor and collapses back to it, since what you picked is on the panels the
+chain was covering, and `Esc` collapses without taking one. The labelled list
+remains the last resort — a nine-node chain still will not fit an 80×24 window,
+full screen or not.
+
 ### Shiny artwork
 
 `X` flips every sprite on screen — the info panel and each card in the
@@ -261,6 +270,7 @@ no refetch:
 | | `Enter` | Load the highlighted Pokémon |
 | | `/` · `Tab` | Focus the search box |
 | | `E` | Focus the evolution panel |
+| | `F` | Full-screen evolution chain |
 | | `T` | Type matchup card |
 | | `A` | Ability card |
 | | `M` | Moves card |
@@ -276,8 +286,12 @@ no refetch:
 | | `Esc` · `Tab` | Back to the list |
 | **Evolution panel** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between stages |
 | | `Enter` | Jump to the highlighted stage |
+| | `F` | Expand to full screen |
 | | `X` | Toggle shiny artwork |
 | | `Esc` · `Tab` | Back to the list |
+| **Full-screen chain** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between stages |
+| | `Enter` | Jump to the highlighted stage |
+| | `F` · `Esc` | Close |
 | **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
 | | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
 | | `M` · `Esc` | Close |

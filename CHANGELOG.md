@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format follows
 history, so they are summaries rather than the record kept as the work landed.
 Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
+## [Unreleased]
+
+### Added
+
+- A full-screen evolution view, on `F`. Wide branching chains — Eevee's eight
+  branches, Tyrogue, Wurmple, the regional-form lines — need more rows than the
+  evolution panel can ever offer, so there they degraded to the compact text
+  tree; handed the whole terminal they get the sprite cards they were designed
+  for. Same cursor and requirement readout as the panel; `Enter` takes the stage
+  under the cursor and collapses back to it, and `Esc` collapses without
+  taking one. (#3)
+
+### Changed
+
+- Chain cards are centred on their canvas and no longer stretch past a readable
+  width, so a wide screen draws one connected graph rather than clusters spread
+  to its far edges.
+
 ## [0.4.0] - 2026-09-01
 
 ### Added

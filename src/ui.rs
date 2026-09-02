@@ -67,6 +67,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
     }
+    if app.evo_card {
+        render_evolution_card(frame, app, &strings, area);
+    }
     // Drawn last: help must land on top of whatever it is explaining.
     if app.help_card {
         render_help(frame, &strings, area);
@@ -564,49 +567,143 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     // Reserve the bottom row for a context hint.
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-    let canvas = rows[0];
+    draw_chain(frame, app, s, tree, current, cursor, rows[0]);
 
-    let depth = tree.depth() as u16;
-    let leaves = tree.leaf_count() as u16;
-    let col_w = canvas.width.checked_div(depth).unwrap_or(0);
-    let lane_h = canvas.height.checked_div(leaves).unwrap_or(0);
-
-    // Draw the sprite graph when every card has room; otherwise fall back to the
-    // compact text tree so cramped terminals still show the relationships.
-    if col_w >= MIN_CARD_W && lane_h >= MIN_CARD_H {
-        let mut lane = 0u16;
-        place_node(
-            frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane,
-        );
+    let fallback = if focused {
+        s.evo_nav_hint
     } else {
-        let lines = evolution_lines(tree, cursor.or(current), &s.evo, canvas.width);
-        frame.render_widget(Paragraph::new(lines), canvas);
+        s.expand_hint
+    };
+    frame.render_widget(
+        Paragraph::new(chain_hint(tree, cursor, s, fallback)).alignment(Alignment::Center),
+        rows[1],
+    );
+}
+
+/// The full-screen evolution view: the same chain renderer, handed the whole
+/// terminal rather than one panel.
+///
+/// Wide chains — Eevee's eight branches, Tyrogue, Wurmple, the regional-form
+/// lines — need more rows than the evolution panel can ever offer, so there they
+/// degrade to the compact text tree, which is exactly the case the sprite cards
+/// would help most with. This view is how they get to ask for the space.
+fn render_evolution_card(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some(tree) = app.selected_evolution() else {
+        return; // nothing loaded to expand
+    };
+    if full.width < MIN_CARD_W + 2 || full.height < MIN_CARD_H + 3 {
+        return; // too cramped to be readable; leave the main view alone
     }
 
-    // The bottom row doubles as a requirement readout: while the cursor sits on
-    // a member, spell out in full what it takes to get there — the cards only
-    // have room for the headline condition.
+    frame.render_widget(Clear, full);
+
+    // The sprite pixels are composited over `theme::BASE`, so the card behind
+    // them has to be that same colour or every sprite picks up a halo.
+    let title = if app.sprite_variant.is_shiny() {
+        format!("{}✦ {} ", s.evolution_title, s.shiny_label)
+    } else {
+        s.evolution_title.to_string()
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::BASE));
+    let inner = block.inner(full);
+    frame.render_widget(block, full);
+
+    let current = app
+        .selected_detail()
+        .map(|d| d.species.as_str())
+        .or(app.selected_name.as_deref());
+    // The card is modal, so its cursor is always live — unlike the panel's,
+    // which only lights up while the panel holds focus.
+    let cursor_name = app.chain_names().get(app.evo_cursor).cloned();
+    let cursor = cursor_name.as_deref();
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    draw_chain(frame, app, s, tree, current, cursor, rows[0]);
+    frame.render_widget(
+        Paragraph::new(chain_hint(tree, cursor, s, s.evo_card_hint)).alignment(Alignment::Center),
+        rows[1],
+    );
+}
+
+/// Draws a chain onto `canvas`: the sprite graph when every card has room,
+/// otherwise the compact text tree so cramped terminals still show the
+/// relationships.
+fn draw_chain(
+    frame: &mut Frame,
+    app: &App,
+    s: &Strings,
+    tree: &EvolutionTree,
+    current: Option<&str>,
+    cursor: Option<&str>,
+    canvas: Rect,
+) {
+    let depth = tree.depth() as u16;
+    let leaves = tree.leaf_count() as u16;
+    match card_grid(canvas, depth, leaves) {
+        Some((col_w, lane_h)) => {
+            // The grid rarely uses the canvas to the last row or column — lanes
+            // divide it with a remainder, and wide canvases hit the card-width
+            // cap — so centre what it does use rather than letting the leftover
+            // pile up below and to the right of the chain.
+            let canvas = centered_fixed(col_w * depth, lane_h * leaves, canvas);
+            let mut lane = 0u16;
+            place_node(
+                frame, app, s, tree, current, cursor, canvas, col_w, lane_h, 0, &mut lane,
+            );
+        }
+        None => {
+            let lines = evolution_lines(tree, cursor.or(current), &s.evo, canvas.width);
+            frame.render_widget(Paragraph::new(lines), canvas);
+        }
+    }
+}
+
+/// The sprite-card grid for a chain of `depth` stages and `leaves` branches on
+/// `canvas`, or `None` when a card would come out smaller than
+/// [`MIN_CARD_W`] × [`MIN_CARD_H`] and the text tree is the better rendering.
+///
+/// Every lane needs its own [`MIN_CARD_H`] rows, so the height a wide chain
+/// asks for grows with its branches: Eevee's eight leaves want 32 rows, which
+/// no panel in the right-hand column will ever have and a full screen usually
+/// does. That difference is the whole point of the full-screen view.
+fn card_grid(canvas: Rect, depth: u16, leaves: u16) -> Option<(u16, u16)> {
+    let col_w = canvas.width.checked_div(depth)?.min(MAX_CARD_W + EVO_GAP);
+    let lane_h = canvas.height.checked_div(leaves)?;
+    (col_w >= MIN_CARD_W && lane_h >= MIN_CARD_H).then_some((col_w, lane_h))
+}
+
+/// The bottom row under a chain. While the cursor sits on a member it doubles
+/// as a requirement readout, spelling out in full what it takes to get there —
+/// the cards only have room for the headline condition; otherwise it carries
+/// `fallback`, whatever the view wants to say about its own keys.
+fn chain_hint(
+    tree: &EvolutionTree,
+    cursor: Option<&str>,
+    s: &Strings,
+    fallback: &'static str,
+) -> Line<'static> {
     let requirement = cursor
         .and_then(|name| tree.find(name))
         .and_then(|node| node.condition.as_ref())
         .map(|condition| s.evo.summary(condition))
         .filter(|text| !text.is_empty());
 
-    let hint = match requirement {
+    match requirement {
         Some(text) => Line::from(vec![
             Span::styled("✦ ", Style::default().fg(theme::PEACH)),
             Span::styled(text, Style::default().fg(theme::LAVENDER)),
         ]),
-        None => Line::from(Span::styled(
-            if focused {
-                s.evo_nav_hint
-            } else {
-                s.expand_hint
-            },
-            Style::default().fg(theme::OVERLAY),
-        )),
-    };
-    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), rows[1]);
+        None => Line::from(Span::styled(fallback, Style::default().fg(theme::OVERLAY))),
+    }
 }
 
 // --- Small rendering helpers ---------------------------------------------
@@ -848,6 +945,12 @@ const MIN_CARD_W: u16 = 10;
 const MIN_CARD_H: u16 = 4;
 /// Columns reserved between generations for the connector arrows.
 const EVO_GAP: u16 = 5;
+/// Widest a card is allowed to get. Past this it is mostly whitespace: the
+/// sprite is bounded by its lane height, and a name with its short requirement
+/// rarely runs further. Capping it is what stops a full screen from spreading a
+/// two-stage chain into two distant clusters with a connector stretched
+/// between them.
+const MAX_CARD_W: u16 = 30;
 
 /// Recursively lays out `node` and its descendants. Each generation occupies a
 /// fixed-width column; leaves are stacked into horizontal lanes. Returns the
@@ -1278,6 +1381,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("Enter", h.act_load),
         ("/ · Tab", h.act_search),
         ("E", h.act_evolutions),
+        ("F", h.act_chain_expand),
         ("T", h.act_types),
         ("A", h.act_abilities),
         ("M", h.act_moves),
@@ -1301,6 +1405,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("", h.ctx_evolution),
         ("← → ↑ ↓ · h j k l", h.act_chain_move),
         ("Enter", h.act_chain_jump),
+        ("F", h.act_chain_expand),
         ("X", h.act_shiny),
         ("Esc · Tab", h.act_back),
         ("", ""),
@@ -1992,5 +2097,98 @@ fn centered_fixed(width: u16, height: u16, area: Rect) -> Rect {
         y: area.y + (area.height.saturating_sub(h)) / 2,
         width: w,
         height: h,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chain shaped like `children`: one root, then a leaf per entry, nested
+    /// `depth` deep along the first branch.
+    fn chain(depth: usize, leaves: usize) -> EvolutionTree {
+        let mut node = EvolutionTree {
+            name: "leaf".to_string(),
+            condition: None,
+            children: Vec::new(),
+        };
+        for _ in 1..depth {
+            node = EvolutionTree {
+                name: "stage".to_string(),
+                condition: None,
+                children: vec![node],
+            };
+        }
+        // Widen the last stage out to `leaves` branches.
+        let deepest = (1..depth).fold(&mut node, |n, _| &mut n.children[0]);
+        for _ in 1..leaves {
+            deepest.children.push(EvolutionTree {
+                name: "branch".to_string(),
+                condition: None,
+                children: Vec::new(),
+            });
+        }
+        node
+    }
+
+    fn canvas(width: u16, height: u16) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_two_stage_chain_gets_cards_in_a_panel() {
+        assert_eq!(card_grid(canvas(60, 16), 2, 2), Some((30, 8)));
+    }
+
+    #[test]
+    fn a_column_never_grows_past_the_card_cap() {
+        // Half of a 130-column screen would be a 65-wide card of mostly
+        // whitespace; the graph is drawn tighter and centred instead.
+        assert_eq!(
+            card_grid(canvas(130, 16), 2, 2),
+            Some((MAX_CARD_W + EVO_GAP, 8))
+        );
+    }
+
+    #[test]
+    fn eevees_eight_branches_do_not_fit_the_panel() {
+        // The evolution panel realistically gets 15-20 rows; eight lanes need
+        // MIN_CARD_H each, so the chain falls back to the text tree there...
+        assert_eq!(card_grid(canvas(120, 18), 2, 8), None);
+        // ...and gets its sprite cards once the full screen is handed over.
+        assert!(card_grid(canvas(120, 40), 2, 8).is_some());
+    }
+
+    #[test]
+    fn a_chain_too_wide_for_its_columns_falls_back() {
+        // Nine stages across 80 columns leaves under MIN_CARD_W each, however
+        // many rows are available.
+        assert_eq!(card_grid(canvas(80, 60), 9, 1), None);
+    }
+
+    #[test]
+    fn an_empty_canvas_is_not_divided_by_zero() {
+        assert_eq!(card_grid(canvas(0, 0), 0, 0), None);
+    }
+
+    #[test]
+    fn the_hint_row_prefers_the_cursors_requirement_over_the_key_map() {
+        let s = Language::English.strings();
+        let tree = chain(2, 1);
+        // No cursor: the view's own hint.
+        let plain = chain_hint(&tree, None, &s, "keys");
+        assert_eq!(plain.spans.len(), 1);
+        assert_eq!(plain.spans[0].content, "keys");
+        // A cursor on a node nothing is known about keeps the same hint: an
+        // empty requirement is not worth a row of its own.
+        assert_eq!(
+            chain_hint(&tree, Some("leaf"), &s, "keys").spans[0].content,
+            "keys"
+        );
     }
 }
