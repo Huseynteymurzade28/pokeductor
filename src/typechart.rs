@@ -147,6 +147,19 @@ pub fn defensive_groups(defender_types: &[String], immune_to: &[&str]) -> Vec<Ma
         .collect()
 }
 
+/// Display label for a multiplier, e.g. `"×½"` — the same wording the matchup
+/// card's rows carry, and language-neutral like them.
+///
+/// Neutral is spelled out here, unlike in [`defensive_groups`], which omits it:
+/// a group of neutral matchups is the default and says nothing, but a
+/// head-to-head reports the number its two species land on whatever it is.
+pub fn multiplier_label(multiplier: f32) -> &'static str {
+    BUCKETS
+        .iter()
+        .find(|&&(value, _)| same_multiplier(multiplier, value))
+        .map_or("×1", |&(_, label)| label)
+}
+
 /// Types this Pokemon hits for super-effective damage with a same-type move —
 /// the union over its own types, since it can carry a move of each.
 pub fn offensive_coverage(attacker_types: &[String]) -> Vec<&'static str> {
@@ -259,6 +272,16 @@ mod tests {
             .filter(|g| g.types.contains(&"ground"))
             .count();
         assert_eq!(ground_rows, 1);
+    }
+
+    #[test]
+    fn every_multiplier_the_chart_can_produce_has_a_label() {
+        assert_eq!(multiplier_label(4.0), "×4");
+        assert_eq!(multiplier_label(2.0), "×2");
+        assert_eq!(multiplier_label(1.0), "×1");
+        assert_eq!(multiplier_label(0.5), "×½");
+        assert_eq!(multiplier_label(0.25), "×¼");
+        assert_eq!(multiplier_label(0.0), "×0");
     }
 
     #[test]

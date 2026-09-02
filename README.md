@@ -215,6 +215,28 @@ Computed offline from a built-in Generation VI+ chart, so it opens instantly and
 works with no connection. Neutral matchups are omitted — they are the default,
 and listing them would bury the rows worth reading.
 
+### Head to head
+
+`C` pins the species on display; `C` again on a second one opens the comparison.
+Each row is a pair of bars growing outwards from the stat's label, so which of
+the two is bulkier or faster arrives before any of the numbers are read, with
+the margin and an arrow at the end of the row for the ones that are. The bars
+scale to the biggest number on the card rather than to the 255 a stat can
+theoretically reach — against the theoretical ceiling every ordinary species
+draws the same short bar, which is exactly the difference the card exists to
+show.
+
+Underneath, the hardest hit each side's own typing lands on the other. Same-type
+moves are the ones a species certainly has access to, which makes that the
+decisive number rather than a guess at a moveset, and a *certain* ability
+immunity overrules the chart here just as it does on the matchup card.
+
+The pinned species carries a `◆` in the list until it is unpinned, which `C` on
+it does. Both sides are records the app already holds, so the card costs no
+request to open — and two is the number it takes: three or more is a table
+nobody can read in a terminal, and "how does this group look together" is the
+party card's question.
+
 ### Party analysis
 
 `Space` puts up to six Pokémon on a team; `P` shows the verdict on their
@@ -272,6 +294,7 @@ no refetch:
 | | `E` | Focus the evolution panel |
 | | `F` | Full-screen evolution chain |
 | | `T` | Type matchup card |
+| | `C` | Pin the species / compare two |
 | | `A` | Ability card |
 | | `M` | Moves card |
 | | `X` | Toggle shiny artwork |
@@ -398,6 +421,7 @@ through to disk.
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
 | `typechart.rs` | Offline Generation VI+ type-effectiveness chart and matchup analysis. |
 | `team.rs` | Team-level type analysis built on top of the chart. |
+| `compare.rs` | Head-to-head arithmetic for two species: stat rows, winners, best same-type hit. |
 | `i18n.rs` | `Language` enum and translation tables for the six UI languages. |
 | `theme.rs` | PICO-8-inspired palette and per-type accent colours. |
 

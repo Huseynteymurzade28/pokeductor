@@ -217,6 +217,14 @@ pub struct Strings {
     pub matchups_none: &'static str,
     /// Hint at the foot of the matchup card.
     pub close_hint: &'static str,
+    /// Title of the head-to-head comparison card.
+    pub compare_title: &'static str,
+    /// Heading above the two best same-type hits on the comparison card.
+    pub compare_best_hit: &'static str,
+    /// Shown in a comparison row the two species are level on.
+    pub compare_tie: &'static str,
+    /// Hint at the foot of the comparison card.
+    pub compare_hint: &'static str,
     /// Wording for the help overlay.
     pub help_card: HelpStrings,
     /// Wording for evolution requirements.
@@ -265,6 +273,7 @@ pub struct HelpStrings {
     pub act_chain_move: &'static str,
     pub act_chain_jump: &'static str,
     pub act_chain_expand: &'static str,
+    pub act_compare: &'static str,
     pub act_close: &'static str,
     pub close_hint: &'static str,
 }
@@ -470,6 +479,10 @@ impl Strings {
             matchups_offense: "Super effective against",
             matchups_none: "nothing",
             close_hint: "Esc / T to close",
+            compare_title: " Head to Head ",
+            compare_best_hit: "Best same-type hit",
+            compare_tie: "level",
+            compare_hint: "Esc / C to close",
             help_card: HelpStrings {
                 title: " Help ",
                 ctx_list: "List",
@@ -500,6 +513,7 @@ impl Strings {
                 act_chain_move: "Move between stages",
                 act_chain_jump: "Jump to stage",
                 act_chain_expand: "Full-screen chain",
+                act_compare: "Pin / compare two species",
                 act_close: "Close",
                 close_hint: "? / Esc to close",
             },
@@ -601,6 +615,10 @@ impl Strings {
             matchups_offense: "Karşı üstün olduğu tipler",
             matchups_none: "yok",
             close_hint: "Kapatmak için Esc / T",
+            compare_title: " Karşılaştırma ",
+            compare_best_hit: "En sert aynı tipten vuruş",
+            compare_tie: "eşit",
+            compare_hint: "Kapatmak için Esc / C",
             help_card: HelpStrings {
                 title: " Yardım ",
                 ctx_list: "Liste",
@@ -631,6 +649,7 @@ impl Strings {
                 act_chain_move: "Aşamalar arasında gez",
                 act_chain_jump: "Aşamaya atla",
                 act_chain_expand: "Zinciri tam ekran aç",
+                act_compare: "Sabitle / iki türü karşılaştır",
                 act_close: "Kapat",
                 close_hint: "Kapatmak için ? / Esc",
             },
@@ -732,6 +751,10 @@ impl Strings {
             matchups_offense: "Sehr effektiv gegen",
             matchups_none: "nichts",
             close_hint: "Esc / T zum Schließen",
+            compare_title: " Direktvergleich ",
+            compare_best_hit: "Bester Treffer eigenen Typs",
+            compare_tie: "gleich",
+            compare_hint: "Esc / C zum Schließen",
             help_card: HelpStrings {
                 title: " Hilfe ",
                 ctx_list: "Liste",
@@ -762,6 +785,7 @@ impl Strings {
                 act_chain_move: "Zwischen Stufen",
                 act_chain_jump: "Zur Stufe springen",
                 act_chain_expand: "Reihe im Vollbild",
+                act_compare: "Anheften / zwei vergleichen",
                 act_close: "Schließen",
                 close_hint: "? / Esc zum Schließen",
             },
@@ -863,6 +887,10 @@ impl Strings {
             matchups_offense: "Super efficace contre",
             matchups_none: "rien",
             close_hint: "Esc / T pour fermer",
+            compare_title: " Face à Face ",
+            compare_best_hit: "Meilleure attaque de même type",
+            compare_tie: "égalité",
+            compare_hint: "Esc / C pour fermer",
             help_card: HelpStrings {
                 title: " Aide ",
                 ctx_list: "Liste",
@@ -893,6 +921,7 @@ impl Strings {
                 act_chain_move: "Entre les stades",
                 act_chain_jump: "Aller au stade",
                 act_chain_expand: "Chaîne en plein écran",
+                act_compare: "Épingler / comparer deux espèces",
                 act_close: "Fermer",
                 close_hint: "? / Esc pour fermer",
             },
@@ -994,6 +1023,10 @@ impl Strings {
             matchups_offense: "Muy eficaz contra",
             matchups_none: "nada",
             close_hint: "Esc / T para cerrar",
+            compare_title: " Cara a Cara ",
+            compare_best_hit: "Mejor golpe del mismo tipo",
+            compare_tie: "empate",
+            compare_hint: "Esc / C para cerrar",
             help_card: HelpStrings {
                 title: " Ayuda ",
                 ctx_list: "Lista",
@@ -1024,6 +1057,7 @@ impl Strings {
                 act_chain_move: "Entre etapas",
                 act_chain_jump: "Ir a la etapa",
                 act_chain_expand: "Cadena a pantalla completa",
+                act_compare: "Fijar / comparar dos especies",
                 act_close: "Cerrar",
                 close_hint: "? / Esc para cerrar",
             },
@@ -1125,6 +1159,10 @@ impl Strings {
             matchups_offense: "Superefficace contro",
             matchups_none: "niente",
             close_hint: "Esc / T per chiudere",
+            compare_title: " Testa a Testa ",
+            compare_best_hit: "Miglior colpo dello stesso tipo",
+            compare_tie: "pari",
+            compare_hint: "Esc / C per chiudere",
             help_card: HelpStrings {
                 title: " Aiuto ",
                 ctx_list: "Lista",
@@ -1155,6 +1193,7 @@ impl Strings {
                 act_chain_move: "Tra gli stadi",
                 act_chain_jump: "Vai allo stadio",
                 act_chain_expand: "Catena a schermo intero",
+                act_compare: "Fissa / confronta due specie",
                 act_close: "Chiudi",
                 close_hint: "? / Esc per chiudere",
             },

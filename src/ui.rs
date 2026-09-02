@@ -9,8 +9,9 @@ use ratatui::Frame;
 
 use crate::app::{App, Focus, SortKey};
 use crate::color;
+use crate::compare;
 use crate::i18n::{EvoStrings, Language, Strings};
-use crate::models::{title_case, EvolutionTree, LearnMethod, LearnedMove, Sprite};
+use crate::models::{title_case, EvolutionTree, LearnMethod, LearnedMove, PokemonDetail, Sprite};
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
 use crate::typechart;
@@ -69,6 +70,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.evo_card {
         render_evolution_card(frame, app, &strings, area);
+    }
+    if app.compare_card {
+        render_compare(frame, app, &strings, area);
     }
     // Drawn last: help must land on top of whatever it is explaining.
     if app.help_card {
@@ -174,12 +178,18 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
                 Some(number) => format!("{number:>4} "),
                 None => " ".repeat(5),
             };
-            let in_team = app.is_in_team(&p.name);
+            // One column, two markers. The pin takes it when both apply: a
+            // comparison is the more transient of the two, and the party card
+            // lists its own members anyway.
+            let (marker, marker_color) = if app.is_pinned(&p.name) {
+                ("◆ ", theme::TEAL)
+            } else if app.is_in_team(&p.name) {
+                ("● ", theme::GREEN)
+            } else {
+                ("  ", theme::GREEN)
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    if in_team { "● " } else { "  " },
-                    Style::default().fg(theme::GREEN),
-                ),
+                Span::styled(marker, Style::default().fg(marker_color)),
                 Span::styled(dex, Style::default().fg(theme::OVERLAY)),
                 Span::styled(title_case(&p.name), Style::default().fg(theme::TEXT)),
             ]))
@@ -1198,6 +1208,16 @@ const ABILITY_CARD_W: u16 = 60;
 const MOVES_CARD_W: u16 = 66;
 /// Columns each of the moves card's numeric fields is padded to.
 const MOVE_NUM_W: usize = 5;
+/// The comparison card holds two of everything side by side, so it is the
+/// widest of the lot.
+const COMPARE_CARD_W: u16 = 72;
+/// Columns each side's number gets on a comparison row. Four rather than the
+/// three a base stat needs, so the totals line — which can run past a thousand
+/// — reads down the same columns as the rows above it.
+const COMPARE_VAL_W: usize = 4;
+/// Columns the margin gets at the end of a comparison row: an arrow pointing at
+/// the winner, a space, and up to three digits.
+const COMPARE_MARGIN_W: usize = 6;
 /// Columns reserved for a multiplier label (`" ×4  "`), which also sets the
 /// indent used when a group of chips wraps onto another row.
 const MATCHUP_LABEL_W: usize = 5;
@@ -1383,6 +1403,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("E", h.act_evolutions),
         ("F", h.act_chain_expand),
         ("T", h.act_types),
+        ("C", h.act_compare),
         ("A", h.act_abilities),
         ("M", h.act_moves),
         ("X", h.act_shiny),
@@ -2040,6 +2061,289 @@ fn all_clear(s: &Strings) -> Line<'static> {
         format!("  {}", s.team_all_clear),
         Style::default().fg(theme::GREEN),
     ))
+}
+
+/// Draws the head-to-head card: the pinned species against the one on display,
+/// stat by stat.
+///
+/// The arithmetic is [`compare`]'s; what this adds is the reading order. Every
+/// row is a pair of bars growing outwards from the labels, so the answer to
+/// "which of these two is bulkier" arrives before any of the numbers are read,
+/// and the margin at the end of the row says by how much for the ones that are.
+fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some((left, right)) = app.comparison() else {
+        return; // nothing pinned, or nothing on display to pin it against
+    };
+
+    let width = COMPARE_CARD_W.min(full.width);
+    // Two borders, and a column of breathing room inside each of them: the
+    // header, the chips and the abilities all sit against the frame otherwise.
+    let inner_w = width.saturating_sub(4) as usize;
+    // Two bars, two values, a label and the margin. Below this there is no
+    // room left for bars, and a card of bare numbers is what the reader could
+    // already have got by flipping between the two species by hand.
+    let bar_w =
+        inner_w.saturating_sub(COMPARE_VAL_W * 2 + STAT_LABEL_WIDTH + COMPARE_MARGIN_W + 5) / 2;
+    if bar_w < 6 || full.height < 18 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let rows = compare::stat_rows(left, right);
+    let peak = compare::peak(&rows);
+
+    let height = (rows.len() as u16 + 15).min(full.height);
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.compare_title,
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let inner = Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(2),
+        ..inner
+    };
+
+    let body = Layout::vertical([
+        Constraint::Length(2),                     // names, then type chips
+        Constraint::Length(1),                     // spacer
+        Constraint::Length(rows.len() as u16 + 2), // stats, spacer, totals
+        Constraint::Length(1),                     // spacer
+        Constraint::Length(1),                     // best-hit heading
+        Constraint::Length(1),                     // best-hit row
+        Constraint::Length(1),                     // spacer
+        Constraint::Min(0),                        // measurements and abilities
+        Constraint::Length(1),                     // close hint
+    ])
+    .split(inner);
+
+    // Each side keeps to its own half throughout, and the right one is mirrored
+    // — right-aligned against the edge it grows from — so the two read as two
+    // columns rather than as one list of pairs.
+    let head =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[0]);
+    frame.render_widget(Paragraph::new(side_heading(left)), head[0]);
+    frame.render_widget(
+        Paragraph::new(side_heading(right)).alignment(Alignment::Right),
+        head[1],
+    );
+
+    let mut stat_lines: Vec<Line> = rows
+        .iter()
+        .map(|row| {
+            compare_row(
+                app.language.stat_label(row.kind),
+                row.left as u32,
+                row.right as u32,
+                Some((row.left, row.right, peak)),
+                bar_w,
+                s,
+            )
+        })
+        .collect();
+    stat_lines.push(Line::raw(""));
+    // The totals are on a scale of their own — a species' six stats sum to
+    // several hundred — so the row carries the numbers without bars rather than
+    // drawing them against a ruler the rows above do not share.
+    stat_lines.push(compare_row(
+        s.total_label,
+        left.stat_total(),
+        right.stat_total(),
+        None,
+        bar_w,
+        s,
+    ));
+    frame.render_widget(Paragraph::new(stat_lines), body[2]);
+
+    frame.render_widget(Paragraph::new(section_heading(s.compare_best_hit)), body[4]);
+    let hits =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[5]);
+    frame.render_widget(Paragraph::new(best_hit_line(left, right)), hits[0]);
+    frame.render_widget(
+        Paragraph::new(best_hit_line(right, left)).alignment(Alignment::Right),
+        hits[1],
+    );
+
+    let facts =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[7]);
+    let fact_w = facts[0].width as usize;
+    frame.render_widget(Paragraph::new(side_facts(app, left, fact_w)), facts[0]);
+    frame.render_widget(
+        Paragraph::new(side_facts(app, right, fact_w)).alignment(Alignment::Right),
+        facts[1],
+    );
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.compare_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, body[8]);
+}
+
+/// One side's name, dex number and typing, for the top of the comparison card.
+fn side_heading(species: &PokemonDetail) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled(
+                title_case(&species.name),
+                Style::default()
+                    .fg(theme::MAUVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  #{:04}", species.dex_number),
+                Style::default().fg(theme::OVERLAY),
+            ),
+        ]),
+        Line::from(type_chips(&species.types)),
+    ]
+}
+
+/// One comparison row: a pair of bars growing outwards from the label, the two
+/// numbers beside it, and the margin at the end.
+///
+/// `bars` carries the values to draw and the number they scale against; the
+/// totals line passes `None`, which lays the numbers out on the same columns
+/// with the bar space left blank.
+fn compare_row(
+    label: &str,
+    left: u32,
+    right: u32,
+    bars: Option<(u16, u16, u16)>,
+    bar_w: usize,
+    s: &Strings,
+) -> Line<'static> {
+    let winner = compare::side(left, right);
+    let (left_color, right_color) = match winner {
+        compare::Side::Left => (theme::GREEN, theme::OVERLAY),
+        compare::Side::Right => (theme::OVERLAY, theme::GREEN),
+        compare::Side::Tie => (theme::LAVENDER, theme::LAVENDER),
+    };
+    let emphasis = |side| match winner == side {
+        true => Modifier::BOLD,
+        false => Modifier::empty(),
+    };
+
+    let (left_fill, right_fill) = match bars {
+        Some((l, r, peak)) => (fill(l, peak, bar_w), fill(r, peak, bar_w)),
+        None => (0, 0),
+    };
+
+    Line::from(vec![
+        Span::raw(" ".repeat(bar_w - left_fill)),
+        Span::styled("█".repeat(left_fill), Style::default().fg(left_color)),
+        Span::styled(
+            format!(" {left:>COMPARE_VAL_W$} "),
+            Style::default()
+                .fg(left_color)
+                .add_modifier(emphasis(compare::Side::Left)),
+        ),
+        Span::styled(
+            format!("{label:^STAT_LABEL_WIDTH$}"),
+            Style::default().fg(theme::SUBTEXT),
+        ),
+        Span::styled(
+            format!(" {right:<COMPARE_VAL_W$} "),
+            Style::default()
+                .fg(right_color)
+                .add_modifier(emphasis(compare::Side::Right)),
+        ),
+        Span::styled("█".repeat(right_fill), Style::default().fg(right_color)),
+        Span::raw(" ".repeat(bar_w - right_fill)),
+        Span::styled(
+            format!(" {:<COMPARE_MARGIN_W$}", margin_label(left, right, s)),
+            Style::default().fg(match winner {
+                compare::Side::Tie => theme::OVERLAY,
+                _ => theme::GREEN,
+            }),
+        ),
+    ])
+}
+
+/// How many cells of a `bar_w` bar a value fills, against the biggest number on
+/// the card. A value that is not quite zero still gets a cell, so a row reads
+/// as a very short bar rather than as a missing one.
+fn fill(value: u16, peak: u16, bar_w: usize) -> usize {
+    if value == 0 || peak == 0 {
+        return 0;
+    }
+    ((value as usize * bar_w) / peak as usize).clamp(1, bar_w)
+}
+
+/// The end of a comparison row: an arrow pointing at the side that wins it and
+/// by how much, or the word for a row they are level on.
+fn margin_label(left: u32, right: u32, s: &Strings) -> String {
+    match compare::side(left, right) {
+        compare::Side::Left => format!("◀ {}", left - right),
+        compare::Side::Right => format!("▶ {}", right - left),
+        compare::Side::Tie => s.compare_tie.to_string(),
+    }
+}
+
+/// The hardest same-type hit `attacker` has on `defender`, as a chip and a
+/// multiplier.
+fn best_hit_line(attacker: &PokemonDetail, defender: &PokemonDetail) -> Line<'static> {
+    let Some(hit) = compare::best_hit(attacker, defender) else {
+        return Line::raw("");
+    };
+    let label = typechart::multiplier_label(hit.multiplier);
+    Line::from(vec![
+        Span::styled(
+            format!(" {} ", title_case(hit.attack_type)),
+            Style::default()
+                .fg(theme::BASE)
+                .bg(theme::type_color(hit.attack_type))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {label}"),
+            Style::default()
+                .fg(match hit.multiplier > 1.0 {
+                    true => theme::PEACH,
+                    false => theme::SUBTEXT,
+                })
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+/// One side's measurements and abilities, for the foot of the comparison card.
+fn side_facts(app: &App, species: &PokemonDetail, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "{:.1} m · {:.1} kg",
+            species.height as f32 / 10.0,
+            species.weight as f32 / 10.0
+        ),
+        Style::default().fg(theme::SUBTEXT),
+    ))];
+
+    let abilities: Vec<String> = species
+        .abilities
+        .iter()
+        .map(|ability| ability_display_name(app, &ability.name))
+        .collect();
+    if !abilities.is_empty() {
+        // Two lines at most: a third would push the hint off a card sized for
+        // the pair, and the ability card behind `A` has the full list anyway.
+        lines.extend(
+            wrap_plain(&abilities.join(" · "), width.max(8))
+                .into_iter()
+                .take(2)
+                .map(|text| Line::from(Span::styled(text, Style::default().fg(theme::TEXT)))),
+        );
+    }
+    lines
 }
 
 fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {

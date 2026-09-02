@@ -20,6 +20,12 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   under the cursor and collapses back to it, and `Esc` collapses without
   taking one. (#3)
 
+- A head-to-head card, on `C`: pin one species, then press it again on a second
+  to compare the two. Base stats as mirrored bars with the margin and winner per
+  row, the totals, the hardest same-type hit each side lands on the other, and
+  their measurements and abilities. Both sides are records the app already
+  holds, so the card costs no request to open. (#20)
+
 ### Changed
 
 - Chain cards are centred on their canvas and no longer stretch past a readable

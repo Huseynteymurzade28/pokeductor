@@ -179,6 +179,12 @@ pub struct App {
     pub lang_cursor: usize,
     /// Whether the type-matchup card is open for the current selection.
     pub matchups: bool,
+    /// The species pinned as the left-hand side of a comparison, if any. Held
+    /// as a name rather than a record because it outlives the selection: you
+    /// pin one species, walk the list, and take the second one later.
+    pub pin: Option<String>,
+    /// Whether the head-to-head card is open.
+    pub compare_card: bool,
     /// The party being assembled, in the order members were added. Holds names
     /// only; the analysis reads their typings out of `details`, so a member
     /// whose record is still in flight simply does not contribute yet.
@@ -267,6 +273,8 @@ impl App {
             language_picker: false,
             lang_cursor: 0,
             matchups: false,
+            pin: None,
+            compare_card: false,
             team: Vec::new(),
             team_loading: HashSet::new(),
             team_card: false,
@@ -866,6 +874,15 @@ impl App {
             }
             return;
         }
+        if self.compare_card {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c' | 'C' | 'q' | 'Q')
+            ) {
+                self.compare_card = false;
+            }
+            return;
+        }
         if self.evo_card {
             self.handle_evo_card_key(key);
             return;
@@ -1064,6 +1081,39 @@ impl App {
         }
     }
 
+    /// The comparison key, which does one of three things depending on what is
+    /// already pinned: pins the species on display, lets go of it if it is the
+    /// one pinned, or — on a second, different species — opens the head-to-head.
+    ///
+    /// Both sides are records the app already holds: a species reaches the
+    /// detail panel by being loaded, and nothing is ever evicted from the cache,
+    /// so a pin cannot go stale and the card costs no request to open.
+    fn pin_or_compare(&mut self) {
+        let Some(current) = self.selected_name.clone() else {
+            return; // nothing on display to pin or compare against
+        };
+        if !self.details.contains_key(&current) {
+            return; // still loading; there is nothing to compare yet
+        }
+        match self.pin.as_deref() {
+            Some(pinned) if pinned == current => self.pin = None,
+            Some(_) => self.compare_card = true,
+            None => self.pin = Some(current),
+        }
+    }
+
+    /// Whether a list entry is the pinned side of a comparison, for its marker.
+    pub fn is_pinned(&self, name: &str) -> bool {
+        self.pin.as_deref() == Some(name)
+    }
+
+    /// The two records the comparison card reads, pinned side first.
+    pub fn comparison(&self) -> Option<(&PokemonDetail, &PokemonDetail)> {
+        let pinned = self.details.get(self.pin.as_ref()?)?;
+        let current = self.selected_detail()?;
+        Some((pinned, current))
+    }
+
     /// Opens the language picker, parking the cursor on the active language.
     fn open_language_picker(&mut self) {
         self.lang_cursor = self.language.index();
@@ -1099,6 +1149,7 @@ impl App {
             KeyCode::Char('e') | KeyCode::Char('E') => self.focus_evolution(),
             KeyCode::Char('f') | KeyCode::Char('F') => self.open_evolution_card(),
             KeyCode::Char('t') | KeyCode::Char('T') => self.open_matchups(),
+            KeyCode::Char('c') | KeyCode::Char('C') => self.pin_or_compare(),
             KeyCode::Tab | KeyCode::Char('/') => self.focus = Focus::Search,
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
             KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
@@ -1623,6 +1674,50 @@ mod tests {
         // Ivysaur is loaded, and the chain is out of the way of it.
         assert_eq!(app.selected_name.as_deref(), Some("ivysaur"));
         assert!(!app.evo_card);
+    }
+
+    #[test]
+    fn the_comparison_key_pins_then_compares_then_lets_go() {
+        let mut app = app_listing(&[(94, "gengar"), (65, "alakazam")]);
+        app.recompute_filter();
+        app.details.insert("gengar".to_string(), loaded("gengar"));
+        app.details
+            .insert("alakazam".to_string(), loaded("alakazam"));
+
+        // First press pins what is on display, and nothing opens yet: a
+        // comparison needs the second species.
+        app.selected_name = Some("gengar".to_string());
+        app.pin_or_compare();
+        assert!(app.is_pinned("gengar"));
+        assert!(!app.compare_card);
+
+        // A second, different species opens the card, pinned side first.
+        app.selected_name = Some("alakazam".to_string());
+        app.pin_or_compare();
+        assert!(app.compare_card);
+        let (left, right) = app.comparison().expect("two loaded records");
+        assert_eq!(
+            (left.name.as_str(), right.name.as_str()),
+            ("gengar", "alakazam")
+        );
+
+        // Pressing it on the pinned species is how the pin is let go of.
+        app.compare_card = false;
+        app.selected_name = Some("gengar".to_string());
+        app.pin_or_compare();
+        assert!(!app.is_pinned("gengar"));
+        assert!(!app.compare_card);
+    }
+
+    #[test]
+    fn a_species_still_loading_is_not_pinned() {
+        let mut app = app_listing(&[(94, "gengar")]);
+        app.recompute_filter();
+        // Named as the selection, but its record has not landed yet.
+        app.selected_name = Some("gengar".to_string());
+
+        app.pin_or_compare();
+        assert!(app.pin.is_none());
     }
 
     #[test]

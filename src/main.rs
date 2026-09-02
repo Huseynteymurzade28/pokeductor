@@ -21,6 +21,7 @@ mod app;
 mod cache;
 mod cli;
 mod color;
+mod compare;
 mod i18n;
 mod models;
 mod query;
