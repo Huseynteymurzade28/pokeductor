@@ -30,6 +30,11 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   then `R` is a random Ghost. The one way through the list that does not need
   you to already know what you are looking for. (#28)
 
+- The party card has a cursor, and `C` on it pins the member under the cursor
+  or — with another species already pinned — opens the comparison against it.
+  The party is six records picked deliberately, so it doubles as the shortlist
+  to compare from. (#34)
+
 ### Changed
 
 - Chain cards are centred on their canvas and no longer stretch past a readable

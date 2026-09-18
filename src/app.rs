@@ -191,8 +191,9 @@ pub struct App {
     pub team: Vec<String>,
     /// Team members whose details are being fetched, so each is requested once.
     pub team_loading: HashSet<String>,
-    /// Whether the team card is open.
+    /// Whether the team card is open, and which member it highlights.
     pub team_card: bool,
+    pub team_cursor: usize,
     /// Localized ability text, keyed by ability slug.
     pub abilities: HashMap<String, AbilityInfo>,
     /// Ability lookups in flight, so each is requested only once.
@@ -278,6 +279,7 @@ impl App {
             team: Vec::new(),
             team_loading: HashSet::new(),
             team_card: false,
+            team_cursor: 0,
             abilities: HashMap::new(),
             ability_loading: HashSet::new(),
             ability_card: false,
@@ -857,12 +859,7 @@ impl App {
             return;
         }
         if self.team_card {
-            if matches!(
-                key.code,
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('p' | 'P' | 'q' | 'Q')
-            ) {
-                self.team_card = false;
-            }
+            self.handle_team_key(key);
             return;
         }
         if self.matchups {
@@ -943,6 +940,84 @@ impl App {
     /// Whether the highlighted list entry is in the party, for the list marker.
     pub fn is_in_team(&self, name: &str) -> bool {
         self.team.iter().any(|member| member == name)
+    }
+
+    /// Opens the party card with its cursor on the first member. The cursor
+    /// is what makes the card a place to pick from rather than only to read.
+    fn open_team_card(&mut self) {
+        self.team_cursor = 0;
+        self.team_card = true;
+    }
+
+    fn handle_team_key(&mut self, key: KeyEvent) {
+        let len = self.team.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('p' | 'P' | 'q' | 'Q') => {
+                self.team_card = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                self.team_cursor = (self.team_cursor + len - 1) % len;
+            }
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                self.team_cursor = (self.team_cursor + 1) % len;
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => self.pin_or_compare_member(),
+            _ => {}
+        }
+    }
+
+    /// The comparison key on the party card, over the member under the
+    /// cursor. Same three outcomes as [`App::pin_or_compare`] in the list —
+    /// pin, let go, or compare — so the card is a shortlist to compare from
+    /// and not a second set of rules.
+    ///
+    /// The one difference is where the second species comes from. In the list
+    /// it is what the detail panel shows; here it is the member under the
+    /// cursor, so that member is put on display first and the card that opens
+    /// is the same one, over the same two records, the list would have opened.
+    fn pin_or_compare_member(&mut self) {
+        let Some(name) = self.team.get(self.team_cursor).cloned() else {
+            return; // an empty party has nothing under the cursor
+        };
+        if !self.details.contains_key(&name) {
+            return; // still loading; there is nothing to compare yet
+        }
+        match self.pin.as_deref() {
+            Some(pinned) if pinned == name => self.pin = None,
+            None => self.pin = Some(name),
+            Some(_) => {
+                if self.show_species(&name) {
+                    self.team_card = false;
+                    self.compare_card = true;
+                }
+            }
+        }
+    }
+
+    /// Puts `name` under the list cursor and in the detail panel, reporting
+    /// whether it could: a name the master list does not carry cannot be
+    /// shown, and a caller about to open a card over it should know.
+    ///
+    /// The search box is cleared only when it hides the target, so a filter
+    /// the target already satisfies is kept rather than thrown away.
+    fn show_species(&mut self, name: &str) -> bool {
+        if self.position_in_list(name).is_none() {
+            self.query.clear();
+            self.recompute_filter();
+        }
+        let Some(pos) = self.position_in_list(name) else {
+            return false;
+        };
+        self.list_state.select(Some(pos));
+        self.request_selected();
+        true
+    }
+
+    /// Where `name` sits in the list as currently filtered, if it does.
+    fn position_in_list(&self, name: &str) -> Option<usize> {
+        self.filtered
+            .iter()
+            .position(|&idx| self.all_pokemon[idx].name == name)
     }
 
     /// Opens the ability card. The text it shows is pulled in by
@@ -1154,7 +1229,7 @@ impl App {
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
             KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
             KeyCode::Char(' ') => self.toggle_team_membership(),
-            KeyCode::Char('p') | KeyCode::Char('P') => self.team_card = true,
+            KeyCode::Char('p') | KeyCode::Char('P') => self.open_team_card(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_moves(),
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
@@ -1741,6 +1816,98 @@ mod tests {
         app.pin_or_compare();
         assert!(!app.is_pinned("gengar"));
         assert!(!app.compare_card);
+    }
+
+    #[test]
+    fn the_comparison_key_on_the_party_card_pins_then_compares_then_lets_go() {
+        // The sibling of the list test above: pinning from the card has to
+        // leave exactly the state pinning from the list does, or the two
+        // routes to a comparison would drift apart.
+        let mut app = app_listing(&[(94, "gengar"), (65, "alakazam")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        app.details.insert("gengar".to_string(), loaded("gengar"));
+        app.details
+            .insert("alakazam".to_string(), loaded("alakazam"));
+        app.team = vec!["gengar".to_string(), "alakazam".to_string()];
+        app.open_team_card();
+
+        // First press pins the member under the cursor and nothing opens yet.
+        app.handle_team_key(press(KeyCode::Char('c')));
+        assert!(app.is_pinned("gengar"));
+        assert!(!app.compare_card);
+        assert!(app.team_card, "pinning alone does not close the card");
+
+        // On a second, different member the head-to-head opens, pinned side
+        // first, with that member put on display to be the other side.
+        app.handle_team_key(press(KeyCode::Down));
+        app.handle_team_key(press(KeyCode::Char('c')));
+        assert!(app.compare_card);
+        assert!(!app.team_card, "the comparison takes the card's place");
+        assert_eq!(app.selected_name.as_deref(), Some("alakazam"));
+        let (left, right) = app.comparison().expect("two loaded records");
+        assert_eq!(
+            (left.name.as_str(), right.name.as_str()),
+            ("gengar", "alakazam")
+        );
+
+        // Pressing it on the pinned member is how the pin is let go of.
+        app.compare_card = false;
+        app.open_team_card();
+        app.handle_team_key(press(KeyCode::Char('c')));
+        assert!(!app.is_pinned("gengar"));
+        assert!(!app.compare_card);
+    }
+
+    #[test]
+    fn a_party_member_still_loading_is_not_pinned_from_the_card() {
+        let mut app = app_listing(&[(94, "gengar")]);
+        app.recompute_filter();
+        // In the party, but its record has not landed yet.
+        app.team = vec!["gengar".to_string()];
+        app.open_team_card();
+
+        app.handle_team_key(press(KeyCode::Char('c')));
+        assert!(app.pin.is_none());
+    }
+
+    #[test]
+    fn the_party_cursor_wraps_and_an_empty_party_has_nowhere_to_put_it() {
+        let mut app = app_listing(&[]);
+        app.team = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        app.open_team_card();
+        app.handle_team_key(press(KeyCode::Up));
+        assert_eq!(app.team_cursor, 2);
+        app.handle_team_key(press(KeyCode::Down));
+        assert_eq!(app.team_cursor, 0);
+
+        app.team.clear();
+        app.open_team_card();
+        app.handle_team_key(press(KeyCode::Down));
+        assert_eq!(app.team_cursor, 0);
+        app.handle_team_key(press(KeyCode::Char('c')));
+        assert!(app.pin.is_none());
+    }
+
+    #[test]
+    fn showing_a_species_the_filter_hides_clears_the_box_and_a_filter_it_passes_is_kept() {
+        let mut app = app_listing(&[(94, "gengar"), (65, "alakazam")]);
+        app.color_depth = Depth::None;
+        app.details.insert("gengar".to_string(), loaded("gengar"));
+        app.details
+            .insert("alakazam".to_string(), loaded("alakazam"));
+
+        app.query = "gen".to_string();
+        app.recompute_filter();
+        assert!(app.show_species("gengar"));
+        assert_eq!(app.query, "gen", "gengar matches, so the filter stays");
+        assert_eq!(app.selected_name.as_deref(), Some("gengar"));
+
+        assert!(app.show_species("alakazam"));
+        assert_eq!(app.query, "", "alakazam did not, so the box was cleared");
+        assert_eq!(app.selected_name.as_deref(), Some("alakazam"));
+
+        assert!(!app.show_species("missingno"), "not in the list at all");
     }
 
     #[test]

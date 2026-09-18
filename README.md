@@ -243,6 +243,12 @@ request to open — and two is the number it takes: three or more is a table
 nobody can read in a terminal, and "how does this group look together" is the
 party card's question.
 
+The party card is also a shortlist to compare from: `↑` `↓` move over its
+members and `C` pins the one under the cursor, exactly as it would from the
+list. `C` on a second member puts that member on display and opens the same
+comparison the list would have, so "how do these two of mine compare" is
+answered without leaving the card to find them both again.
+
 ### Party analysis
 
 `Space` puts up to six Pokémon on a team; `P` shows the verdict on their
@@ -322,6 +328,9 @@ no refetch:
 | **Full-screen chain** | `←` `→` `↑` `↓` · `h` `j` `k` `l` | Move between stages |
 | | `Enter` | Jump to the highlighted stage |
 | | `F` · `Esc` | Close |
+| **Party card** | `↑` `↓` · `j` `k` | Move between members |
+| | `C` | Pin the member / compare two |
+| | `P` · `Esc` | Close |
 | **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
 | | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
 | | `M` · `Esc` | Close |

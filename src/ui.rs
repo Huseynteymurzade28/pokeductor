@@ -1428,6 +1428,10 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("X", h.act_shiny),
         ("Esc · Tab", h.act_back),
         ("", ""),
+        ("", h.ctx_party),
+        ("↑ ↓ · j k", h.act_move),
+        ("C", h.act_compare),
+        ("", ""),
         ("", h.ctx_cards),
         ("Esc", h.act_close),
         ("Ctrl-C", h.act_quit),
@@ -1954,11 +1958,24 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     // Roster. A member whose record has not arrived yet is listed by name so
     // the party still reads as complete, but greyed out — the analysis below
     // genuinely does not account for it yet.
-    for name in &app.team {
-        let mut row = vec![Span::styled(
-            format!("  {:<12} ", title_case(name)),
-            Style::default().fg(theme::TEXT),
-        )];
+    //
+    // The two lead columns are the cursor and the comparison pin, in the same
+    // glyphs the list uses for the same things, so a member reads the same
+    // here as it does there. They replace the row's old indent rather than
+    // adding to it, so nothing to the right of them moves.
+    for (i, name) in app.team.iter().enumerate() {
+        let cursor = if i == app.team_cursor { "▶" } else { " " };
+        let pin = if app.is_pinned(name) { "◆" } else { " " };
+        let name_style = if i == app.team_cursor {
+            color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT)
+        };
+        let mut row = vec![
+            Span::styled(cursor, Style::default().fg(theme::MAUVE)),
+            Span::styled(pin, Style::default().fg(theme::TEAL)),
+            Span::styled(format!(" {:<12} ", title_case(name)), name_style),
+        ];
         match app.details.get(name) {
             Some(detail) => row.extend(type_chips(&detail.types)),
             None => row.push(Span::styled(
