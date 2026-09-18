@@ -12,6 +12,10 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ### Added
 
+- `CONTRIBUTING.md`: the commands CI runs, the MSRV and where it is declared,
+  where a change belongs, and the comment, test-naming and commit conventions
+  with an example of each from the code. (#30)
+
 - A full-screen evolution view, on `F`. Wide branching chains — Eevee's eight
   branches, Tyrogue, Wurmple, the regional-form lines — need more rows than the
   evolution panel can ever offer, so there they degraded to the compact text

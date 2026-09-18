@@ -675,6 +675,10 @@ shown.
 
 ## Development
 
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is the short version of this section
+plus the house style: what CI runs, where a change belongs, and how comments,
+tests and commits are written here.
+
 The checks CI enforces on every pull request, in the order it runs them:
 
 ```bash
