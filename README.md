@@ -112,6 +112,11 @@ colon degrades to a name search instead of an error. `S` cycles the sort between
 Pokédex order and alphabetical; the highlighted species stays under the cursor
 across a re-sort or a narrowing search.
 
+`R` loads a species at random from whatever the list is narrowed to — `type:ghost`
+then `R` is a random Ghost, `gen:1` then `R` is a random Kanto species — which is
+the one way through 1302 entries that does not need you to know what you are
+looking for.
+
 ### Species details and abilities
 
 The info panel carries the dex number, genus, typing, abilities, physical
@@ -299,6 +304,7 @@ no refetch:
 | | `A` | Ability card |
 | | `M` | Moves card |
 | | `X` | Toggle shiny artwork |
+| | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
 | | `P` | Party card |
 | | `S` | Cycle sort: Pokédex order ↔ A–Z |

@@ -26,6 +26,10 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   their measurements and abilities. Both sides are records the app already
   holds, so the card costs no request to open. (#20)
 
+- `R` loads a random species from the list as currently filtered: `type:ghost`
+  then `R` is a random Ghost. The one way through the list that does not need
+  you to already know what you are looking for. (#28)
+
 ### Changed
 
 - Chain cards are centred on their canvas and no longer stretch past a readable

@@ -6,7 +6,7 @@
 //! alongside terminal input and a steady animation tick via `tokio::select!`.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
@@ -1158,9 +1158,26 @@ impl App {
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_moves(),
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
+            KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
             KeyCode::Char('?') => self.help_card = true,
             _ => {}
         }
+    }
+
+    /// Loads a species picked at random from the list as it is currently
+    /// filtered, the way `Enter` loads the highlighted one.
+    ///
+    /// Rolling from `filtered` rather than `all_pokemon` is the point:
+    /// `type:ghost` then `R` is a random Ghost, and `gen:1` then `R` is a
+    /// random Kanto species. It is the one thing in the app that shows you a
+    /// species you did not ask for — a fair part of what a Pokedex full of
+    /// names you have never heard of is good for.
+    fn open_random(&mut self) {
+        let Some(pos) = random_index(self.filtered.len()) else {
+            return; // an empty list rolls nothing
+        };
+        self.list_state.select(Some(pos));
+        self.request_selected();
     }
 
     /// Moves focus into the evolution panel, parking the cursor on the species
@@ -1558,6 +1575,23 @@ async fn record_sprite(name: &str, sprite: Option<&Sprite>, variant: SpriteVaria
     }
 }
 
+/// A position in `0..len`, or `None` when there is nowhere to land.
+///
+/// The clock's nanoseconds are the whole generator. Choosing one Pokemon out
+/// of a list is not a use that justifies a dependency: `rand` would bring a
+/// handful of crates for a roll that only has to be different from the last
+/// one, and the sub-second part of "now" is that on every real clock.
+fn random_index(len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.subsec_nanos())
+        .unwrap_or(0);
+    Some(nanos as usize % len)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1707,6 +1741,62 @@ mod tests {
         app.pin_or_compare();
         assert!(!app.is_pinned("gengar"));
         assert!(!app.compare_card);
+    }
+
+    #[test]
+    fn a_roll_lands_inside_the_current_filter_and_never_outside_it() {
+        // Every roll has to come out of `filtered`, not `all_pokemon`: the
+        // filter is what makes `R` a random Ghost rather than a random entry.
+        let mut app = app_listing(&[
+            (92, "gastly"),
+            (93, "haunter"),
+            (94, "gengar"),
+            (25, "pikachu"),
+        ]);
+        app.color_depth = Depth::None;
+        app.rosters.insert(
+            RosterTerm::new(RosterKind::Type, "ghost"),
+            members(&["gastly", "haunter", "gengar"]),
+        );
+        for name in ["gastly", "haunter", "gengar", "pikachu"] {
+            app.details.insert(name.to_string(), loaded(name));
+        }
+        app.query = "type:ghost".to_string();
+        app.recompute_filter();
+
+        for _ in 0..50 {
+            app.open_random();
+            let landed = app.selected_name.clone().expect("a roll loads something");
+            assert!(
+                ["gastly", "haunter", "gengar"].contains(&landed.as_str()),
+                "{landed} is not in the filter"
+            );
+            let pos = app.list_state.selected().expect("the cursor moved");
+            assert!(
+                pos < app.filtered.len(),
+                "the cursor is inside the filtered list"
+            );
+        }
+    }
+
+    #[test]
+    fn rolling_on_an_empty_list_does_nothing() {
+        let mut app = app_listing(&[(1, "bulbasaur")]);
+        app.query = "nothing-matches-this".to_string();
+        app.recompute_filter();
+        assert!(app.filtered.is_empty());
+
+        app.open_random();
+        assert_eq!(app.list_state.selected(), None, "the cursor stays parked");
+        assert_eq!(app.selected_name, None, "nothing was loaded");
+    }
+
+    #[test]
+    fn a_roll_over_one_row_always_lands_on_it() {
+        assert_eq!(random_index(1), Some(0));
+        assert_eq!(random_index(0), None);
+        let pos = random_index(7).expect("a non-empty list has a position");
+        assert!(pos < 7);
     }
 
     #[test]

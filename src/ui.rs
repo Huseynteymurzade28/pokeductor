@@ -1404,6 +1404,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("A", h.act_abilities),
         ("M", h.act_moves),
         ("X", h.act_shiny),
+        ("R", h.act_random),
         ("Space", h.act_party_toggle),
         ("P", h.act_party_card),
         ("S", h.act_sort),
