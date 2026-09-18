@@ -1670,7 +1670,7 @@ fn random_index(len: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::RosterKind;
+    use crate::models::{FieldData, RosterKind};
 
     #[test]
     fn every_sort_key_reads_back_out_of_its_code() {
@@ -1752,6 +1752,7 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            field: FieldData::default(),
         }
     }
 

@@ -39,11 +39,22 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   The party is six records picked deliberately, so it doubles as the shortlist
   to compare from. (#34)
 
+- The info card shows a species' breeding and field data: egg groups, gender
+  ratio, catch rate with a word for which way it runs, growth curve, base
+  happiness and habitat where the games recorded one. All six ride on the
+  species record the bundle already fetches, so none costs a request. A
+  genderless species says so; a species with no habitat gets no row. (#31)
+
 ### Changed
 
 - Chain cards are centred on their canvas and no longer stretch past a readable
   width, so a wide screen draws one connected graph rather than clusters spread
   to its far edges.
+
+- Cached species bundles are now version 6, so every cached species is
+  fetched once more, the first time it is opened, to pick up the field data.
+  The flavour blurb now takes a column that fits it exactly, where before it
+  needed one spare row.
 
 ## [0.4.0] - 2026-09-01
 

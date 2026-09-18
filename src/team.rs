@@ -194,7 +194,7 @@ pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Ability;
+    use crate::models::{Ability, FieldData};
     use std::collections::HashMap;
 
     fn member(name: &str, types: &[&str]) -> PokemonDetail {
@@ -226,6 +226,7 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            field: FieldData::default(),
         }
     }
 

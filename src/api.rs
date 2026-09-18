@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 
 use crate::models::{
-    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, LearnMethod,
-    LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterKind, RosterTerm, Sprite,
-    SpriteVariant, Stat, StatKind,
+    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, FieldData,
+    LearnMethod, LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterKind, RosterTerm,
+    Sprite, SpriteVariant, Stat, StatKind,
 };
 use crate::retry::{self, FailureKind};
 
@@ -360,6 +360,7 @@ pub async fn fetch_pokemon_bundle(
     detail.is_baby = species.is_baby;
     detail.genera = species.genera;
     detail.flavors = species.flavors;
+    detail.field = species.field;
     let evolution = fetch_chain(client, &species.chain_url).await?;
 
     // The sprite is a nice-to-have: a missing or undecodable image must not
@@ -519,6 +520,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         flavors: HashMap::new(),
         learnset_games: newest_version_group(&raw.moves).map(|(_, name)| name),
         moves: learnset(raw.moves),
+        field: FieldData::default(),
     })
 }
 
@@ -536,6 +538,7 @@ struct SpeciesInfo {
     is_baby: bool,
     genera: HashMap<String, String>,
     flavors: HashMap<String, String>,
+    field: FieldData,
 }
 
 /// Resolves the `/pokemon` key a species' artwork is filed under.
@@ -572,6 +575,7 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
     let url = format!("{BASE_URL}/pokemon-species/{name}");
     let species: RawSpecies = get_json(client, &url).await?;
 
+    let field = field_data(&species);
     let chain_url = species
         .evolution_chain
         .map(|c| c.url)
@@ -605,7 +609,29 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
         is_baby: species.is_baby,
         genera,
         flavors,
+        field,
     })
+}
+
+/// The breeding and field half of a species record.
+///
+/// Every field is read with a default, because the record is the one place
+/// PokeAPI is inconsistent about nulls: `habitat` is null for anything past
+/// Generation IV, `base_happiness` for a handful of newer species. A missing
+/// value is an empty row on the card, never a failed bundle.
+fn field_data(species: &RawSpecies) -> FieldData {
+    FieldData {
+        egg_groups: species
+            .egg_groups
+            .iter()
+            .map(|group| group.name.clone())
+            .collect(),
+        capture_rate: species.capture_rate.unwrap_or(0),
+        base_happiness: species.base_happiness,
+        growth_rate: species.growth_rate.as_ref().map(|rate| rate.name.clone()),
+        gender_rate: species.gender_rate.unwrap_or(-1),
+        habitat: species.habitat.as_ref().map(|habitat| habitat.name.clone()),
+    }
 }
 
 /// Fetches and parses an evolution chain from its API URL.
@@ -815,6 +841,18 @@ struct RawSpecies {
     flavor_text_entries: Vec<RawFlavorText>,
     #[serde(default)]
     varieties: Vec<RawVariety>,
+    #[serde(default)]
+    egg_groups: Vec<NamedResource>,
+    #[serde(default)]
+    capture_rate: Option<u8>,
+    #[serde(default)]
+    base_happiness: Option<u8>,
+    #[serde(default)]
+    growth_rate: Option<NamedResource>,
+    #[serde(default)]
+    gender_rate: Option<i8>,
+    #[serde(default)]
+    habitat: Option<NamedResource>,
 }
 
 /// One entry of a species' `varieties` list: the forms it ships as, exactly one
@@ -1144,6 +1182,73 @@ mod tests {
         );
         assert_eq!(default_variety_name(&raw, "bulbasaur"), "bulbasaur");
         assert_eq!(default_variety_name(&[], "bulbasaur"), "bulbasaur");
+    }
+
+    /// Parses a trimmed `/pokemon-species` payload the way `fetch_species`
+    /// does, down to the field data alone.
+    fn field_of(json: &str) -> FieldData {
+        field_data(&serde_json::from_str::<RawSpecies>(json).expect("species payload parses"))
+    }
+
+    #[test]
+    fn the_breeding_and_field_data_is_read_off_the_species_record() {
+        // Bulbasaur's record, trimmed to the six fields and what the parser
+        // insists on, in the shape PokeAPI sends them.
+        let field = field_of(
+            r#"{
+              "id": 1,
+              "evolution_chain": { "url": "" },
+              "egg_groups": [
+                { "name": "monster", "url": "" },
+                { "name": "plant", "url": "" }
+              ],
+              "capture_rate": 45,
+              "base_happiness": 50,
+              "growth_rate": { "name": "medium-slow", "url": "" },
+              "gender_rate": 1,
+              "habitat": { "name": "grassland", "url": "" }
+            }"#,
+        );
+        assert_eq!(field.egg_groups, ["monster", "plant"]);
+        assert_eq!(field.capture_rate, 45);
+        assert_eq!(field.base_happiness, Some(50));
+        assert_eq!(field.growth_rate.as_deref(), Some("medium-slow"));
+        assert_eq!(field.gender_rate, 1);
+        assert_eq!(field.habitat.as_deref(), Some("grassland"));
+    }
+
+    #[test]
+    fn a_species_with_no_habitat_and_no_gender_has_neither() {
+        // Everything past Generation IV has a null habitat, and a null must
+        // read as "no row" rather than sink the bundle. Genderless is -1.
+        let field = field_of(
+            r#"{
+              "id": 1000,
+              "evolution_chain": { "url": "" },
+              "egg_groups": [{ "name": "no-eggs", "url": "" }],
+              "capture_rate": 3,
+              "base_happiness": null,
+              "growth_rate": { "name": "slow", "url": "" },
+              "gender_rate": -1,
+              "habitat": null
+            }"#,
+        );
+        assert_eq!(field.habitat, None);
+        assert_eq!(field.base_happiness, None);
+        assert_eq!(field.gender_split(), None);
+        assert_eq!(field.egg_groups, ["no-eggs"]);
+    }
+
+    #[test]
+    fn a_species_record_missing_the_field_data_still_parses() {
+        // The fields are additions to a record that parsed without them, and
+        // a payload that leaves them out — a fixture, an older mirror — has
+        // to keep parsing rather than fail the whole species.
+        let field = field_of(r#"{ "id": 1, "evolution_chain": { "url": "" } }"#);
+        assert!(field.egg_groups.is_empty());
+        assert_eq!(field.growth_rate, None);
+        assert_eq!(field.habitat, None);
+        assert_eq!(field.gender_split(), None);
     }
 
     /// A trimmed `/evolution-chain` payload in the exact shape PokeAPI sends:

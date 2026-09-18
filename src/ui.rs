@@ -11,7 +11,10 @@ use crate::app::{App, Focus, SortKey};
 use crate::color;
 use crate::compare;
 use crate::i18n::{EvoStrings, Language, Strings};
-use crate::models::{title_case, EvolutionTree, LearnMethod, LearnedMove, PokemonDetail, Sprite};
+use crate::models::{
+    egg_group_label, title_case, CatchEase, EvolutionTree, FieldData, LearnMethod, LearnedMove,
+    PokemonDetail, Sprite,
+};
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
 use crate::typechart;
@@ -392,6 +395,17 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         ),
     ]));
 
+    // The field-guide half of the entry — breeding groups, gender ratio, catch
+    // rate, growth, habitat — packed as many facts to a row as the column is
+    // wide. Shown when the column has the rows for it, ahead of the flavour
+    // blurb below: on a terminal with room for only one of them, the facts
+    // are the half of the entry the card was missing, and the blurb is prose.
+    let facts = field_rows(&detail.field, s, info.width as usize);
+    if !facts.is_empty() && info.height as usize >= lines.len() + 1 + facts.len() {
+        lines.push(Line::raw(""));
+        lines.extend(facts);
+    }
+
     // When there's a flavor blurb and room to show it, split a small card off
     // the bottom of the info column for it; otherwise the stats use all of it.
     // Prefer PokeAPI's native blurb, then a cached machine translation, then the
@@ -405,7 +419,9 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     let flavor_rows = 4;
     match flavor {
-        Some(flavor) if info.height as usize > lines.len() + flavor_rows => {
+        // `>=` rather than `>`: the card is the rows below the lines, exactly,
+        // and asking for one more left a blurb off a column that had room.
+        Some(flavor) if info.height as usize >= lines.len() + flavor_rows => {
             let split =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(flavor_rows as u16)])
                     .split(info);
@@ -414,6 +430,98 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         }
         _ => frame.render_widget(Paragraph::new(lines), info),
     }
+}
+
+/// The field-guide facts as label/value pairs, in reading order, with the
+/// rows that have nothing to say left out: a species past Generation IV has
+/// no habitat, and a row saying "Habitat: none" would say less than no row.
+fn field_facts(field: &FieldData, s: &Strings) -> Vec<(String, String)> {
+    let mut facts = Vec::new();
+    if !field.egg_groups.is_empty() {
+        let groups: Vec<String> = field
+            .egg_groups
+            .iter()
+            .map(|g| egg_group_label(g))
+            .collect();
+        facts.push((s.egg_groups_label.to_string(), groups.join(" · ")));
+    }
+    // The symbols are the label: "♂ 87.5% · ♀ 12.5%" needs no word in front
+    // of it in any of the six languages, and the row is narrower for it.
+    let gender = match field.gender_split() {
+        Some((male, female)) => format!("♂ {} · ♀ {}", percent(male), percent(female)),
+        None => s.genderless.to_string(),
+    };
+    facts.push((String::new(), gender));
+    let ease = match field.catch_ease() {
+        CatchEase::Hard => s.catch_hard,
+        CatchEase::Average => s.catch_average,
+        CatchEase::Easy => s.catch_easy,
+    };
+    facts.push((
+        s.catch_rate_label.to_string(),
+        format!("{} ({ease})", field.capture_rate),
+    ));
+    if let Some(rate) = &field.growth_rate {
+        facts.push((s.growth_label.to_string(), title_case(rate)));
+    }
+    if let Some(happiness) = field.base_happiness {
+        facts.push((s.happiness_label.to_string(), happiness.to_string()));
+    }
+    if let Some(habitat) = &field.habitat {
+        facts.push((s.habitat_label.to_string(), title_case(habitat)));
+    }
+    facts
+}
+
+/// A gender percentage without a pointless decimal: `50%`, `87.5%`.
+fn percent(value: f32) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}%")
+    } else {
+        format!("{value:.1}%")
+    }
+}
+
+/// The field-guide facts laid out for a column `width` cells wide.
+fn field_rows(field: &FieldData, s: &Strings, width: usize) -> Vec<Line<'static>> {
+    fact_rows(&field_facts(field, s), width)
+}
+
+/// Lays label/value pairs out left to right, as many to a row as `width`
+/// takes, so a wide column reads them in two rows and a narrow one in five
+/// rather than every row losing its end. A fact wider than the whole column
+/// gets a row to itself and is clipped there, which is the one case nothing
+/// can lay out. An empty label is a value that explains itself.
+fn fact_rows(facts: &[(String, String)], width: usize) -> Vec<Line<'static>> {
+    const GAP: &str = "    ";
+    let mut rows = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for (label, value) in facts {
+        let label = match label.is_empty() {
+            true => String::new(),
+            false => format!("{label}: "),
+        };
+        let cell = label.chars().count() + value.chars().count();
+        if !spans.is_empty() && used + GAP.len() + cell > width {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::raw(GAP));
+            used += GAP.len();
+        }
+        spans.push(Span::styled(label, Style::default().fg(theme::SUBTEXT)));
+        spans.push(Span::styled(
+            value.clone(),
+            Style::default().fg(theme::TEXT),
+        ));
+        used += cell;
+    }
+    if !spans.is_empty() {
+        rows.push(Line::from(spans));
+    }
+    rows
 }
 
 /// Renders the Pokedex flavor-text blurb as a quoted, word-wrapped little card.
@@ -2457,6 +2565,81 @@ mod tests {
             width,
             height,
         }
+    }
+
+    fn fact(label: &str, value: &str) -> (String, String) {
+        (label.to_string(), value.to_string())
+    }
+
+    /// The text of each row, gaps included.
+    fn row_text(rows: &[Line]) -> Vec<String> {
+        rows.iter().map(|line| line.to_string()).collect()
+    }
+
+    #[test]
+    fn facts_pack_into_a_row_until_it_is_full() {
+        let facts = [fact("A", "one"), fact("B", "two"), fact("C", "three")];
+        // "A: one" is 6, the gap 4, "B: two" 6: 16 fits a row of 20 and
+        // "C: three" (8 more) does not.
+        assert_eq!(
+            row_text(&fact_rows(&facts, 20)),
+            ["A: one    B: two", "C: three"]
+        );
+        // Wide enough, and they all sit on one row.
+        assert_eq!(
+            row_text(&fact_rows(&facts, 40)),
+            ["A: one    B: two    C: three"]
+        );
+    }
+
+    #[test]
+    fn a_fact_wider_than_the_column_still_gets_a_row() {
+        // The alternative is an infinite loop or a dropped fact; a clipped
+        // row is the honest answer.
+        let facts = [fact("Habitat", "Somewhere very far away indeed")];
+        assert_eq!(fact_rows(&facts, 10).len(), 1);
+        assert!(fact_rows(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn a_fact_with_no_label_is_its_own_explanation() {
+        assert_eq!(
+            row_text(&fact_rows(&[fact("", "♂ 50% · ♀ 50%")], 40)),
+            ["♂ 50% · ♀ 50%"]
+        );
+    }
+
+    #[test]
+    fn the_field_rows_say_genderless_and_leave_out_what_the_record_lacks() {
+        let s = Language::English.strings();
+        let mut field = FieldData {
+            egg_groups: vec!["monster".to_string(), "plant".to_string()],
+            capture_rate: 45,
+            base_happiness: Some(50),
+            growth_rate: Some("medium-slow".to_string()),
+            gender_rate: 1,
+            habitat: Some("grassland".to_string()),
+        };
+        let text = row_text(&field_rows(&field, &s, 200)).join(" ");
+        assert!(text.contains("Egg groups: Monster · Grass"), "{text}");
+        assert!(text.contains("♂ 87.5% · ♀ 12.5%"), "{text}");
+        assert!(text.contains("Catch rate: 45 (hard)"), "{text}");
+        assert!(text.contains("Growth: Medium Slow"), "{text}");
+        assert!(text.contains("Habitat: Grassland"), "{text}");
+
+        // Genderless, and nothing recorded for the optional three.
+        field.gender_rate = -1;
+        field.habitat = None;
+        field.base_happiness = None;
+        field.growth_rate = None;
+        let text = row_text(&field_rows(&field, &s, 200)).join(" ");
+        assert!(text.contains("Genderless"), "{text}");
+        assert!(
+            !text.contains("Habitat"),
+            "a null habitat drops the row: {text}"
+        );
+        assert!(!text.contains("None"), "{text}");
+        assert!(!text.contains("Growth"), "{text}");
     }
 
     #[test]

@@ -351,6 +351,93 @@ pub struct PokemonDetail {
     /// version-group slug (`"scarlet-violet"`). Shown on the card, because a
     /// learnset means little without knowing which games it belongs to.
     pub learnset_games: Option<String>,
+    /// Breeding and field data, from the species record.
+    pub field: FieldData,
+}
+
+/// The "field guide" half of a Pokedex entry: how a species breeds, how
+/// readily it is caught, and where it lives. All of it rides along on the
+/// species record the bundle already fetches, so none of it costs a request.
+///
+/// The numbers are kept as PokeAPI sends them and read through the methods
+/// below, so the conversions — eighths of a gender ratio into percentages,
+/// a catch rate into a word — live in one place and are tested there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldData {
+    /// Breeding groups as PokeAPI slugs (`plant`, `water1`). Shown through
+    /// [`egg_group_label`] so they read by their in-game names.
+    pub egg_groups: Vec<String>,
+    /// 0-255, where higher is caught more easily. Pidgey is 255, most
+    /// starters are 45, and the Legendary birds are 3.
+    pub capture_rate: u8,
+    /// Friendship at capture. `None` for the few species PokeAPI records no
+    /// value for.
+    pub base_happiness: Option<u8>,
+    /// The experience curve, as PokeAPI's slug (`medium-slow`). Readable
+    /// enough title-cased that it costs no request to name.
+    pub growth_rate: Option<String>,
+    /// Chance of being female, in eighths, with `-1` meaning genderless.
+    /// Read through [`gender_split`](Self::gender_split), which is the only
+    /// place the sentinel has to be known.
+    pub gender_rate: i8,
+    /// Where the species is found in the wild, as a slug (`mountain`). Only
+    /// recorded up to Generation IV, so `None` for everything after it.
+    pub habitat: Option<String>,
+}
+
+/// Where a species sits on the catch-rate scale, in words the card can show
+/// next to a number that says nothing on its own about which way it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatchEase {
+    /// Up to 45: starters, pseudo-legendaries and everything rarer.
+    Hard,
+    Average,
+    /// 150 and up: early-route species, caught with a plain Poke Ball.
+    Easy,
+}
+
+impl FieldData {
+    /// Male and female percentages, or `None` for a genderless species.
+    ///
+    /// PokeAPI counts in eighths, so the split is always a multiple of 12.5
+    /// and the sum is always exactly 100.
+    pub fn gender_split(&self) -> Option<(f32, f32)> {
+        match self.gender_rate {
+            rate @ 0..=8 => {
+                let female = f32::from(rate) * 12.5;
+                Some((100.0 - female, female))
+            }
+            _ => None,
+        }
+    }
+
+    /// The catch rate in words, for the card to say beside the number.
+    pub fn catch_ease(&self) -> CatchEase {
+        match self.capture_rate {
+            0..=45 => CatchEase::Hard,
+            46..=149 => CatchEase::Average,
+            _ => CatchEase::Easy,
+        }
+    }
+}
+
+/// The in-game name of a breeding group, from the slug PokeAPI files it
+/// under. The inverse of the alias table the `egg:` search term goes
+/// through: the Grass group is `plant` on the wire, Field is `ground`, and a
+/// card saying "Ground" about a Grass type is misinformation rather than a
+/// spelling. Slugs outside the table are title-cased.
+pub fn egg_group_label(slug: &str) -> String {
+    match slug {
+        "plant" => "Grass".to_string(),
+        "ground" => "Field".to_string(),
+        "humanshape" => "Human-Like".to_string(),
+        "indeterminate" => "Amorphous".to_string(),
+        "water1" => "Water 1".to_string(),
+        "water2" => "Water 2".to_string(),
+        "water3" => "Water 3".to_string(),
+        "no-eggs" => "Undiscovered".to_string(),
+        other => title_case(other),
+    }
 }
 
 impl PokemonDetail {
@@ -728,7 +815,47 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            field: FieldData::default(),
         }
+    }
+
+    fn field(gender_rate: i8, capture_rate: u8) -> FieldData {
+        FieldData {
+            gender_rate,
+            capture_rate,
+            ..FieldData::default()
+        }
+    }
+
+    #[test]
+    fn a_gender_ratio_reads_as_percentages_and_minus_one_as_genderless() {
+        // The sentinel must never reach the card as a ratio: -1 eighths
+        // would print as a negative percentage.
+        assert_eq!(field(-1, 0).gender_split(), None);
+        assert_eq!(field(0, 0).gender_split(), Some((100.0, 0.0)));
+        assert_eq!(field(8, 0).gender_split(), Some((0.0, 100.0)));
+        assert_eq!(field(1, 0).gender_split(), Some((87.5, 12.5)));
+        assert_eq!(field(4, 0).gender_split(), Some((50.0, 50.0)));
+    }
+
+    #[test]
+    fn the_catch_rate_reads_the_right_way_round() {
+        // Higher is easier, which the raw number does not say.
+        assert_eq!(field(0, 3).catch_ease(), CatchEase::Hard);
+        assert_eq!(field(0, 45).catch_ease(), CatchEase::Hard);
+        assert_eq!(field(0, 90).catch_ease(), CatchEase::Average);
+        assert_eq!(field(0, 255).catch_ease(), CatchEase::Easy);
+    }
+
+    #[test]
+    fn breeding_groups_read_by_their_in_game_names() {
+        assert_eq!(egg_group_label("plant"), "Grass");
+        assert_eq!(egg_group_label("ground"), "Field");
+        assert_eq!(egg_group_label("water1"), "Water 1");
+        assert_eq!(egg_group_label("no-eggs"), "Undiscovered");
+        // Outside the table, the slug is readable as it is.
+        assert_eq!(egg_group_label("monster"), "Monster");
+        assert_eq!(egg_group_label("dragon"), "Dragon");
     }
 
     #[test]

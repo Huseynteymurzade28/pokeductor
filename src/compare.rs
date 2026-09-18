@@ -142,7 +142,7 @@ pub fn best_hit<'a>(attacker: &'a PokemonDetail, defender: &PokemonDetail) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Ability, Stat};
+    use crate::models::{Ability, FieldData, Stat};
     use std::collections::HashMap;
 
     fn species(name: &str, types: &[&str], stats: &[(StatKind, u16)]) -> PokemonDetail {
@@ -182,6 +182,7 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            field: FieldData::default(),
         }
     }
 

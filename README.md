@@ -120,8 +120,21 @@ looking for.
 ### Species details and abilities
 
 The info panel carries the dex number, genus, typing, abilities, physical
-measurements and base stats, with a flavour blurb when the panel has room for
-one. `A` opens the abilities card:
+measurements and base stats, then the field-guide half of the entry: breeding
+groups, gender ratio, catch rate, growth curve, base happiness and — for
+species up to Generation IV, the last the games recorded one for — habitat. A
+flavour blurb follows when the panel has room for one. All of it arrives on
+the species record every fetch already pulls down, so none of it costs a
+request.
+
+The catch rate is 0–255 with higher being easier, which the number alone does
+not say, so it comes with a word — *hard* up to 45 (starters, pseudo-
+legendaries, everything rarer), *easy* from 150 (early-route species) — and a
+genderless species says so rather than showing a ratio. Breeding groups are
+named as the games name them, not as PokeAPI files them: the `egg:` search
+term's alias table, run the other way.
+
+`A` opens the abilities card:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-abilities.png" alt="The abilities card for Snorlax, showing Immunity, Thick Fat and the hidden ability Gluttony with descriptions" width="900">
 
