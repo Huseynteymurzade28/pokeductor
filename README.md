@@ -457,6 +457,7 @@ through to disk.
 | `color.rs` | Terminal colour-depth detection, and the per-frame degradation pass. |
 | `session.rs` | Party and preferences carried over from the previous run. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`) parsing. |
+| `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
 | `typechart.rs` | Offline Generation VI+ type-effectiveness chart and matchup analysis. |

@@ -10,13 +10,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
-use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use crate::api;
 use crate::api::ApiError;
+use crate::browser::{Browser, SortKey};
 use crate::cache;
 use crate::cli::Startup;
 use crate::color::{self, Depth};
@@ -25,7 +25,6 @@ use crate::models::{
     AbilityInfo, EvolutionTree, LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterTerm,
     Sprite, SpriteVariant,
 };
-use crate::query::Query;
 use crate::session::{self, Session};
 use crate::team;
 
@@ -93,64 +92,13 @@ pub enum Focus {
     Evolution,
 }
 
-/// How the sidebar orders whatever survived the filter.
-///
-/// Both keys are derived from data the list response already carries, so
-/// sorting never costs a request. Ordering by base-stat total would: it needs
-/// every species' stats, which is 1300 fetches for one keypress.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortKey {
-    /// National Pokedex order — PokeAPI's own, and the default.
-    Dex,
-    /// Alphabetical by name.
-    Name,
-}
-
-impl SortKey {
-    /// The next key in the cycle, for the sort hotkey.
-    pub fn next(self) -> Self {
-        match self {
-            SortKey::Dex => SortKey::Name,
-            SortKey::Name => SortKey::Dex,
-        }
-    }
-
-    /// Stable name used to record the ordering in a session file, so that
-    /// reordering this enum can never change what a stored session means.
-    pub fn code(self) -> &'static str {
-        match self {
-            SortKey::Dex => "dex",
-            SortKey::Name => "name",
-        }
-    }
-
-    /// The inverse of [`code`](Self::code). An unrecognised value is `None`,
-    /// and the caller keeps the default ordering.
-    pub fn from_code(code: &str) -> Option<Self> {
-        match code {
-            "dex" => Some(SortKey::Dex),
-            "name" => Some(SortKey::Name),
-            _ => None,
-        }
-    }
-}
-
 /// The complete, observable state of the running application.
 pub struct App {
     pub language: Language,
-    pub all_pokemon: Vec<PokemonEntry>,
-    /// Indices into `all_pokemon` that match the current search query.
-    pub filtered: Vec<usize>,
-    pub list_state: ListState,
-    /// Raw contents of the search box, exactly as typed.
-    pub query: String,
-    /// `query` after parsing, kept so the renderer can describe the active
-    /// filter without re-parsing on every frame.
-    pub parsed_query: Query,
-    pub sort: SortKey,
-    /// Membership lists for the filter terms asked for so far. An entry that is
-    /// present but empty means "we asked and got nothing back".
-    pub rosters: HashMap<RosterTerm, HashSet<String>>,
+    /// The sidebar: the master list, the search box, the ordering and the
+    /// cursor over the result. Everything about the visible list that needs
+    /// no network lives there; what stays here is the half that does.
+    pub browser: Browser,
     /// Rosters currently in flight, so a filter is requested only once.
     pub roster_loading: HashSet<RosterTerm>,
     pub focus: Focus,
@@ -260,13 +208,7 @@ impl App {
         let (tx, rx) = mpsc::channel(64);
         let app = App {
             language: startup.language.unwrap_or(Language::English),
-            all_pokemon: Vec::new(),
-            filtered: Vec::new(),
-            list_state: ListState::default(),
-            query: String::new(),
-            parsed_query: Query::default(),
-            sort: SortKey::Dex,
-            rosters: HashMap::new(),
+            browser: Browser::default(),
             roster_loading: HashSet::new(),
             focus: Focus::List,
             details: HashMap::new(),
@@ -410,7 +352,7 @@ impl App {
         Session {
             team: self.team.clone(),
             language: Some(self.language.flavor_code().to_string()),
-            sort: Some(self.sort.code().to_string()),
+            sort: Some(self.browser.sort.code().to_string()),
             shiny: self.sprite_variant.is_shiny(),
         }
     }
@@ -431,7 +373,7 @@ impl App {
             }
         }
         if let Some(sort) = session.sort.as_deref().and_then(SortKey::from_code) {
-            self.sort = sort;
+            self.browser.sort = sort;
         }
         if session.shiny {
             self.sprite_variant = SpriteVariant::Shiny;
@@ -489,11 +431,13 @@ impl App {
     /// Kicks off a roster fetch for every filter term we have not resolved yet.
     /// One request answers a whole term, and the answer is cached on disk, so
     /// this fires at most once per term per install.
-    fn request_missing_rosters(&mut self, query: &Query) {
-        let missing: Vec<RosterTerm> = query
+    fn request_missing_rosters(&mut self) {
+        let missing: Vec<RosterTerm> = self
+            .browser
+            .parsed
             .rosters
             .iter()
-            .filter(|t| !self.rosters.contains_key(*t) && !self.roster_loading.contains(*t))
+            .filter(|t| !self.browser.rosters.contains_key(*t) && !self.roster_loading.contains(*t))
             .cloned()
             .collect();
 
@@ -707,14 +651,11 @@ impl App {
     /// is right when a human is about to press `↓`, and wrong as the answer to
     /// `pokeductor mew`, so an exact name takes the cursor.
     fn select_named_species(&mut self, name: String) {
-        self.query = name.trim().to_lowercase();
+        self.browser.query = name.trim().to_lowercase();
         self.recompute_filter();
-        let exact = self
-            .filtered
-            .iter()
-            .position(|&idx| self.all_pokemon[idx].name == self.query);
+        let exact = self.browser.position_of(&self.browser.query.clone());
         if let Some(pos) = exact {
-            self.list_state.select(Some(pos));
+            self.browser.list_state.select(Some(pos));
         }
     }
 
@@ -727,12 +668,10 @@ impl App {
         };
         // Make sure the target is visible in the list and selected there, so the
         // sidebar stays in sync with the detail panel.
-        self.query.clear();
+        self.browser.query.clear();
         self.recompute_filter();
-        if let Some(abs) = self.all_pokemon.iter().position(|p| p.name == name) {
-            if let Some(pos) = self.filtered.iter().position(|&i| i == abs) {
-                self.list_state.select(Some(pos));
-            }
+        if let Some(pos) = self.browser.position_of(&name) {
+            self.browser.list_state.select(Some(pos));
         }
         self.request_selected();
     }
@@ -742,7 +681,7 @@ impl App {
     fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::ListLoaded(list) => {
-                self.all_pokemon = list;
+                self.browser.all = list;
                 self.list_loading = false;
                 // A species named on the command line goes through the
                 // search box, which is what narrows the list to it. With no
@@ -808,7 +747,9 @@ impl App {
                 self.roster_loading.remove(&term);
                 // Recorded even when empty — a mistyped term must settle on
                 // "no results" instead of being requested again every frame.
-                self.rosters.insert(term, members.into_iter().collect());
+                self.browser
+                    .rosters
+                    .insert(term, members.into_iter().collect());
                 self.recompute_filter();
             }
             Message::FlavorTranslated { name, lang, text } => {
@@ -1012,23 +953,16 @@ impl App {
     /// The search box is cleared only when it hides the target, so a filter
     /// the target already satisfies is kept rather than thrown away.
     fn show_species(&mut self, name: &str) -> bool {
-        if self.position_in_list(name).is_none() {
-            self.query.clear();
+        if self.browser.position_of(name).is_none() {
+            self.browser.query.clear();
             self.recompute_filter();
         }
-        let Some(pos) = self.position_in_list(name) else {
+        let Some(pos) = self.browser.position_of(name) else {
             return false;
         };
-        self.list_state.select(Some(pos));
+        self.browser.list_state.select(Some(pos));
         self.request_selected();
         true
-    }
-
-    /// Where `name` sits in the list as currently filtered, if it does.
-    fn position_in_list(&self, name: &str) -> Option<usize> {
-        self.filtered
-            .iter()
-            .position(|&idx| self.all_pokemon[idx].name == name)
     }
 
     /// The varieties of the species on display, which is what the forms card
@@ -1321,10 +1255,10 @@ impl App {
     /// species you did not ask for — a fair part of what a Pokedex full of
     /// names you have never heard of is good for.
     fn open_random(&mut self) {
-        let Some(pos) = random_index(self.filtered.len()) else {
+        let Some(pos) = random_index(self.browser.filtered.len()) else {
             return; // an empty list rolls nothing
         };
-        self.list_state.select(Some(pos));
+        self.browser.list_state.select(Some(pos));
         self.request_selected();
     }
 
@@ -1422,11 +1356,11 @@ impl App {
             KeyCode::Up => self.move_selection(-1),
             KeyCode::Down => self.move_selection(1),
             KeyCode::Backspace => {
-                self.query.pop();
+                self.browser.query.pop();
                 self.recompute_filter();
             }
             KeyCode::Char(c) => {
-                self.query.push(c);
+                self.browser.query.push(c);
                 self.recompute_filter();
             }
             _ => {}
@@ -1435,95 +1369,36 @@ impl App {
 
     // --- List / filter helpers -------------------------------------------
 
-    /// Rebuilds the visible list from the search box and the sort key.
+    /// Re-filters the sidebar and asks for whatever rosters the new query
+    /// needs. The filtering is [`Browser::recompute`]; what this adds is the
+    /// fetch, which is the half that cannot live there.
     ///
-    /// Called after anything that can change either, and cheap enough to run on
-    /// every keystroke: the work is one pass over ~1300 entries plus a sort.
+    /// The requests go out after the pass rather than before it. They are
+    /// answered on another task either way, so the list this pass produces is
+    /// the same, and reading the terms off the query it just parsed saves
+    /// parsing the box twice on every keystroke.
     fn recompute_filter(&mut self) {
-        let query = Query::parse(&self.query);
-        self.request_missing_rosters(&query);
-
-        // Remember what was highlighted so the same Pokemon stays under the
-        // cursor when the list is merely re-sorted, or when it survives a
-        // narrowing search. Losing the highlight on every keystroke is the
-        // main thing that makes a filtered list annoying to use.
-        let anchor = self.current_name();
-
-        let mut filtered: Vec<usize> = self
-            .all_pokemon
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| query.matches_entry(p) && self.is_in_every_roster(&query, &p.name))
-            .map(|(idx, _)| idx)
-            .collect();
-
-        match self.sort {
-            SortKey::Dex => filtered.sort_unstable_by_key(|&idx| self.all_pokemon[idx].id),
-            SortKey::Name => {
-                filtered.sort_unstable_by(|&a, &b| {
-                    self.all_pokemon[a].name.cmp(&self.all_pokemon[b].name)
-                });
-            }
-        }
-
-        self.filtered = filtered;
-        self.parsed_query = query;
-        self.restore_highlight(anchor);
-    }
-
-    /// Whether `name` is in the roster of every filter term the query asks for.
-    /// A roster we do not have yet matches nothing, which leaves the list empty
-    /// until it lands — the sidebar says as much while that is true.
-    fn is_in_every_roster(&self, query: &Query, name: &str) -> bool {
-        query.rosters.iter().all(|term| {
-            self.rosters
-                .get(term)
-                .is_some_and(|members| members.contains(name))
-        })
-    }
-
-    /// Puts the cursor back on `anchor` if it is still visible, and on the
-    /// first row otherwise.
-    fn restore_highlight(&mut self, anchor: Option<String>) {
-        if self.filtered.is_empty() {
-            self.list_state.select(None);
-            return;
-        }
-        let restored = anchor
-            .and_then(|name| self.all_pokemon.iter().position(|p| p.name == name))
-            .and_then(|abs| self.filtered.iter().position(|&idx| idx == abs));
-        self.list_state.select(Some(restored.unwrap_or(0)));
+        self.browser.recompute();
+        self.request_missing_rosters();
     }
 
     /// True while a filter term is still waiting on its roster, so the sidebar
     /// can say "loading" rather than "no results".
     pub fn awaiting_roster(&self) -> bool {
-        self.parsed_query
-            .rosters
-            .iter()
-            .any(|term| !self.rosters.contains_key(term))
+        self.browser.awaiting_roster()
     }
 
     fn cycle_sort(&mut self) {
-        self.sort = self.sort.next();
-        self.recompute_filter();
+        self.browser.cycle_sort();
     }
 
     fn move_selection(&mut self, delta: i32) {
-        if self.filtered.is_empty() {
-            return;
-        }
-        let len = self.filtered.len() as i32;
-        let current = self.list_state.selected().unwrap_or(0) as i32;
-        let next = (current + delta).rem_euclid(len);
-        self.list_state.select(Some(next as usize));
+        self.browser.move_selection(delta);
     }
 
     /// Raw API name of the highlighted list entry, if any.
     pub fn current_name(&self) -> Option<String> {
-        let selected = self.list_state.selected()?;
-        let idx = *self.filtered.get(selected)?;
-        self.all_pokemon.get(idx).map(|p| p.name.clone())
+        self.browser.current_name()
     }
 
     /// Detail record for the panel, if the selection is loaded.
@@ -1740,38 +1615,59 @@ fn random_index(len: usize) -> Option<usize> {
     Some(nanos as usize % len)
 }
 
+/// An app with `entries` as its master list and nothing in flight.
+///
+/// `App::new` touches no network of its own — it only builds the client the
+/// fetch tasks would use, and the receiver dropped here means nothing is
+/// listening if one ever did — so this stays a plain unit test. It lives out
+/// here rather than in the test module below because the renderer's tests
+/// need an app to draw, and one way of building one is enough.
+#[cfg(test)]
+pub(crate) fn app_listing(entries: &[(u32, &str)]) -> App {
+    let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+    app.browser.all = entries
+        .iter()
+        .map(|&(id, name)| PokemonEntry {
+            name: name.to_string(),
+            id,
+        })
+        .collect();
+    app
+}
+
+/// A loaded record for `name`, empty apart from it. Tests that care about a
+/// field set it; the rest are what a species the app has never heard of would
+/// look like, which is exactly what the panels have to survive.
+#[cfg(test)]
+pub(crate) fn loaded(name: &str) -> PokemonDetail {
+    PokemonDetail {
+        name: name.to_string(),
+        species: name.to_string(),
+        forms: Vec::new(),
+        dex_number: 0,
+        is_legendary: false,
+        is_mythical: false,
+        is_baby: false,
+        types: Vec::new(),
+        abilities: Vec::new(),
+        stats: Vec::new(),
+        height: 0,
+        weight: 0,
+        sprite_url: None,
+        shiny_sprite_url: None,
+        genera: std::collections::HashMap::new(),
+        flavors: std::collections::HashMap::new(),
+        moves: Vec::new(),
+        learnset_games: None,
+        field: crate::models::FieldData::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{FieldData, RosterKind};
-
-    #[test]
-    fn every_sort_key_reads_back_out_of_its_code() {
-        for sort in [SortKey::Dex, SortKey::Name] {
-            assert_eq!(SortKey::from_code(sort.code()), Some(sort));
-        }
-    }
-
-    #[test]
-    fn an_unknown_sort_code_is_not_guessed_at() {
-        assert_eq!(SortKey::from_code("stat-total"), None);
-        assert_eq!(SortKey::from_code(""), None);
-    }
-
-    /// An app with a list already in it and nothing in flight. `App::new`
-    /// touches no network of its own — it only builds the client the fetch
-    /// tasks would use — so this stays a plain unit test.
-    fn app_listing(entries: &[(u32, &str)]) -> App {
-        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
-        app.all_pokemon = entries
-            .iter()
-            .map(|&(id, name)| PokemonEntry {
-                name: name.to_string(),
-                id,
-            })
-            .collect();
-        app
-    }
+    use crate::models::RosterKind;
+    use crate::query::Query;
 
     /// The membership set a roster resolves to.
     fn members(names: &[&str]) -> HashSet<String> {
@@ -1780,9 +1676,10 @@ mod tests {
 
     /// The names currently visible in the sidebar, in order.
     fn visible(app: &App) -> Vec<&str> {
-        app.filtered
+        app.browser
+            .filtered
             .iter()
-            .map(|&idx| app.all_pokemon[idx].name.as_str())
+            .map(|&idx| app.browser.all[idx].name.as_str())
             .collect()
     }
 
@@ -1801,33 +1698,6 @@ mod tests {
             };
         }
         node
-    }
-
-    /// Enough of a record to keep [`App::request_selected`] on its cache-hit
-    /// path: the fetch it would otherwise spawn wants a runtime these tests
-    /// have no reason to build.
-    fn loaded(name: &str) -> PokemonDetail {
-        PokemonDetail {
-            name: name.to_string(),
-            species: name.to_string(),
-            forms: Vec::new(),
-            dex_number: 0,
-            is_legendary: false,
-            is_mythical: false,
-            is_baby: false,
-            types: Vec::new(),
-            abilities: Vec::new(),
-            stats: Vec::new(),
-            height: 0,
-            weight: 0,
-            sprite_url: None,
-            shiny_sprite_url: None,
-            genera: HashMap::new(),
-            flavors: HashMap::new(),
-            moves: Vec::new(),
-            learnset_games: None,
-            field: FieldData::default(),
-        }
     }
 
     fn press(code: KeyCode) -> KeyEvent {
@@ -1972,14 +1842,20 @@ mod tests {
         app.details
             .insert("alakazam".to_string(), loaded("alakazam"));
 
-        app.query = "gen".to_string();
+        app.browser.query = "gen".to_string();
         app.recompute_filter();
         assert!(app.show_species("gengar"));
-        assert_eq!(app.query, "gen", "gengar matches, so the filter stays");
+        assert_eq!(
+            app.browser.query, "gen",
+            "gengar matches, so the filter stays"
+        );
         assert_eq!(app.selected_name.as_deref(), Some("gengar"));
 
         assert!(app.show_species("alakazam"));
-        assert_eq!(app.query, "", "alakazam did not, so the box was cleared");
+        assert_eq!(
+            app.browser.query, "",
+            "alakazam did not, so the box was cleared"
+        );
         assert_eq!(app.selected_name.as_deref(), Some("alakazam"));
 
         assert!(!app.show_species("missingno"), "not in the list at all");
@@ -2084,14 +1960,14 @@ mod tests {
             (25, "pikachu"),
         ]);
         app.color_depth = Depth::None;
-        app.rosters.insert(
+        app.browser.rosters.insert(
             RosterTerm::new(RosterKind::Type, "ghost"),
             members(&["gastly", "haunter", "gengar"]),
         );
         for name in ["gastly", "haunter", "gengar", "pikachu"] {
             app.details.insert(name.to_string(), loaded(name));
         }
-        app.query = "type:ghost".to_string();
+        app.browser.query = "type:ghost".to_string();
         app.recompute_filter();
 
         for _ in 0..50 {
@@ -2101,9 +1977,9 @@ mod tests {
                 ["gastly", "haunter", "gengar"].contains(&landed.as_str()),
                 "{landed} is not in the filter"
             );
-            let pos = app.list_state.selected().expect("the cursor moved");
+            let pos = app.browser.list_state.selected().expect("the cursor moved");
             assert!(
-                pos < app.filtered.len(),
+                pos < app.browser.filtered.len(),
                 "the cursor is inside the filtered list"
             );
         }
@@ -2112,12 +1988,16 @@ mod tests {
     #[test]
     fn rolling_on_an_empty_list_does_nothing() {
         let mut app = app_listing(&[(1, "bulbasaur")]);
-        app.query = "nothing-matches-this".to_string();
+        app.browser.query = "nothing-matches-this".to_string();
         app.recompute_filter();
-        assert!(app.filtered.is_empty());
+        assert!(app.browser.filtered.is_empty());
 
         app.open_random();
-        assert_eq!(app.list_state.selected(), None, "the cursor stays parked");
+        assert_eq!(
+            app.browser.list_state.selected(),
+            None,
+            "the cursor stays parked"
+        );
         assert_eq!(app.selected_name, None, "nothing was loaded");
     }
 
@@ -2155,20 +2035,20 @@ mod tests {
         // `egg:grass` also has to survive the trip through the alias table on
         // the way to the group PokeAPI files as `plant`.
         let mut app = app_listing(&[(1, "bulbasaur"), (43, "oddish"), (92, "gastly")]);
-        app.rosters.insert(
+        app.browser.rosters.insert(
             RosterTerm::new(RosterKind::Type, "poison"),
             members(&["bulbasaur", "oddish", "gastly"]),
         );
-        app.rosters.insert(
+        app.browser.rosters.insert(
             RosterTerm::new(RosterKind::EggGroup, "plant"),
             members(&["bulbasaur", "oddish"]),
         );
 
-        app.query = "type:poison".to_string();
+        app.browser.query = "type:poison".to_string();
         app.recompute_filter();
         assert_eq!(visible(&app), ["bulbasaur", "oddish", "gastly"]);
 
-        app.query = "type:poison egg:grass".to_string();
+        app.browser.query = "type:poison egg:grass".to_string();
         app.recompute_filter();
         assert_eq!(visible(&app), ["bulbasaur", "oddish"]);
     }
@@ -2180,14 +2060,15 @@ mod tests {
         // unresolved term matches nothing, so the two look identical from the
         // list alone.
         let mut app = app_listing(&[]);
-        app.parsed_query = Query::parse("type:poison ability:levitate");
+        app.browser.parsed = Query::parse("type:poison ability:levitate");
         assert!(app.awaiting_roster());
 
-        app.rosters
+        app.browser
+            .rosters
             .insert(RosterTerm::new(RosterKind::Type, "poison"), HashSet::new());
         assert!(app.awaiting_roster());
 
-        app.rosters.insert(
+        app.browser.rosters.insert(
             RosterTerm::new(RosterKind::Ability, "levitate"),
             HashSet::new(),
         );
@@ -2275,8 +2156,15 @@ mod tests {
         let mut app = app_listing(&[(150, "mewtwo"), (151, "mew")]);
         app.select_named_species("Mew".to_string());
 
-        assert_eq!(app.query, "mew", "the box shows what narrowed the list");
-        assert_eq!(app.filtered.len(), 2, "Mewtwo still matches the text");
+        assert_eq!(
+            app.browser.query, "mew",
+            "the box shows what narrowed the list"
+        );
+        assert_eq!(
+            app.browser.filtered.len(),
+            2,
+            "Mewtwo still matches the text"
+        );
         assert_eq!(app.current_name().as_deref(), Some("mew"));
     }
 
@@ -2293,9 +2181,12 @@ mod tests {
         let mut app = app_listing(&[(1, "bulbasaur")]);
         app.select_named_species("gengr".to_string());
 
-        assert!(app.filtered.is_empty());
+        assert!(app.browser.filtered.is_empty());
         assert_eq!(app.current_name(), None, "nothing to load, nothing loaded");
-        assert_eq!(app.query, "gengr", "and the box says why the list is empty");
+        assert_eq!(
+            app.browser.query, "gengr",
+            "and the box says why the list is empty"
+        );
     }
 
     #[test]

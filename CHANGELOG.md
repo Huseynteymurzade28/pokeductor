@@ -55,6 +55,16 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ### Changed
 
+- The sidebar's state — the master list, the search box, the ordering and the
+  cursor — is its own `browser.rs`, holding no client and spawning no tasks, so
+  the rules that are easiest to break by accident can be tested directly: the
+  highlight surviving a narrowing search or a re-sort, the cursor wrapping, and
+  a filter whose roster has not arrived matching nothing rather than
+  everything. The panels have `TestBackend` render tests beside them, covering
+  what each says when it is loading, empty or in error, and both sides of the
+  evolution graph's card ↔ text-tree threshold. `app.rs` and `ui.rs` had no
+  tests at all before this. (#21)
+
 - Chain cards are centred on their canvas and no longer stretch past a readable
   width, so a wide screen draws one connected graph rather than clusters spread
   to its far edges.

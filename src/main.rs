@@ -18,6 +18,7 @@
 
 mod api;
 mod app;
+mod browser;
 mod cache;
 mod cli;
 mod color;

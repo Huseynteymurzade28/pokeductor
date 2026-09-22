@@ -7,7 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Focus, SortKey};
+use crate::app::{App, Focus};
+use crate::browser::SortKey;
 use crate::color;
 use crate::compare;
 use crate::i18n::{EvoStrings, Language, Strings};
@@ -127,7 +128,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let search_focused = app.focus == Focus::Search;
     let search_block = panel_block(s.search_title, search_focused);
     let cursor = if search_focused { "▏" } else { "" };
-    let query_line = if app.query.is_empty() && !search_focused {
+    let query_line = if app.browser.query.is_empty() && !search_focused {
         Line::from(Span::styled(
             s.search_hint,
             Style::default().fg(theme::OVERLAY),
@@ -135,7 +136,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     } else {
         Line::from(vec![
             Span::styled("🔍 ", Style::default().fg(theme::SAPPHIRE)),
-            Span::styled(app.query.clone(), Style::default().fg(theme::TEXT)),
+            Span::styled(app.browser.query.clone(), Style::default().fg(theme::TEXT)),
             Span::styled(cursor, Style::default().fg(theme::MAUVE)),
         ])
     };
@@ -143,14 +144,14 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
 
     // --- List ---
     let list_focused = app.focus == Focus::List;
-    let sort_badge = match app.sort {
+    let sort_badge = match app.browser.sort {
         SortKey::Dex => s.sort_dex,
         SortKey::Name => s.sort_name,
     };
     let title = format!(
         "{}({}) ⇅ {} ",
         s.sidebar_title,
-        app.filtered.len(),
+        app.browser.filtered.len(),
         sort_badge
     );
     let list_block = panel_block_owned(title, list_focused);
@@ -168,15 +169,16 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         render_centered_loading(frame, inner, s.loading_filter, app.spinner);
         return;
     }
-    if app.filtered.is_empty() {
+    if app.browser.filtered.is_empty() {
         render_centered_text(frame, inner, s.no_results, theme::OVERLAY);
         return;
     }
 
     let items: Vec<ListItem> = app
+        .browser
         .filtered
         .iter()
-        .filter_map(|&idx| app.all_pokemon.get(idx))
+        .filter_map(|&idx| app.browser.all.get(idx))
         .map(|p| {
             // Alternate forms have no dex number; their column stays blank so
             // the names below still line up.
@@ -202,7 +204,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let list = List::new(items)
         .highlight_symbol("▶ ")
         .highlight_style(color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD));
-    frame.render_stateful_widget(list, inner, &mut app.list_state);
+    frame.render_stateful_widget(list, inner, &mut app.browser.list_state);
 }
 
 fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -2641,6 +2643,212 @@ fn centered_fixed(width: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::{app_listing, loaded};
+    use crate::color::Depth;
+    use crate::models::{Ability, Stat, StatKind};
+
+    /// Draws one frame into an off-screen buffer and returns its rows as plain
+    /// text.
+    ///
+    /// The panel tests assert on those lines rather than on cells and styles,
+    /// deliberately: a snapshot that pins every attribute fails on each
+    /// cosmetic change and gets deleted, and what is worth keeping is that the
+    /// right panel says the right thing at the right size.
+    fn frame_rows(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
+        terminal
+            .draw(|frame| render(frame, app))
+            .expect("a frame draws");
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).map_or(" ", |cell| cell.symbol()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// One frame as a single string, for "does this appear at all" checks.
+    fn screen(app: &mut App, width: u16, height: u16) -> String {
+        frame_rows(app, width, height).join("\n")
+    }
+
+    /// The right-hand column of a frame — the detail and evolution panels —
+    /// so a name that is also in the sidebar cannot answer for them.
+    fn right_column(app: &mut App, width: u16, height: u16) -> String {
+        let split = (f32::from(width) * 0.32) as usize;
+        frame_rows(app, width, height)
+            .iter()
+            .map(|row| row.chars().skip(split).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// An app listing the Kanto ghosts, with Gengar loaded and on display.
+    fn showing_gengar() -> App {
+        let mut app = app_listing(&[(92, "gastly"), (93, "haunter"), (94, "gengar")]);
+        app.color_depth = Depth::None;
+        app.browser.recompute();
+        app.details.insert("gengar".to_string(), gengar());
+        app.selected_name = Some("gengar".to_string());
+        app
+    }
+
+    /// Enough of a record for the info card to have something to draw in every
+    /// one of its rows.
+    fn gengar() -> PokemonDetail {
+        PokemonDetail {
+            dex_number: 94,
+            types: vec!["ghost".to_string(), "poison".to_string()],
+            abilities: vec![Ability {
+                name: "cursed-body".to_string(),
+                is_hidden: false,
+            }],
+            stats: vec![
+                Stat {
+                    kind: StatKind::Hp,
+                    base: 60,
+                },
+                Stat {
+                    kind: StatKind::SpecialAttack,
+                    base: 130,
+                },
+            ],
+            height: 15,
+            weight: 405,
+            ..loaded("gengar")
+        }
+    }
+
+    #[test]
+    fn the_sidebar_lists_what_the_filter_left_and_counts_it() {
+        let mut app = showing_gengar();
+        app.browser.query = "ga".to_string();
+        app.browser.recompute();
+
+        let frame = screen(&mut app, 120, 40);
+        assert!(frame.contains("Gastly"), "{frame}");
+        assert!(frame.contains("Gengar"));
+        assert!(!frame.contains("Haunter"), "filtered out, so not drawn");
+        assert!(frame.contains("(2)"), "the title counts what survived");
+        assert!(frame.contains("▶"), "and the cursor sits on a row");
+    }
+
+    #[test]
+    fn the_sidebar_says_what_it_is_waiting_for_rather_than_drawing_an_empty_list() {
+        let s = Language::English.strings();
+
+        // Before the master list lands.
+        let mut app = app_listing(&[]);
+        app.color_depth = Depth::None;
+        app.list_loading = true;
+        assert!(screen(&mut app, 120, 40).contains(s.loading_list));
+
+        // A filter term whose roster has not arrived is a wait, not a miss —
+        // the difference the list would otherwise report as "no results".
+        let mut app = showing_gengar();
+        app.browser.query = "type:ghost".to_string();
+        app.browser.recompute();
+        assert!(screen(&mut app, 120, 40).contains(s.loading_filter));
+
+        // A search that genuinely matches nothing says so.
+        let mut app = showing_gengar();
+        app.browser.query = "zzz".to_string();
+        app.browser.recompute();
+        assert!(screen(&mut app, 120, 40).contains(s.no_results));
+    }
+
+    #[test]
+    fn the_detail_panel_draws_the_species_it_was_given() {
+        let mut app = showing_gengar();
+        let panel = right_column(&mut app, 120, 40);
+
+        assert!(panel.contains("Gengar"), "{panel}");
+        assert!(panel.contains("#0094"), "the dex number, padded");
+        assert!(
+            panel.contains("Ghost") && panel.contains("Poison"),
+            "type chips"
+        );
+        assert!(
+            panel.contains("Cursed Body"),
+            "abilities come free with the record"
+        );
+        assert!(
+            panel.contains("1.5 m") && panel.contains("40.5 kg"),
+            "measurements"
+        );
+        assert!(
+            panel.contains("Total: 190"),
+            "the stat total is summed, not stored"
+        );
+    }
+
+    #[test]
+    fn the_detail_panel_says_when_there_is_nothing_to_show_yet() {
+        let s = Language::English.strings();
+
+        // Nothing selected at all.
+        let mut app = app_listing(&[(94, "gengar")]);
+        app.color_depth = Depth::None;
+        app.browser.recompute();
+        assert!(right_column(&mut app, 120, 40).contains(s.no_selection));
+
+        // Selected, and the record still on its way.
+        let mut app = app_listing(&[(94, "gengar")]);
+        app.color_depth = Depth::None;
+        app.browser.recompute();
+        app.selected_name = Some("gengar".to_string());
+        app.loading_detail = Some("gengar".to_string());
+        assert!(right_column(&mut app, 120, 40).contains(s.loading));
+
+        // And a fetch that failed says what went wrong instead of spinning
+        // forever or going blank.
+        let mut app = app_listing(&[(94, "gengar")]);
+        app.color_depth = Depth::None;
+        app.browser.recompute();
+        app.error = Some("the network is down".to_string());
+        assert!(right_column(&mut app, 120, 40).contains("the network is down"));
+    }
+
+    #[test]
+    fn the_evolution_panel_says_when_a_species_has_no_chain() {
+        let s = Language::English.strings();
+        let mut app = showing_gengar();
+        // Loaded, but no chain came with it.
+        assert!(right_column(&mut app, 120, 40).contains(s.no_evolution));
+    }
+
+    #[test]
+    fn a_chain_that_fits_is_drawn_as_cards_and_one_that_does_not_falls_back_to_the_tree() {
+        // Both sides of the same threshold, through the renderer rather than
+        // through `card_grid` alone: what the fallback is for is that the
+        // chain is still readable, and only a drawn frame shows that.
+        let mut app = showing_gengar();
+        app.evolutions.insert("gengar".to_string(), chain(3, 1));
+
+        // Three stages down one line: the panel has room for a card each, and
+        // the text tree's connectors are nowhere in the frame.
+        let cards = right_column(&mut app, 120, 40);
+        assert!(cards.contains("Stage"), "{cards}");
+        assert!(
+            !cards.contains("└── ") && !cards.contains("├── "),
+            "cards, not the tree: {cards}"
+        );
+
+        // Eight branches need a lane each, which no panel in that column ever
+        // has, so the same chain degrades to the compact tree.
+        app.evolutions.insert("gengar".to_string(), chain(2, 8));
+        let tree = right_column(&mut app, 120, 40);
+        assert!(
+            tree.contains("└── ") || tree.contains("├── "),
+            "the tree, not cards: {tree}"
+        );
+    }
 
     /// A chain shaped like `children`: one root, then a leaf per entry, nested
     /// `depth` deep along the first branch.

@@ -51,7 +51,8 @@ The README's [Architecture](README.md#architecture) table names every module
 and what it is for. The short version: anything that can be expressed without
 a terminal or a network — a rule about types, a parser, a piece of arithmetic
 — goes in a pure module (`typechart.rs`, `team.rs`, `compare.rs`, `query.rs`,
-`models.rs`) with tests beside it, and `app.rs` and `ui.rs` only call it.
+`browser.rs`, `models.rs`) with tests beside it, and `app.rs` and `ui.rs` only
+call it.
 Those two files are the largest in the repo and the hardest to test, so logic
 that lands in them tends to stay unverified.
 
