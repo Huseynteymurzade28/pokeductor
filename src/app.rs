@@ -27,6 +27,7 @@ use crate::models::{
 };
 use crate::session::{self, Session};
 use crate::team;
+use crate::theme::{self, Theme};
 
 /// How many learnset rows around the cursor the moves card fetches records for.
 /// Sized to cover the card on a tall terminal, so the visible table fills in
@@ -95,6 +96,10 @@ pub enum Focus {
 /// The complete, observable state of the running application.
 pub struct App {
     pub language: Language,
+    /// The palette the interface is drawn in. Installed process-wide by
+    /// [`App::run`] once the flag and the restored session have settled it,
+    /// since every rendering function reads it from there.
+    pub theme: Theme,
     /// The sidebar: the master list, the search box, the ordering and the
     /// cursor over the result. Everything about the visible list that needs
     /// no network lives there; what stays here is the half that does.
@@ -180,6 +185,8 @@ pub struct App {
     /// applied because the restored session carries a language too, and this
     /// one has to outrank it.
     cli_language: Option<Language>,
+    /// Palette named on the command line, for the same reason.
+    cli_theme: Option<Theme>,
     /// Species named on the command line, opened once the list arrives — the
     /// first moment there is anything to resolve a name against.
     startup_species: Option<String>,
@@ -208,6 +215,7 @@ impl App {
         let (tx, rx) = mpsc::channel(64);
         let app = App {
             language: startup.language.unwrap_or(Language::English),
+            theme: startup.theme.unwrap_or_default(),
             browser: Browser::default(),
             roster_loading: HashSet::new(),
             focus: Focus::List,
@@ -242,6 +250,7 @@ impl App {
             selected_name: None,
             color_depth,
             cli_language: startup.language,
+            cli_theme: startup.theme,
             startup_species: startup.species,
             loading_detail: None,
             list_loading: false,
@@ -263,6 +272,9 @@ impl App {
         // Before the first frame, so the restored language and palette are
         // already in place by the time anything is drawn or fetched.
         self.restore(session::load().await);
+        // Installed here rather than in `restore`, which tests call: the
+        // palette is process-wide, and the first frame is drawn below.
+        theme::use_theme(self.theme);
         self.fetch_list();
 
         let mut events = EventStream::new();
@@ -353,6 +365,7 @@ impl App {
             team: self.team.clone(),
             language: Some(self.language.flavor_code().to_string()),
             sort: Some(self.browser.sort.code().to_string()),
+            theme: Some(self.theme.code().to_string()),
             shiny: self.sprite_variant.is_shiny(),
         }
     }
@@ -374,6 +387,14 @@ impl App {
         }
         if let Some(sort) = session.sort.as_deref().and_then(SortKey::from_code) {
             self.browser.sort = sort;
+        }
+        // `--theme` outranks the stored palette the way `--lang` outranks the
+        // stored language, and for the same reason: it is a choice made for
+        // this run, and the run still stores what it ends in.
+        if self.cli_theme.is_none() {
+            if let Some(theme) = session.theme.as_deref().and_then(Theme::from_code) {
+                self.theme = theme;
+            }
         }
         if session.shiny {
             self.sprite_variant = SpriteVariant::Shiny;
@@ -2213,5 +2234,45 @@ mod tests {
         });
 
         assert_eq!(app.language, Language::German);
+    }
+
+    #[test]
+    fn a_theme_flag_outranks_the_palette_the_last_run_left_behind() {
+        // The same rule as `--lang`, and worth pinning separately: both are
+        // read out of one session file, and getting one right says nothing
+        // about the other.
+        let (mut app, _rx) = App::new(Startup {
+            theme: Some(Theme::Pico8),
+            ..Startup::default()
+        })
+        .expect("client builds");
+        app.restore(Session {
+            theme: Some("dmg".to_string()),
+            ..Session::default()
+        });
+        assert_eq!(app.theme, Theme::Pico8);
+
+        // Without the flag, the stored palette is what comes back.
+        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+        app.restore(Session {
+            theme: Some("dmg".to_string()),
+            ..Session::default()
+        });
+        assert_eq!(app.theme, Theme::Dmg);
+        assert_eq!(
+            app.snapshot().theme.as_deref(),
+            Some("dmg"),
+            "and is what this run hands on"
+        );
+    }
+
+    #[test]
+    fn a_session_naming_a_palette_this_build_does_not_have_keeps_the_default() {
+        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+        app.restore(Session {
+            theme: Some("cga".to_string()),
+            ..Session::default()
+        });
+        assert_eq!(app.theme, Theme::default());
     }
 }

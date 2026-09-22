@@ -31,7 +31,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Paint the whole background first so gaps share the pastel base color.
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme::BASE)),
+        Block::default().style(Style::default().bg(theme::base())),
         area,
     );
 
@@ -93,17 +93,17 @@ fn render_header(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     let title = Paragraph::new(Line::from(Span::styled(
         s.app_title,
         Style::default()
-            .fg(theme::MAUVE)
+            .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )));
     frame.render_widget(title, cols[0]);
 
     let tag = Paragraph::new(Line::from(vec![
-        Span::styled("◐ ", Style::default().fg(theme::PEACH)),
+        Span::styled("◐ ", Style::default().fg(theme::peach())),
         Span::styled(
             app.language.tag(),
             Style::default()
-                .fg(theme::PEACH)
+                .fg(theme::peach())
                 .add_modifier(Modifier::BOLD),
         ),
     ]))
@@ -114,9 +114,9 @@ fn render_header(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 fn render_footer(frame: &mut Frame, s: &Strings, area: Rect) {
     let footer = Paragraph::new(Line::from(Span::styled(
         s.help,
-        Style::default().fg(theme::SUBTEXT),
+        Style::default().fg(theme::subtext()),
     )))
-    .style(Style::default().bg(theme::SURFACE))
+    .style(Style::default().bg(theme::surface()))
     .alignment(Alignment::Center);
     frame.render_widget(footer, area);
 }
@@ -131,13 +131,16 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let query_line = if app.browser.query.is_empty() && !search_focused {
         Line::from(Span::styled(
             s.search_hint,
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         ))
     } else {
         Line::from(vec![
-            Span::styled("🔍 ", Style::default().fg(theme::SAPPHIRE)),
-            Span::styled(app.browser.query.clone(), Style::default().fg(theme::TEXT)),
-            Span::styled(cursor, Style::default().fg(theme::MAUVE)),
+            Span::styled("🔍 ", Style::default().fg(theme::sapphire())),
+            Span::styled(
+                app.browser.query.clone(),
+                Style::default().fg(theme::text()),
+            ),
+            Span::styled(cursor, Style::default().fg(theme::mauve())),
         ])
     };
     frame.render_widget(Paragraph::new(query_line).block(search_block), rows[0]);
@@ -170,7 +173,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         return;
     }
     if app.browser.filtered.is_empty() {
-        render_centered_text(frame, inner, s.no_results, theme::OVERLAY);
+        render_centered_text(frame, inner, s.no_results, theme::overlay());
         return;
     }
 
@@ -193,17 +196,17 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
             let pin = if app.is_pinned(&p.name) { "◆" } else { " " };
             let party = if app.is_in_team(&p.name) { "●" } else { " " };
             ListItem::new(Line::from(vec![
-                Span::styled(pin, Style::default().fg(theme::TEAL)),
-                Span::styled(party, Style::default().fg(theme::GREEN)),
-                Span::styled(dex, Style::default().fg(theme::OVERLAY)),
-                Span::styled(title_case(&p.name), Style::default().fg(theme::TEXT)),
+                Span::styled(pin, Style::default().fg(theme::teal())),
+                Span::styled(party, Style::default().fg(theme::green())),
+                Span::styled(dex, Style::default().fg(theme::overlay())),
+                Span::styled(title_case(&p.name), Style::default().fg(theme::text())),
             ]))
         })
         .collect();
 
     let list = List::new(items)
         .highlight_symbol("▶ ")
-        .highlight_style(color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD));
+        .highlight_style(color::highlight(theme::mauve()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, inner, &mut app.browser.list_state);
 }
 
@@ -220,7 +223,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     let Some(detail) = app.selected_detail() else {
         match &app.error {
             Some(err) => render_error(frame, inner, s, err),
-            None => render_centered_text(frame, inner, s.no_selection, theme::OVERLAY),
+            None => render_centered_text(frame, inner, s.no_selection, theme::overlay()),
         }
         return;
     };
@@ -249,12 +252,12 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         Span::styled(
             title_case(&detail.name),
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("   #{:04}", detail.dex_number),
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         ),
     ];
     // Say so when the artwork is shiny: an unfamiliar palette otherwise reads
@@ -263,7 +266,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         title_spans.push(Span::styled(
             format!("  ✦ {}", s.shiny_label),
             Style::default()
-                .fg(theme::YELLOW)
+                .fg(theme::yellow())
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -276,7 +279,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         lines.push(Line::from(Span::styled(
             genus.to_string(),
             Style::default()
-                .fg(theme::PEACH)
+                .fg(theme::peach())
                 .add_modifier(Modifier::ITALIC),
         )));
     }
@@ -284,13 +287,13 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     // Special-category badges (Legendary / Mythical / Baby), as little chips.
     let mut badges: Vec<(&str, ratatui::style::Color)> = Vec::new();
     if detail.is_legendary {
-        badges.push((s.legendary_label, theme::YELLOW));
+        badges.push((s.legendary_label, theme::yellow()));
     }
     if detail.is_mythical {
-        badges.push((s.mythical_label, theme::PINK));
+        badges.push((s.mythical_label, theme::pink()));
     }
     if detail.is_baby {
-        badges.push((s.baby_label, theme::TEAL));
+        badges.push((s.baby_label, theme::teal()));
     }
     if !badges.is_empty() {
         let mut spans = Vec::new();
@@ -298,7 +301,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
             spans.push(Span::styled(
                 format!(" ✦ {label} "),
                 Style::default()
-                    .fg(theme::BASE)
+                    .fg(theme::base())
                     .bg(color)
                     .add_modifier(Modifier::BOLD),
             ));
@@ -310,7 +313,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     // Type chips.
     let mut type_spans = vec![Span::styled(
         format!("{}: ", s.types_label),
-        Style::default().fg(theme::SUBTEXT),
+        Style::default().fg(theme::subtext()),
     )];
     type_spans.extend(type_chips(&detail.types));
     lines.push(Line::from(type_spans));
@@ -357,20 +360,20 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     lines.push(Line::from(vec![
         Span::styled(
             format!("{}: ", s.height_label),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         ),
         Span::styled(
             format!("{:.1} m", detail.height as f32 / 10.0),
-            Style::default().fg(theme::TEXT),
+            Style::default().fg(theme::text()),
         ),
         Span::raw("    "),
         Span::styled(
             format!("{}: ", s.weight_label),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         ),
         Span::styled(
             format!("{:.1} kg", detail.weight as f32 / 10.0),
-            Style::default().fg(theme::TEXT),
+            Style::default().fg(theme::text()),
         ),
     ]));
     lines.push(Line::raw(""));
@@ -389,12 +392,12 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
     lines.push(Line::from(vec![
         Span::styled(
             format!("{}: ", s.total_label),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         ),
         Span::styled(
             detail.stat_total().to_string(),
             Style::default()
-                .fg(theme::LAVENDER)
+                .fg(theme::lavender())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -455,9 +458,9 @@ fn label_rows(label: &str, text: &str, width: usize) -> Vec<Line<'static>> {
                     } else {
                         indent.clone()
                     },
-                    Style::default().fg(theme::SUBTEXT),
+                    Style::default().fg(theme::subtext()),
                 ),
-                Span::styled(text, Style::default().fg(theme::TEXT)),
+                Span::styled(text, Style::default().fg(theme::text())),
             ])
         })
         .collect()
@@ -542,10 +545,10 @@ fn fact_rows(facts: &[(String, String)], width: usize) -> Vec<Line<'static>> {
             spans.push(Span::raw(GAP));
             used += GAP.len();
         }
-        spans.push(Span::styled(label, Style::default().fg(theme::SUBTEXT)));
+        spans.push(Span::styled(label, Style::default().fg(theme::subtext())));
         spans.push(Span::styled(
             value.clone(),
-            Style::default().fg(theme::TEXT),
+            Style::default().fg(theme::text()),
         ));
         used += cell;
     }
@@ -560,7 +563,7 @@ fn render_flavor_card(frame: &mut Frame, area: Rect, flavor: &str) {
     let para = Paragraph::new(vec![Line::from(Span::styled(
         format!("“{flavor}”"),
         Style::default()
-            .fg(theme::SUBTEXT)
+            .fg(theme::subtext())
             .add_modifier(Modifier::ITALIC),
     ))])
     .wrap(Wrap { trim: true });
@@ -663,11 +666,14 @@ fn render_sprite_capped(frame: &mut Frame, area: Rect, sprite: &Sprite, max_cols
 fn pixel_color(rgba: [u8; 4]) -> Color {
     let a = rgba[3] as u16;
     if a == 0 {
-        return theme::BASE;
+        return theme::base();
     }
-    let (br, bg, bb) = theme::BASE_RGB;
+    let (br, bg, bb) = theme::base_rgb();
     let mix = |fg: u8, bg: u8| ((fg as u16 * a + bg as u16 * (255 - a)) / 255) as u8;
-    Color::Rgb(mix(rgba[0], br), mix(rgba[1], bg), mix(rgba[2], bb))
+    // Composited first, then handed to the palette: a Game Boy has four
+    // shades and quantising after the blend is what keeps a sprite's edges on
+    // the background shade rather than one step above it.
+    theme::ink((mix(rgba[0], br), mix(rgba[1], bg), mix(rgba[2], bb)))
 }
 
 fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -690,9 +696,9 @@ fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     let Some(tree) = app.selected_evolution() else {
         if app.selected_detail().is_some() {
-            render_centered_text(frame, inner, s.no_evolution, theme::OVERLAY);
+            render_centered_text(frame, inner, s.no_evolution, theme::overlay());
         } else {
-            render_centered_text(frame, inner, s.no_selection, theme::OVERLAY);
+            render_centered_text(frame, inner, s.no_selection, theme::overlay());
         }
         return;
     };
@@ -743,7 +749,7 @@ fn render_evolution_card(frame: &mut Frame, app: &App, s: &Strings, full: Rect) 
 
     frame.render_widget(Clear, full);
 
-    // The sprite pixels are composited over `theme::BASE`, so the card behind
+    // The sprite pixels are composited over `theme::base()`, so the card behind
     // them has to be that same colour or every sprite picks up a halo.
     let title = if app.sprite_variant.is_shiny() {
         format!("{}✦ {} ", s.evolution_title, s.shiny_label)
@@ -752,14 +758,14 @@ fn render_evolution_card(frame: &mut Frame, app: &App, s: &Strings, full: Rect) 
     };
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::BASE));
+        .style(Style::default().bg(theme::base()));
     let inner = block.inner(full);
     frame.render_widget(block, full);
 
@@ -845,10 +851,13 @@ fn chain_hint(
 
     match requirement {
         Some(text) => Line::from(vec![
-            Span::styled("✦ ", Style::default().fg(theme::PEACH)),
-            Span::styled(text, Style::default().fg(theme::LAVENDER)),
+            Span::styled("✦ ", Style::default().fg(theme::peach())),
+            Span::styled(text, Style::default().fg(theme::lavender())),
         ]),
-        None => Line::from(Span::styled(fallback, Style::default().fg(theme::OVERLAY))),
+        None => Line::from(Span::styled(
+            fallback,
+            Style::default().fg(theme::overlay()),
+        )),
     }
 }
 
@@ -862,9 +871,9 @@ fn panel_block_owned(title: String, focused: bool) -> Block<'static> {
     // Focused panels glow warm yellow with a heavier double rule; resting panels
     // recede to a thin indigo frame — a retro DOS-panel feel.
     let (border, text, border_type) = if focused {
-        (theme::MAUVE, theme::MAUVE, BorderType::Double)
+        (theme::mauve(), theme::mauve(), BorderType::Double)
     } else {
-        (theme::OVERLAY, theme::SUBTEXT, BorderType::Plain)
+        (theme::overlay(), theme::subtext(), BorderType::Plain)
     };
     Block::bordered()
         .border_type(border_type)
@@ -873,7 +882,7 @@ fn panel_block_owned(title: String, focused: bool) -> Block<'static> {
             title,
             Style::default().fg(text).add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::BASE))
+        .style(Style::default().bg(theme::base()))
 }
 
 fn stat_line(label: &str, base: u16, bar_width: usize) -> Line<'static> {
@@ -885,16 +894,16 @@ fn stat_line(label: &str, base: u16, bar_width: usize) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{label:<STAT_LABEL_WIDTH$}"),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         ),
-        Span::styled(format!("{base:>3} "), Style::default().fg(theme::TEXT)),
+        Span::styled(format!("{base:>3} "), Style::default().fg(theme::text())),
         Span::styled(
             "█".repeat(filled),
             Style::default().fg(theme::stat_color(base)),
         ),
         Span::styled(
             "░".repeat(bar_width - filled),
-            Style::default().fg(theme::SURFACE),
+            Style::default().fg(theme::surface()),
         ),
     ])
 }
@@ -903,12 +912,14 @@ fn render_error(frame: &mut Frame, inner: Rect, s: &Strings, err: &str) {
     let para = Paragraph::new(vec![
         Line::from(Span::styled(
             format!("⚠ {}", s.error_prefix),
-            Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::red())
+                .add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
         Line::from(Span::styled(
             err.to_string(),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         )),
     ])
     .wrap(ratatui::widgets::Wrap { trim: true });
@@ -945,8 +956,11 @@ fn render_centered_loading(frame: &mut Frame, inner: Rect, label: &str, spinner:
         height: 1,
     };
     let para = Paragraph::new(Line::from(vec![
-        Span::styled(format!("{frame_char} "), Style::default().fg(theme::MAUVE)),
-        Span::styled(format!("{label}…"), Style::default().fg(theme::SUBTEXT)),
+        Span::styled(
+            format!("{frame_char} "),
+            Style::default().fg(theme::mauve()),
+        ),
+        Span::styled(format!("{label}…"), Style::default().fg(theme::subtext())),
     ]))
     .alignment(Alignment::Center);
     frame.render_widget(para, row);
@@ -1000,7 +1014,7 @@ fn node_block(
     let mut indent_width = 0usize;
     for (i, n) in run.iter().enumerate() {
         if i > 0 {
-            first.push(Span::styled(" ──▶ ", Style::default().fg(theme::OVERLAY)));
+            first.push(Span::styled(" ──▶ ", Style::default().fg(theme::overlay())));
             width += 5; // " ──▶ " is 5 columns
         }
         if i + 1 == run.len() {
@@ -1010,7 +1024,7 @@ fn node_block(
         width += title_case(&n.name).chars().count();
         if let Some(label) = condition_label(n, evo, budget) {
             width += label.chars().count();
-            first.push(Span::styled(label, Style::default().fg(theme::OVERLAY)));
+            first.push(Span::styled(label, Style::default().fg(theme::overlay())));
         }
     }
     let mut lines = vec![first];
@@ -1040,7 +1054,7 @@ fn node_block(
                 };
                 let mut row = vec![Span::styled(
                     format!("{indent}{connector}"),
-                    Style::default().fg(theme::OVERLAY),
+                    Style::default().fg(theme::overlay()),
                 )];
                 row.extend(child_row);
                 lines.push(row);
@@ -1075,10 +1089,10 @@ fn truncate(text: &str, max: usize) -> String {
 fn name_span(raw_name: &str, highlight: Option<&str>) -> Span<'static> {
     let style = if highlight == Some(raw_name) {
         Style::default()
-            .fg(theme::YELLOW)
+            .fg(theme::yellow())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::GREEN)
+        Style::default().fg(theme::green())
     };
     Span::styled(title_case(raw_name), style)
 }
@@ -1202,20 +1216,20 @@ fn draw_card(
             } else {
                 "…"
             };
-            render_centered_text(frame, sprite_area, placeholder, theme::OVERLAY);
+            render_centered_text(frame, sprite_area, placeholder, theme::overlay());
         }
     }
 
     let is_cursor = cursor == Some(node.name.as_str());
     let is_current = current == Some(node.name.as_str());
     let style = if is_cursor {
-        color::highlight(theme::YELLOW).add_modifier(Modifier::BOLD)
+        color::highlight(theme::yellow()).add_modifier(Modifier::BOLD)
     } else if is_current {
         Style::default()
-            .fg(theme::YELLOW)
+            .fg(theme::yellow())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme::GREEN)
+        Style::default().fg(theme::green())
     };
     let label = title_case(&node.name);
     let mut name_spans = vec![Span::styled(label.clone(), style)];
@@ -1227,7 +1241,7 @@ fn draw_card(
         if free >= 6 {
             name_spans.push(Span::styled(
                 truncate(&format!(" · {text}"), free),
-                Style::default().fg(theme::PEACH),
+                Style::default().fg(theme::peach()),
             ));
         }
     }
@@ -1247,7 +1261,7 @@ fn draw_card(
     if let (Some(text), true) = (&condition, stacked) {
         let requirement = Paragraph::new(Line::from(Span::styled(
             truncate(text, w as usize),
-            Style::default().fg(theme::PEACH),
+            Style::default().fg(theme::peach()),
         )))
         .alignment(Alignment::Center);
         frame.render_widget(
@@ -1265,7 +1279,7 @@ fn draw_card(
 /// Wires a parent card's right edge to each child card's left edge with
 /// box-drawing connectors and an arrowhead, branching where needed.
 fn draw_connectors(frame: &mut Frame, x_from: u16, x_to: u16, parent_cy: u16, centers: &[u16]) {
-    let color = theme::OVERLAY;
+    let color = theme::overlay();
     if x_to <= x_from {
         return;
     }
@@ -1276,7 +1290,7 @@ fn draw_connectors(frame: &mut Frame, x_from: u16, x_to: u16, parent_cy: u16, ce
         for x in x_from..x_to.saturating_sub(1) {
             put_cell(frame, x, cy, "─", color);
         }
-        put_cell(frame, x_to.saturating_sub(1), cy, "▶", theme::MAUVE);
+        put_cell(frame, x_to.saturating_sub(1), cy, "▶", theme::mauve());
         return;
     }
 
@@ -1315,7 +1329,7 @@ fn draw_connectors(frame: &mut Frame, x_from: u16, x_to: u16, parent_cy: u16, ce
         for x in (trunk_x + 1)..x_to.saturating_sub(1) {
             put_cell(frame, x, cy, "─", color);
         }
-        put_cell(frame, x_to.saturating_sub(1), cy, "▶", theme::MAUVE);
+        put_cell(frame, x_to.saturating_sub(1), cy, "▶", theme::mauve());
     }
 }
 
@@ -1378,7 +1392,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let mut head = vec![Span::styled(
         format!(" {}  ", title_case(&detail.name)),
         Style::default()
-            .fg(theme::MAUVE)
+            .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )];
     head.extend(type_chips(&detail.types));
@@ -1422,7 +1436,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     if coverage.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("  {}", s.matchups_none),
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         )));
     } else {
         lines.extend(chip_rows("", &coverage, text_w));
@@ -1435,14 +1449,14 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.matchups_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1451,7 +1465,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         s.close_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
@@ -1463,7 +1477,7 @@ fn type_chips(types: &[String]) -> Vec<Span<'static>> {
     for ty in types {
         spans.push(Span::styled(
             format!(" {} ", title_case(ty)),
-            Style::default().fg(theme::BASE).bg(theme::type_color(ty)),
+            Style::default().fg(theme::base()).bg(theme::type_color(ty)),
         ));
         spans.push(Span::raw(" "));
     }
@@ -1474,7 +1488,7 @@ fn section_heading(text: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {text}"),
         Style::default()
-            .fg(theme::PEACH)
+            .fg(theme::peach())
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -1488,7 +1502,7 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
     let mut spans: Vec<Span> = vec![Span::styled(
         format!(" {label:<pad$} ", pad = MATCHUP_LABEL_W - 2),
         Style::default()
-            .fg(theme::SUBTEXT)
+            .fg(theme::subtext())
             .add_modifier(Modifier::BOLD),
     )];
     let mut used = MATCHUP_LABEL_W;
@@ -1503,7 +1517,7 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
         }
         spans.push(Span::styled(
             chip,
-            Style::default().fg(theme::BASE).bg(theme::type_color(ty)),
+            Style::default().fg(theme::base()).bg(theme::type_color(ty)),
         ));
         spans.push(Span::raw(" "));
         used += chip_w;
@@ -1593,14 +1607,14 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             h.title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1612,7 +1626,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         h.close_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, body[1]);
@@ -1644,10 +1658,10 @@ fn help_lines(rows: &[(&str, &str)]) -> Vec<Line<'static>> {
                 Span::styled(
                     format!("  {keys:<key_w$}"),
                     Style::default()
-                        .fg(theme::TEAL)
+                        .fg(theme::teal())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled((*action).to_string(), Style::default().fg(theme::SUBTEXT)),
+                Span::styled((*action).to_string(), Style::default().fg(theme::subtext())),
             ])
         })
         .collect()
@@ -1677,14 +1691,14 @@ fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.moves_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
 
     // The card claims most of the height available, leaving a margin so the
     // list behind it stays visible — this is a card, not a second screen.
@@ -1698,7 +1712,7 @@ fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(block, area);
 
     if learnset.is_empty() {
-        render_centered_text(frame, inner, s.moves_empty, theme::OVERLAY);
+        render_centered_text(frame, inner, s.moves_empty, theme::overlay());
         return;
     }
 
@@ -1715,13 +1729,13 @@ fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let mut heading = vec![Span::styled(
         format!(" {}", title_case(&detail.name)),
         Style::default()
-            .fg(theme::MAUVE)
+            .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )];
     if let Some(games) = &detail.learnset_games {
         heading.push(Span::styled(
             format!("  ·  {}", title_case(games)),
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         ));
     }
     frame.render_widget(
@@ -1738,7 +1752,7 @@ fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
             );
             Line::from(Span::styled(
                 format!("{left}{middle}{right}"),
-                Style::default().fg(theme::OVERLAY),
+                Style::default().fg(theme::overlay()),
             ))
         }]),
         rows[0],
@@ -1764,7 +1778,7 @@ fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         s.moves_close_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[3]);
@@ -1852,18 +1866,18 @@ fn move_row<'a>(
     // says where the cursor is, and a type colour showing through it would only
     // muddy that.
     if highlighted {
-        let style = color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD);
+        let style = color::highlight(theme::mauve()).add_modifier(Modifier::BOLD);
         return Line::from(Span::styled(format!("{left}{middle}{right}"), style));
     }
 
-    let plain = Style::default().fg(theme::TEXT);
+    let plain = Style::default().fg(theme::text());
     Line::from(vec![
         Span::styled(left, plain),
         Span::styled(
             middle,
             Style::default().fg(theme::type_color(&learned_type(app, learned))),
         ),
-        Span::styled(right, Style::default().fg(theme::SUBTEXT)),
+        Span::styled(right, Style::default().fg(theme::subtext())),
     ])
 }
 
@@ -1893,13 +1907,13 @@ fn move_description<'a>(app: &App, s: &Strings, width: usize) -> Vec<Line<'a>> {
             .map(|row| {
                 Line::from(Span::styled(
                     format!(" {row}"),
-                    Style::default().fg(theme::SUBTEXT),
+                    Style::default().fg(theme::subtext()),
                 ))
             })
             .collect(),
         None => vec![Line::from(Span::styled(
             format!(" {}…", s.loading),
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         ))],
     }
 }
@@ -1936,7 +1950,7 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     lines.push(Line::from(Span::styled(
         format!(" {}", title_case(&detail.name)),
         Style::default()
-            .fg(theme::MAUVE)
+            .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )));
 
@@ -1946,13 +1960,13 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         let mut head = vec![Span::styled(
             format!(" {}", ability_display_name(app, &ability.name)),
             Style::default()
-                .fg(theme::PEACH)
+                .fg(theme::peach())
                 .add_modifier(Modifier::BOLD),
         )];
         if ability.is_hidden {
             head.push(Span::styled(
                 format!("  ({})", s.ability_hidden),
-                Style::default().fg(theme::OVERLAY),
+                Style::default().fg(theme::overlay()),
             ));
         }
         lines.push(Line::from(head));
@@ -1968,13 +1982,13 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
                 for row in wrap_plain(text, text_w) {
                     lines.push(Line::from(Span::styled(
                         format!("  {row}"),
-                        Style::default().fg(theme::SUBTEXT),
+                        Style::default().fg(theme::subtext()),
                     )));
                 }
             }
             None => lines.push(Line::from(Span::styled(
                 format!("  {}…", s.loading),
-                Style::default().fg(theme::OVERLAY),
+                Style::default().fg(theme::overlay()),
             ))),
         }
     }
@@ -1985,14 +1999,14 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.abilities_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2001,7 +2015,7 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         s.ability_close_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
@@ -2026,23 +2040,23 @@ fn ability_immunity_row(
     lead: &str,
 ) -> Line<'static> {
     let mut row = vec![
-        Span::styled(lead.to_string(), Style::default().fg(theme::TEXT)),
+        Span::styled(lead.to_string(), Style::default().fg(theme::text())),
         Span::styled(
             ability_display_name(app, &immunity.ability),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         ),
-        Span::styled(" → ", Style::default().fg(theme::OVERLAY)),
+        Span::styled(" → ", Style::default().fg(theme::overlay())),
         Span::styled(
             format!(" {} ", title_case(immunity.immune_to)),
             Style::default()
-                .fg(theme::BASE)
+                .fg(theme::base())
                 .bg(theme::type_color(immunity.immune_to)),
         ),
     ];
     if !immunity.certain {
         row.push(Span::styled(
             format!("  ({})", s.immunity_maybe),
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         ));
     }
     Line::from(row)
@@ -2087,7 +2101,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     lines.push(Line::from(Span::styled(
         format!(" {}/{}", app.team.len(), team::MAX_MEMBERS),
         Style::default()
-            .fg(theme::MAUVE)
+            .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::raw(""));
@@ -2095,7 +2109,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     if app.team.is_empty() {
         lines.push(Line::from(Span::styled(
             format!(" {}", s.team_empty),
-            Style::default().fg(theme::OVERLAY),
+            Style::default().fg(theme::overlay()),
         )));
     }
 
@@ -2111,20 +2125,20 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         let cursor = if i == app.team_cursor { "▶" } else { " " };
         let pin = if app.is_pinned(name) { "◆" } else { " " };
         let name_style = if i == app.team_cursor {
-            color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD)
+            color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::text())
         };
         let mut row = vec![
-            Span::styled(cursor, Style::default().fg(theme::MAUVE)),
-            Span::styled(pin, Style::default().fg(theme::TEAL)),
+            Span::styled(cursor, Style::default().fg(theme::mauve())),
+            Span::styled(pin, Style::default().fg(theme::teal())),
             Span::styled(format!(" {:<12} ", title_case(name)), name_style),
         ];
         match app.details.get(name) {
             Some(detail) => row.extend(type_chips(&detail.types)),
             None => row.push(Span::styled(
                 s.loading.to_string(),
-                Style::default().fg(theme::OVERLAY),
+                Style::default().fg(theme::overlay()),
             )),
         }
         lines.push(Line::from(row));
@@ -2182,14 +2196,14 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.team_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2198,7 +2212,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         s.team_close_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
@@ -2218,7 +2232,7 @@ fn push_chip_section(lines: &mut Vec<Line<'static>>, types: &[&str], width: usiz
 fn all_clear(s: &Strings) -> Line<'static> {
     Line::from(Span::styled(
         format!("  {}", s.team_all_clear),
-        Style::default().fg(theme::GREEN),
+        Style::default().fg(theme::green()),
     ))
 }
 
@@ -2256,14 +2270,14 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.compare_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let inner = Rect {
@@ -2343,7 +2357,7 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         s.compare_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, body[8]);
@@ -2356,12 +2370,12 @@ fn side_heading(species: &PokemonDetail) -> Vec<Line<'static>> {
             Span::styled(
                 title_case(&species.name),
                 Style::default()
-                    .fg(theme::MAUVE)
+                    .fg(theme::mauve())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("  #{:04}", species.dex_number),
-                Style::default().fg(theme::OVERLAY),
+                Style::default().fg(theme::overlay()),
             ),
         ]),
         Line::from(type_chips(&species.types)),
@@ -2384,9 +2398,9 @@ fn compare_row(
 ) -> Line<'static> {
     let winner = compare::side(left, right);
     let (left_color, right_color) = match winner {
-        compare::Side::Left => (theme::GREEN, theme::OVERLAY),
-        compare::Side::Right => (theme::OVERLAY, theme::GREEN),
-        compare::Side::Tie => (theme::LAVENDER, theme::LAVENDER),
+        compare::Side::Left => (theme::green(), theme::overlay()),
+        compare::Side::Right => (theme::overlay(), theme::green()),
+        compare::Side::Tie => (theme::lavender(), theme::lavender()),
     };
     let emphasis = |side| match winner == side {
         true => Modifier::BOLD,
@@ -2409,7 +2423,7 @@ fn compare_row(
         ),
         Span::styled(
             format!("{label:^STAT_LABEL_WIDTH$}"),
-            Style::default().fg(theme::SUBTEXT),
+            Style::default().fg(theme::subtext()),
         ),
         Span::styled(
             format!(" {right:<COMPARE_VAL_W$} "),
@@ -2422,8 +2436,8 @@ fn compare_row(
         Span::styled(
             format!(" {:<COMPARE_MARGIN_W$}", margin_label(left, right, s)),
             Style::default().fg(match winner {
-                compare::Side::Tie => theme::OVERLAY,
-                _ => theme::GREEN,
+                compare::Side::Tie => theme::overlay(),
+                _ => theme::green(),
             }),
         ),
     ])
@@ -2460,7 +2474,7 @@ fn best_hit_line(attacker: &PokemonDetail, defender: &PokemonDetail) -> Line<'st
         Span::styled(
             format!(" {} ", title_case(hit.attack_type)),
             Style::default()
-                .fg(theme::BASE)
+                .fg(theme::base())
                 .bg(theme::type_color(hit.attack_type))
                 .add_modifier(Modifier::BOLD),
         ),
@@ -2468,8 +2482,8 @@ fn best_hit_line(attacker: &PokemonDetail, defender: &PokemonDetail) -> Line<'st
             format!(" {label}"),
             Style::default()
                 .fg(match hit.multiplier > 1.0 {
-                    true => theme::PEACH,
-                    false => theme::SUBTEXT,
+                    true => theme::peach(),
+                    false => theme::subtext(),
                 })
                 .add_modifier(Modifier::BOLD),
         ),
@@ -2484,7 +2498,7 @@ fn side_facts(app: &App, species: &PokemonDetail, width: usize) -> Vec<Line<'sta
             species.height as f32 / 10.0,
             species.weight as f32 / 10.0
         ),
-        Style::default().fg(theme::SUBTEXT),
+        Style::default().fg(theme::subtext()),
     ))];
 
     let abilities: Vec<String> = species
@@ -2499,7 +2513,7 @@ fn side_facts(app: &App, species: &PokemonDetail, width: usize) -> Vec<Line<'sta
             wrap_plain(&abilities.join(" · "), width.max(8))
                 .into_iter()
                 .take(2)
-                .map(|text| Line::from(Span::styled(text, Style::default().fg(theme::TEXT)))),
+                .map(|text| Line::from(Span::styled(text, Style::default().fg(theme::text())))),
         );
     }
     lines
@@ -2536,14 +2550,14 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.forms_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2564,11 +2578,11 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         let marker = if shown { "●" } else { "○" };
         let label = format!(" {marker} {} ", form_label(form, &detail.species));
         let style = if selected {
-            color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD)
+            color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
         } else if shown {
-            Style::default().fg(theme::MAUVE)
+            Style::default().fg(theme::mauve())
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::text())
         };
         lines.push(Line::from(Span::styled(label, style)));
     }
@@ -2576,7 +2590,7 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     let hint = Paragraph::new(Line::from(Span::styled(
         s.forms_close_hint,
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
@@ -2590,14 +2604,14 @@ fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect)
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme::MAUVE))
+        .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
             s.language_title,
             Style::default()
-                .fg(theme::MAUVE)
+                .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(theme::SURFACE));
+        .style(Style::default().bg(theme::surface()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2610,11 +2624,11 @@ fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect)
         let marker = if active { "●" } else { "○" };
         let label = format!(" {marker} {:<10} {} ", lang.label(), lang.tag());
         let style = if selected {
-            color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD)
+            color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
         } else if active {
-            Style::default().fg(theme::MAUVE)
+            Style::default().fg(theme::mauve())
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(theme::text())
         };
         lines.push(Line::from(Span::styled(label, style)));
     }
@@ -2622,7 +2636,7 @@ fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect)
 
     let hint = Paragraph::new(Line::from(Span::styled(
         "↑/↓ · Enter · Esc",
-        Style::default().fg(theme::OVERLAY),
+        Style::default().fg(theme::overlay()),
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);

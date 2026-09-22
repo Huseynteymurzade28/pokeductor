@@ -232,7 +232,7 @@ fn distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> u32 {
 pub fn highlight(color: Color) -> ratatui::style::Style {
     ratatui::style::Style::default()
         .fg(color)
-        .bg(crate::theme::BASE)
+        .bg(crate::theme::base())
         .add_modifier(Modifier::REVERSED)
 }
 

@@ -207,6 +207,29 @@ Only the palette on screen is fetched, so flipping the toggle never pulls down
 two full sets of artwork, and both are cached separately on disk. A species
 PokeAPI ships no shiny sprite for falls back to its normal one.
 
+### Palettes
+
+`--theme` picks the palette the whole interface is drawn in, and the choice is
+[kept between runs](#session-state) alongside the language and the sort order:
+
+| Palette | |
+|---|---|
+| `pico8` | PICO-8's colours: warm yellows on a matte navy. The default, and what every screenshot here was taken in. |
+| `dmg` | The Game Boy DMG's greens. |
+
+The Game Boy palette is not a tint over the same picture. Sprites are quantized
+to the DMG's four shades the way the hardware quantized everything it was ever
+shown, because artwork left in full colour over a green interface would only
+look broken. Stat bars carry their scale in brightness rather than in hue —
+there is one hue — climbing out of the background towards the brightest green
+the screen had. Type chips are all drawn in the same shade: eighteen
+distinguishable hues is more than a Game Boy has, and the type's name is
+written in the chip in either palette.
+
+Both palettes go through the same colour-depth pass below, so `--theme dmg
+--color 256` is greens quantized to the xterm palette, and `NO_COLOR` is the
+same colourless interface either way.
+
 ### Colour
 
 Sprites are RGB half-blocks, so how they land depends on what the terminal can
@@ -401,6 +424,7 @@ Arguments:
 Options:
       --lang <LANG>   Start in this UI language [possible values: en, tr, de, fr, es, it]
       --color <WHEN>  How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
+      --theme <PALETTE>  Draw the interface in this palette [possible values: pico8, dmg]
       --clear-cache   Delete the on-disk cache and exit
       --cache-dir     Print the cache directory and exit
   -h, --help          Print help (see more with '--help')
@@ -428,6 +452,10 @@ made from the picker, it is what gets stored on the way out.
 `--color` overrides what [colour detection](#colour) concluded, in either
 direction: `--color=truecolor` on a terminal that never advertised it, or
 `--color=never` on one that did.
+
+`--theme` picks [the palette](#palettes), and behaves exactly as `--lang` does
+against the stored one: it outranks what the last run left, and is itself what
+this run stores on the way out.
 
 The two cache commands answer the question this README used to answer with a
 path and a `rm -rf`. Both print what they touched:
@@ -464,7 +492,7 @@ through to disk.
 | `team.rs` | Team-level type analysis built on top of the chart. |
 | `compare.rs` | Head-to-head arithmetic for two species: stat rows, winners, best same-type hit. |
 | `i18n.rs` | `Language` enum and translation tables for the six UI languages. |
-| `theme.rs` | PICO-8-inspired palette and per-type accent colours. |
+| `theme.rs` | The palettes — PICO-8 and Game Boy DMG — and the per-type accent colours. |
 
 ### Concurrency
 
@@ -525,7 +553,7 @@ kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
 `~/.local/state/pokeductor`):
 
 ```
-session.json              party, language, sort order, shiny toggle
+session.json              party, language, sort order, palette, shiny toggle
 ```
 
 Written once, as the app exits, and read once, before the first frame. A run
@@ -539,7 +567,7 @@ sits in a directory users are invited to look inside, so a party longer than
 the six-member limit is trimmed rather than rejected, and a setting recorded in
 terms this build does not recognise — a language it no longer ships, say —
 leaves that setting at its default instead of discarding the whole file.
-Preferences are stored as codes (`"tr"`, `"name"`) rather than as enum indices,
+Preferences are stored as codes (`"tr"`, `"name"`, `"dmg"`) rather than as enum indices,
 so reordering an enum in Rust can never silently switch somebody's language.
 
 ### Sprite pipeline

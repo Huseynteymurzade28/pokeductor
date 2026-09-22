@@ -46,9 +46,12 @@ pub struct Session {
     /// Interface language, as [`crate::i18n::Language::flavor_code`].
     #[serde(default)]
     pub language: Option<String>,
-    /// Sidebar ordering, as [`crate::app::SortKey::code`].
+    /// Sidebar ordering, as [`crate::browser::SortKey::code`].
     #[serde(default)]
     pub sort: Option<String>,
+    /// Palette the interface was drawn in, as [`crate::theme::Theme::code`].
+    #[serde(default)]
+    pub theme: Option<String>,
     /// Whether the shiny palette was on.
     #[serde(default)]
     pub shiny: bool,
@@ -167,6 +170,7 @@ mod tests {
             team: vec!["snorlax".into(), "gyarados".into()],
             language: Some("tr".into()),
             sort: Some("name".into()),
+            theme: Some("dmg".into()),
             shiny: true,
         };
         let bytes = encode(&session).expect("encode");
@@ -192,6 +196,7 @@ mod tests {
         assert_eq!(session.team, ["pikachu"]);
         assert_eq!(session.language, None);
         assert_eq!(session.sort, None);
+        assert_eq!(session.theme, None, "a file from before palettes existed");
         assert!(!session.shiny);
     }
 

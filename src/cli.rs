@@ -19,6 +19,7 @@ use clap::{Parser, ValueEnum};
 use crate::cache;
 use crate::color::Choice;
 use crate::i18n::Language;
+use crate::theme::Theme;
 
 /// A terminal Pokedex and evolution analyzer.
 #[derive(Debug, Parser)]
@@ -40,12 +41,16 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "WHEN", default_value = "auto")]
     color: Choice,
 
+    /// Draw the interface in this palette
+    #[arg(long, value_enum, value_name = "PALETTE")]
+    theme: Option<Theme>,
+
     /// Delete the on-disk cache and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color", "cache_dir"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "cache_dir"])]
     clear_cache: bool,
 
     /// Print the cache directory and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme"])]
     cache_dir: bool,
 }
 
@@ -58,6 +63,8 @@ pub struct Cli {
 pub struct Startup {
     pub language: Option<Language>,
     pub species: Option<String>,
+    /// Palette to draw in, or `None` for whatever the previous session left.
+    pub theme: Option<Theme>,
     /// Colour depth to force, or [`Choice::Auto`] to work it out from the
     /// environment. Unlike the other two this is never `None`: "detect it"
     /// is itself one of the answers rather than the absence of one.
@@ -101,6 +108,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
     Ok(Outcome::Launch(Startup {
         language: cli.lang,
         species: cli.name,
+        theme: cli.theme,
         color: cli.color,
     }))
 }
@@ -157,6 +165,19 @@ impl ValueEnum for Language {
     }
 }
 
+/// Accepted `--theme` values come from [`Theme::ALL`] and the codes sessions
+/// are already stored with, so a third palette becomes a valid flag value by
+/// existing, exactly as a seventh language would.
+impl ValueEnum for Theme {
+    fn value_variants<'a>() -> &'a [Self] {
+        &Theme::ALL
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(self.code()).help(self.label()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +197,20 @@ mod tests {
         let cli = parse(&[]).expect("no arguments is valid");
         assert_eq!(cli.name, None);
         assert_eq!(cli.lang, None);
+    }
+
+    #[test]
+    fn a_palette_can_be_named_on_the_command_line() {
+        assert_eq!(parse(&["--theme", "dmg"]).unwrap().theme, Some(Theme::Dmg));
+        assert_eq!(
+            parse(&["--theme", "pico8"]).unwrap().theme,
+            Some(Theme::Pico8)
+        );
+        // A palette this build does not have is a usage error, not a silent
+        // fallback: the flag was typed on purpose.
+        assert!(parse(&["--theme", "cga"]).is_err());
+        // And without it, the stored palette is left to answer.
+        assert_eq!(parse(&[]).unwrap().theme, None);
     }
 
     #[test]

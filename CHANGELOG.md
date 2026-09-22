@@ -34,6 +34,16 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   then `R` is a random Ghost. The one way through the list that does not need
   you to already know what you are looking for. (#28)
 
+- A second palette, and `--theme` to pick one. `pico8` is the palette the
+  interface was designed in and stays the default; `dmg` is the Game Boy DMG's
+  greens, which is a joke worth making and needed no new rendering to make —
+  only other numbers. Sprites are quantized to the DMG's four shades the way
+  the hardware quantized everything, stat bars carry their scale in brightness
+  where there is only one hue, and the choice is kept between runs beside the
+  language and the sort order. `theme.rs` said from its first line that
+  centralizing the colours made it trivial to swap palettes later; this is the
+  payoff it never collected. (#29)
+
 - A species' alternate forms, on the info card and behind `V`. Forms sit in the
   master list as ordinary entries (`raichu-alola`), so they were reachable only
   by already knowing the name, and nothing on Raichu's card said an Alolan form
