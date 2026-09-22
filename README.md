@@ -43,8 +43,8 @@ linked and carries no glibc floor, so it runs on distributions older than the
 machine it was built on. Both Linux builds link no system OpenSSL.
 
 ```bash
-tar xzf pokeductor-v0.4.0-x86_64-unknown-linux-musl.tar.gz
-./pokeductor-v0.4.0-x86_64-unknown-linux-musl/pokeductor
+tar xzf pokeductor-v0.5.0-x86_64-unknown-linux-musl.tar.gz
+./pokeductor-v0.5.0-x86_64-unknown-linux-musl/pokeductor
 ```
 
 ### With cargo
@@ -764,8 +764,8 @@ they land. A release moves that section under its version number, bumps
 `Cargo.toml`, and is tagged:
 
 ```bash
-git tag -a v0.4.0 -m "v0.4.0"
-git push origin v0.4.0
+git tag -a v0.5.0 -m "v0.5.0"
+git push origin v0.5.0
 ```
 
 The tag is the only manual step. Pushing it runs `.github/workflows/release.yml`,
