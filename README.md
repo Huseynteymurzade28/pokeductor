@@ -94,10 +94,10 @@ line](#command-line) for the full set of flags.
 
 ### Browsing and filtering
 
-The sidebar lists all 1302 entries PokeAPI serves, with National Pokédex
-numbers. A bare number looks up that Pokédex number — `25` finds Pikachu —
-and beyond plain name matching the search box takes `dex:`, `type:`, `ability:`,
-`egg:` and `gen:` terms:
+The sidebar lists every entry PokeAPI serves — 1351 of them today, species and
+alternate forms alike — with National Pokédex numbers. A bare number looks up
+that Pokédex number — `25` finds Pikachu — and beyond plain name matching the
+search box takes `dex:`, `type:`, `ability:`, `egg:` and `gen:` terms:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-search.png" alt="Searching for type:ghost gen:1, narrowing the list to Gastly, Haunter and Gengar" width="900">
 
@@ -114,8 +114,8 @@ across a re-sort or a narrowing search.
 
 `R` loads a species at random from whatever the list is narrowed to — `type:ghost`
 then `R` is a random Ghost, `gen:1` then `R` is a random Kanto species — which is
-the one way through 1302 entries that does not need you to know what you are
-looking for.
+the one way through thirteen hundred entries that does not need you to know
+what you are looking for.
 
 ### Species details and abilities
 
@@ -133,6 +133,13 @@ legendaries, everything rarer), *easy* from 150 (early-route species) — and a
 genderless species says so rather than showing a ratio. Breeding groups are
 named as the games name them, not as PokeAPI files them: the `egg:` search
 term's alias table, run the other way.
+
+A species that ships in more than one form lists the others in a **Forms** row,
+so Raichu's card says an Alolan form exists — something the list alone never
+did, since a form is only reachable there by already knowing its name. `V`
+opens the forms card, a short list with the form on display marked, and `Enter`
+loads the one under the cursor. Forms are ordinary entries in the master list,
+so the jump selects one there exactly as the evolution panel selects a stage.
 
 `A` opens the abilities card:
 
@@ -322,6 +329,7 @@ no refetch:
 | | `C` | Pin the species / compare two |
 | | `A` | Ability card |
 | | `M` | Moves card |
+| | `V` | Alternate forms card |
 | | `X` | Toggle shiny artwork |
 | | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
@@ -344,6 +352,9 @@ no refetch:
 | **Party card** | `↑` `↓` · `j` `k` | Move between members |
 | | `C` | Pin the member / compare two |
 | | `P` · `Esc` | Close |
+| **Forms card** | `↑` `↓` · `j` `k` | Move between forms |
+| | `Enter` | Load the highlighted form |
+| | `V` · `Esc` | Close |
 | **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
 | | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
 | | `M` · `Esc` | Close |
@@ -637,6 +648,13 @@ Forms such as `raichu-alola` resolve their species and evolution data via the
 base species name carried in the Pokémon payload, so they do not 404. Their ids
 sit above 10000 and carry no dex meaning, so they show a blank dex column and
 are excluded from `dex:` and `gen:` filters rather than being guessed at.
+
+Which forms a species has is the `varieties` list on its species record, which
+the bundle already fetches, so the Forms row and the card behind `V` cost no
+request and are cached with the rest of the record. A form is named there by
+what it adds to the species — `raichu-alola` reads as *Alola* — and a name that
+does not start with the species, or the default variety whose name is the
+species itself, keeps all of it.
 
 ### Evolution requirements
 

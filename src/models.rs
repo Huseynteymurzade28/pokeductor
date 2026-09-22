@@ -317,6 +317,11 @@ pub struct PokemonDetail {
     /// (e.g. `name = "raichu-alola"` but `species = "raichu"`). This is the key
     /// the species and evolution endpoints expect.
     pub species: String,
+    /// Every variety the species ships as, in PokeAPI's order and under the
+    /// names `/pokemon` files them by (`raichu`, `raichu-alola`) — so a form
+    /// listed here is also an entry in the master list, and can be shown by
+    /// name. A species with no alternate form lists only itself.
+    pub forms: Vec<String>,
     /// National Pokedex number (from the species record), which is stable across
     /// a species' alternate forms — unlike [`id`](Self::id).
     pub dex_number: u32,
@@ -466,6 +471,32 @@ impl PokemonDetail {
             .or_else(|| self.genera.get("en"))
             .map(String::as_str)
     }
+
+    /// The species' *other* varieties: everything in [`forms`](Self::forms)
+    /// that is not this record. Empty for a species with a single form, which
+    /// is what the card checks before giving the row its line.
+    pub fn other_forms(&self) -> Vec<&str> {
+        self.forms
+            .iter()
+            .map(String::as_str)
+            .filter(|form| *form != self.name)
+            .collect()
+    }
+}
+
+/// A form's name with the species it belongs to taken off the front:
+/// `raichu-alola` under `raichu` reads as "Alola", which is the half of the
+/// name a row sitting beside Raichu is about.
+///
+/// The default variety usually *is* the species name, leaving nothing to show,
+/// and a few forms are named without the prefix at all. Both keep the whole
+/// name title-cased, since a blank is not a label.
+pub fn form_label(form: &str, species: &str) -> String {
+    form.strip_prefix(species)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .filter(|rest| !rest.is_empty())
+        .map(title_case)
+        .unwrap_or_else(|| title_case(form))
 }
 
 /// What sets an evolution in motion. PokeAPI has a long tail of one-off
@@ -800,6 +831,7 @@ mod tests {
         PokemonDetail {
             name: "pikachu".into(),
             species: "pikachu".into(),
+            forms: Vec::new(),
             dex_number: 25,
             is_legendary: false,
             is_mythical: false,
@@ -884,5 +916,43 @@ mod tests {
         let alolan_raichu = entry(10100);
         assert_eq!(alolan_raichu.dex_number(), None);
         assert_eq!(alolan_raichu.generation(), None);
+    }
+
+    #[test]
+    fn a_form_is_named_by_what_it_adds_to_the_species() {
+        assert_eq!(form_label("raichu-alola", "raichu"), "Alola");
+        assert_eq!(
+            form_label("urshifu-single-strike", "urshifu"),
+            "Single Strike"
+        );
+        // The default variety is usually the species itself, leaving nothing
+        // to add; a blank is not a label, so the whole name stands.
+        assert_eq!(form_label("raichu", "raichu"), "Raichu");
+        assert_eq!(form_label("giratina-altered", "giratina"), "Altered");
+        // And a form whose name does not start with the species keeps all of
+        // it rather than being cut somewhere arbitrary.
+        assert_eq!(form_label("odd-form", "bulbasaur"), "Odd Form");
+    }
+
+    #[test]
+    fn a_species_lists_the_forms_that_are_not_the_one_in_hand() {
+        let mut raichu = detail_with_sprites(None, None);
+        raichu.name = "raichu".into();
+        raichu.species = "raichu".into();
+        raichu.forms = vec!["raichu".into(), "raichu-alola".into()];
+        assert_eq!(raichu.other_forms(), ["raichu-alola"]);
+
+        // Seen from the Alolan form, the base species is the other form —
+        // the row is about where else to go, whichever one you are on.
+        let mut alolan = raichu.clone();
+        alolan.name = "raichu-alola".into();
+        assert_eq!(alolan.other_forms(), ["raichu"]);
+
+        // A species with a single variety has no other form to list, so the
+        // card gives the row no line at all.
+        let mut dialga = raichu.clone();
+        dialga.name = "dialga".into();
+        dialga.forms = vec!["dialga".into()];
+        assert!(dialga.other_forms().is_empty());
     }
 }

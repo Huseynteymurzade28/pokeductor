@@ -34,6 +34,14 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   then `R` is a random Ghost. The one way through the list that does not need
   you to already know what you are looking for. (#28)
 
+- A species' alternate forms, on the info card and behind `V`. Forms sit in the
+  master list as ordinary entries (`raichu-alola`), so they were reachable only
+  by already knowing the name, and nothing on Raichu's card said an Alolan form
+  existed. The card now lists the others in a Forms row, and `V` opens a picker
+  over every variety — the one on display marked — that loads the one chosen.
+  The mapping is the species record's `varieties` list, which the bundle
+  already fetched and threw away, so none of it costs a request. (#19)
+
 - The party card has a cursor, and `C` on it pins the member under the cursor
   or — with another species already pinned — opens the comparison against it.
   The party is six records picked deliberately, so it doubles as the shortlist
@@ -51,10 +59,16 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   width, so a wide screen draws one connected graph rather than clusters spread
   to its far edges.
 
-- Cached species bundles are now version 6, so every cached species is
-  fetched once more, the first time it is opened, to pick up the field data.
-  The flavour blurb now takes a column that fits it exactly, where before it
-  needed one spare row.
+- The sidebar asks PokeAPI for its whole list rather than the 1302 entries
+  that were all of it when the limit was written. PokeAPI appends, so the
+  newest alternate forms — everything past that count — were being cut off the
+  end: absent from the list, and so unreachable by name and unopenable from a
+  Forms row. (#19)
+
+- Cached species bundles are now version 7, so every cached species is
+  fetched once more, the first time it is opened, to pick up the field data and
+  the species' form list. The flavour blurb now takes a column that fits it
+  exactly, where before it needed one spare row.
 
 ## [0.4.0] - 2026-09-01
 

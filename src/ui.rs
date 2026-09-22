@@ -12,8 +12,8 @@ use crate::color;
 use crate::compare;
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{
-    egg_group_label, title_case, CatchEase, EvolutionTree, FieldData, LearnMethod, LearnedMove,
-    PokemonDetail, Sprite,
+    egg_group_label, form_label, title_case, CatchEase, EvolutionTree, FieldData, LearnMethod,
+    LearnedMove, PokemonDetail, Sprite,
 };
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
@@ -67,6 +67,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.team_card {
         render_team(frame, app, &strings, area);
+    }
+    if app.forms_card {
+        render_forms(frame, app, &strings, area);
     }
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
@@ -312,12 +315,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
 
     // Ability names. These come in the same payload as the types, so the row
     // costs nothing; the descriptions behind `A` are what need a request.
-    //
-    // Three abilities plus a "hidden" marker overrun a narrow panel, so the
-    // row is wrapped onto continuation lines rather than clipped: a name cut
-    // off halfway is worse than one on the next line.
     if !detail.abilities.is_empty() {
-        let label = format!("{}: ", s.abilities_label);
         let entries: Vec<String> = detail
             .abilities
             .iter()
@@ -329,25 +327,29 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
                 }
             })
             .collect();
+        lines.extend(label_rows(
+            s.abilities_label,
+            &entries.join(" · "),
+            info.width as usize,
+        ));
+    }
 
-        let indent = " ".repeat(label.chars().count());
-        let budget = (info.width as usize).saturating_sub(label.chars().count());
-        for (row, text) in wrap_plain(&entries.join(" · "), budget.max(8))
-            .into_iter()
-            .enumerate()
-        {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    if row == 0 {
-                        label.clone()
-                    } else {
-                        indent.clone()
-                    },
-                    Style::default().fg(theme::SUBTEXT),
-                ),
-                Span::styled(text, Style::default().fg(theme::TEXT)),
-            ]));
-        }
+    // The species' other varieties. They are ordinary entries in the master
+    // list and have always been reachable by typing their names, but nothing
+    // on Raichu's card said an Alolan form existed. This row is where it says
+    // so; `V` opens the card that jumps to one. A species with a single
+    // variety gets no row, rather than one listing itself.
+    let forms = detail.other_forms();
+    if !forms.is_empty() {
+        let labels: Vec<String> = forms
+            .iter()
+            .map(|form| form_label(form, &detail.species))
+            .collect();
+        lines.extend(label_rows(
+            s.forms_label,
+            &labels.join(" · "),
+            info.width as usize,
+        ));
     }
 
     lines.push(Line::from(vec![
@@ -430,6 +432,33 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         }
         _ => frame.render_widget(Paragraph::new(lines), info),
     }
+}
+
+/// A `Label: value` row wrapped onto continuation lines rather than clipped,
+/// the continuations indented under the value. Both rows that use it — the
+/// abilities and the forms — are lists long enough to overrun a narrow panel,
+/// and a name cut off halfway is worse than one on the next line.
+fn label_rows(label: &str, text: &str, width: usize) -> Vec<Line<'static>> {
+    let label = format!("{label}: ");
+    let indent = " ".repeat(label.chars().count());
+    let budget = width.saturating_sub(label.chars().count());
+    wrap_plain(text, budget.max(8))
+        .into_iter()
+        .enumerate()
+        .map(|(row, text)| {
+            Line::from(vec![
+                Span::styled(
+                    if row == 0 {
+                        label.clone()
+                    } else {
+                        indent.clone()
+                    },
+                    Style::default().fg(theme::SUBTEXT),
+                ),
+                Span::styled(text, Style::default().fg(theme::TEXT)),
+            ])
+        })
+        .collect()
 }
 
 /// The field-guide facts as label/value pairs, in reading order, with the
@@ -1511,6 +1540,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("C", h.act_compare),
         ("A", h.act_abilities),
         ("M", h.act_moves),
+        ("V", h.act_forms),
         ("X", h.act_shiny),
         ("R", h.act_random),
         ("Space", h.act_party_toggle),
@@ -1539,6 +1569,10 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("", h.ctx_party),
         ("↑ ↓ · j k", h.act_move),
         ("C", h.act_compare),
+        ("", ""),
+        ("", h.ctx_forms),
+        ("↑ ↓ · j k", h.act_move),
+        ("Enter", h.act_form_jump),
         ("", ""),
         ("", h.ctx_cards),
         ("Esc", h.act_close),
@@ -2469,6 +2503,83 @@ fn side_facts(app: &App, species: &PokemonDetail, width: usize) -> Vec<Line<'sta
     lines
 }
 
+/// Wide enough for the foot hint, which is longer than any form's name and
+/// longer still in German.
+const FORMS_CARD_W: u16 = 48;
+
+/// The species' varieties as a list to pick from: the info card's Forms row
+/// says they exist, and this is where one is chosen and jumped to.
+///
+/// Built like the language picker, because it is the same kind of card — a
+/// short list of alternatives with one of them currently in force — and the
+/// `●` marking the variety on display means here what it means there.
+fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some(detail) = app.selected_detail() else {
+        return;
+    };
+    let width = FORMS_CARD_W.min(full.width);
+    // A card, not a second screen: it leaves a margin so the list behind it
+    // stays visible, and Pikachu's seventeen varieties scroll inside whatever
+    // that leaves rather than growing the card past the terminal.
+    let height = full
+        .height
+        .saturating_sub(4)
+        .min(detail.forms.len() as u16 + 4);
+    if width < 20 || height < 6 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .title(Span::styled(
+            s.forms_title,
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+
+    // Centre the cursor in the window where there is room on both sides, and
+    // pin it to an end where there is not, so the last forms stay reachable.
+    let window = rows[0].height as usize;
+    let first = app
+        .forms_cursor
+        .saturating_sub(window / 2)
+        .min(detail.forms.len().saturating_sub(window));
+
+    let mut lines: Vec<Line> = Vec::with_capacity(window);
+    for (i, form) in detail.forms.iter().enumerate().skip(first).take(window) {
+        let selected = i == app.forms_cursor;
+        let shown = *form == detail.name;
+        let marker = if shown { "●" } else { "○" };
+        let label = format!(" {marker} {} ", form_label(form, &detail.species));
+        let style = if selected {
+            color::highlight(theme::MAUVE).add_modifier(Modifier::BOLD)
+        } else if shown {
+            Style::default().fg(theme::MAUVE)
+        } else {
+            Style::default().fg(theme::TEXT)
+        };
+        lines.push(Line::from(Span::styled(label, style)));
+    }
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.forms_close_hint,
+        Style::default().fg(theme::OVERLAY),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
 fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let width = 26u16;
     let height = Language::ALL.len() as u16 + 4; // borders + title pad + hint
@@ -2599,6 +2710,22 @@ mod tests {
         let facts = [fact("Habitat", "Somewhere very far away indeed")];
         assert_eq!(fact_rows(&facts, 10).len(), 1);
         assert!(fact_rows(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn a_label_row_wraps_under_its_value_and_loses_nothing() {
+        // Wide enough, and the row is one line.
+        assert_eq!(
+            row_text(&label_rows("Forms", "Alola · Gmax", 40)),
+            ["Forms: Alola · Gmax"]
+        );
+        // Too narrow, and the rest goes on the next line indented under the
+        // value — the names are all still there, which is the point of
+        // wrapping rather than clipping.
+        assert_eq!(
+            row_text(&label_rows("Forms", "Alola · Gmax", 14)),
+            ["Forms: Alola ·", "       Gmax"]
+        );
     }
 
     #[test]

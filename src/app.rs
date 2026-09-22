@@ -211,6 +211,11 @@ pub struct App {
     /// Row the moves card highlights, as an index into the selection's
     /// learnset.
     pub move_cursor: usize,
+    /// Whether the forms card is open, and which of the species' varieties it
+    /// highlights. Held here rather than on the record because it is a cursor
+    /// over what is on display, not a property of the species.
+    pub forms_card: bool,
+    pub forms_cursor: usize,
     /// Whether the help overlay is open.
     pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
@@ -287,6 +292,8 @@ impl App {
             move_loading: HashSet::new(),
             moves_card: false,
             move_cursor: 0,
+            forms_card: false,
+            forms_cursor: 0,
             help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
@@ -862,6 +869,10 @@ impl App {
             self.handle_team_key(key);
             return;
         }
+        if self.forms_card {
+            self.handle_forms_key(key);
+            return;
+        }
         if self.matchups {
             if matches!(
                 key.code,
@@ -1018,6 +1029,67 @@ impl App {
         self.filtered
             .iter()
             .position(|&idx| self.all_pokemon[idx].name == name)
+    }
+
+    /// The varieties of the species on display, which is what the forms card
+    /// lists and what its cursor runs over. Empty until a record has landed.
+    pub fn forms(&self) -> &[String] {
+        self.selected_detail()
+            .map(|detail| detail.forms.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Opens the forms card with its cursor on the variety already shown, so
+    /// the card opens where the reader is and the other forms are what moving
+    /// gets to.
+    ///
+    /// A species with a single variety has nothing to pick from, and the key
+    /// does nothing rather than opening a card listing only what is already on
+    /// screen.
+    fn open_forms(&mut self) {
+        let Some(detail) = self.selected_detail() else {
+            return; // nothing loaded yet, so nothing to list
+        };
+        if detail.forms.len() < 2 {
+            return;
+        }
+        let cursor = detail
+            .forms
+            .iter()
+            .position(|form| *form == detail.name)
+            .unwrap_or(0);
+        self.forms_cursor = cursor;
+        self.forms_card = true;
+    }
+
+    fn handle_forms_key(&mut self, key: KeyEvent) {
+        let len = self.forms().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('v' | 'V' | 'q' | 'Q') => self.forms_card = false,
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                self.forms_cursor = (self.forms_cursor + len - 1) % len;
+            }
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                self.forms_cursor = (self.forms_cursor + 1) % len;
+            }
+            KeyCode::Enter => self.jump_to_form(),
+            _ => {}
+        }
+    }
+
+    /// Shows the form under the cursor. Forms are ordinary entries in the
+    /// master list — `raichu-alola` sits there under its own id — so this is
+    /// the same "select in the list, then load" path every other jump takes,
+    /// and the card closes behind it because what it was open for has
+    /// happened. A name the list does not carry leaves it open rather than
+    /// closing onto an unchanged panel.
+    fn jump_to_form(&mut self) {
+        let Some(name) = self.forms().get(self.forms_cursor).cloned() else {
+            return;
+        };
+        if self.show_species(&name) {
+            self.forms_card = false;
+        }
     }
 
     /// Opens the ability card. The text it shows is pulled in by
@@ -1232,6 +1304,7 @@ impl App {
             KeyCode::Char('p') | KeyCode::Char('P') => self.open_team_card(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_moves(),
+            KeyCode::Char('v') | KeyCode::Char('V') => self.open_forms(),
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
             KeyCode::Char('?') => self.help_card = true,
@@ -1737,6 +1810,7 @@ mod tests {
         PokemonDetail {
             name: name.to_string(),
             species: name.to_string(),
+            forms: Vec::new(),
             dex_number: 0,
             is_legendary: false,
             is_mythical: false,
@@ -1909,6 +1983,94 @@ mod tests {
         assert_eq!(app.selected_name.as_deref(), Some("alakazam"));
 
         assert!(!app.show_species("missingno"), "not in the list at all");
+    }
+
+    /// A loaded record listing the varieties its species ships as.
+    fn with_forms(name: &str, species: &str, forms: &[&str]) -> PokemonDetail {
+        PokemonDetail {
+            species: species.to_string(),
+            forms: forms.iter().map(|f| f.to_string()).collect(),
+            ..loaded(name)
+        }
+    }
+
+    /// A list holding Raichu and its Alolan form, with both records loaded and
+    /// Raichu on display — the state the forms card is opened from.
+    fn app_with_raichu() -> App {
+        let mut app = app_listing(&[(26, "raichu"), (10100, "raichu-alola")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        for name in ["raichu", "raichu-alola"] {
+            app.details.insert(
+                name.to_string(),
+                with_forms(name, "raichu", &["raichu", "raichu-alola"]),
+            );
+        }
+        assert!(app.show_species("raichu"));
+        app
+    }
+
+    #[test]
+    fn the_forms_card_opens_on_the_form_shown_and_jumps_to_the_one_picked() {
+        let mut app = app_with_raichu();
+
+        // The cursor starts on the variety in the detail panel, so the card
+        // opens where the reader is.
+        app.open_forms();
+        assert!(app.forms_card);
+        assert_eq!(app.forms_cursor, 0);
+
+        // Enter on another form loads it and takes the card away, which is
+        // the whole of what it was open for.
+        app.handle_forms_key(press(KeyCode::Down));
+        app.handle_forms_key(press(KeyCode::Enter));
+        assert_eq!(app.selected_name.as_deref(), Some("raichu-alola"));
+        assert!(!app.forms_card);
+
+        // And from the form, the card is the way back: it opens on the form
+        // now shown, and the base species is what moving reaches.
+        app.open_forms();
+        assert_eq!(app.forms_cursor, 1);
+        app.handle_forms_key(press(KeyCode::Up));
+        app.handle_forms_key(press(KeyCode::Enter));
+        assert_eq!(app.selected_name.as_deref(), Some("raichu"));
+    }
+
+    #[test]
+    fn a_species_with_one_variety_has_no_card_to_open() {
+        // Opening a card that lists only what is already on screen would say
+        // nothing, so the key does nothing instead.
+        let mut app = app_listing(&[(483, "dialga")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        app.details.insert(
+            "dialga".to_string(),
+            with_forms("dialga", "dialga", &["dialga"]),
+        );
+        assert!(app.show_species("dialga"));
+
+        app.open_forms();
+        assert!(!app.forms_card);
+
+        // Nor before anything has loaded: there are no forms to list yet.
+        let mut empty = app_listing(&[(1, "bulbasaur")]);
+        empty.open_forms();
+        assert!(!empty.forms_card);
+        assert!(empty.forms().is_empty());
+    }
+
+    #[test]
+    fn the_forms_cursor_wraps_at_both_ends() {
+        let mut app = app_with_raichu();
+        app.open_forms();
+        app.handle_forms_key(press(KeyCode::Up));
+        assert_eq!(app.forms_cursor, 1);
+        app.handle_forms_key(press(KeyCode::Down));
+        assert_eq!(app.forms_cursor, 0);
+
+        // V closes the card it opened, the way every other overlay's key does.
+        app.handle_forms_key(press(KeyCode::Char('v')));
+        assert!(!app.forms_card);
     }
 
     #[test]

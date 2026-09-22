@@ -18,8 +18,16 @@ use crate::models::{
 use crate::retry::{self, FailureKind};
 
 const BASE_URL: &str = "https://pokeapi.co/api/v2";
-/// How many Pokemon to load into the sidebar. Covers all current species.
-const LIST_LIMIT: u32 = 1302;
+/// How many Pokemon to ask for when loading the sidebar.
+///
+/// Deliberately far above the number that exists. PokeAPI appends: a new
+/// generation adds species, and alternate forms are added above id 10000
+/// whenever the games ship one. A limit set to the count of the day silently
+/// truncates the tail as soon as that happens — and a truncated list is not
+/// merely short, it hides the newest forms from the search box and from the
+/// Forms row, which resolves a name by finding it here. Asking for more than
+/// there are costs one page either way.
+const LIST_LIMIT: u32 = 20000;
 
 /// Ceiling on requests in flight at once across the whole process.
 ///
@@ -361,6 +369,7 @@ pub async fn fetch_pokemon_bundle(
     detail.genera = species.genera;
     detail.flavors = species.flavors;
     detail.field = species.field;
+    detail.forms = species.forms;
     let evolution = fetch_chain(client, &species.chain_url).await?;
 
     // The sprite is a nice-to-have: a missing or undecodable image must not
@@ -503,6 +512,9 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
     Ok(PokemonDetail {
         name: raw.name,
         species: raw.species.name,
+        // Which forms the species has is on the species record, not this one;
+        // filled in by the bundle once that has been fetched.
+        forms: Vec::new(),
         // Sensible fallback for the default form; overwritten with the true
         // national number once the species record loads.
         dex_number: raw.id,
@@ -533,6 +545,8 @@ const CARD_LANGS: [&str; 5] = ["en", "de", "fr", "es", "it"];
 struct SpeciesInfo {
     chain_url: String,
     dex_number: u32,
+    /// The species' varieties, by the names `/pokemon` files them under.
+    forms: Vec<String>,
     is_legendary: bool,
     is_mythical: bool,
     is_baby: bool,
@@ -567,6 +581,13 @@ fn default_variety_name(varieties: &[RawVariety], species: &str) -> String {
         .find(|v| v.is_default)
         .map(|v| v.pokemon.name.clone())
         .unwrap_or_else(|| species.to_string())
+}
+
+/// The names of every variety a species ships as, in the order PokeAPI lists
+/// them — which puts the default first, so a Forms row reads from the base
+/// species outwards.
+fn variety_names(varieties: &[RawVariety]) -> Vec<String> {
+    varieties.iter().map(|v| v.pokemon.name.clone()).collect()
 }
 
 /// Fetches a species record, pulling out the evolution-chain URL plus the genus
@@ -604,6 +625,7 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
     Ok(SpeciesInfo {
         chain_url,
         dex_number: species.id,
+        forms: variety_names(&species.varieties),
         is_legendary: species.is_legendary,
         is_mythical: species.is_mythical,
         is_baby: species.is_baby,
@@ -1137,7 +1159,7 @@ mod tests {
     }
 
     /// Parses just the `varieties` list out of a `/pokemon-species` payload,
-    /// which is all `default_variety_name` reads.
+    /// which is all `default_variety_name` and `variety_names` read.
     fn varieties(json: &str) -> Vec<RawVariety> {
         serde_json::from_str::<RawSpecies>(json)
             .expect("species payload parses")
@@ -1182,6 +1204,37 @@ mod tests {
         );
         assert_eq!(default_variety_name(&raw, "bulbasaur"), "bulbasaur");
         assert_eq!(default_variety_name(&[], "bulbasaur"), "bulbasaur");
+    }
+
+    #[test]
+    fn every_variety_is_carried_through_in_the_order_the_species_lists_them() {
+        // The Forms row reads from the base species outwards, which is the
+        // order PokeAPI already sends: the default variety first.
+        let raw = varieties(
+            r#"{
+              "id": 26,
+              "evolution_chain": { "url": "" },
+              "varieties": [
+                { "is_default": true,  "pokemon": { "name": "raichu"       } },
+                { "is_default": false, "pokemon": { "name": "raichu-alola" } }
+              ]
+            }"#,
+        );
+        assert_eq!(variety_names(&raw), ["raichu", "raichu-alola"]);
+    }
+
+    #[test]
+    fn a_species_with_one_variety_lists_only_itself() {
+        // The card checks the count, so a single-variety species has to come
+        // through as exactly one name rather than none.
+        let raw = varieties(
+            r#"{
+              "id": 483,
+              "evolution_chain": { "url": "" },
+              "varieties": [{ "is_default": true, "pokemon": { "name": "dialga" } }]
+            }"#,
+        );
+        assert_eq!(variety_names(&raw), ["dialga"]);
     }
 
     /// Parses a trimmed `/pokemon-species` payload the way `fetch_species`

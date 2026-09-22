@@ -205,6 +205,7 @@ mod tests {
         PokemonDetail {
             name: name.to_string(),
             species: name.to_string(),
+            forms: Vec::new(),
             dex_number: 0,
             is_legendary: false,
             is_mythical: false,
