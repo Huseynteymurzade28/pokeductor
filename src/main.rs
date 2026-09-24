@@ -4,6 +4,7 @@
 //! - `models`  : API-agnostic domain types (the data domain layer).
 //! - `cache`   : on-disk cache of everything fetched, for instant/offline starts.
 //! - `cli`     : argument parsing and the commands that need no terminal.
+//! - `json`    : the `--json` output shape and the name rule behind it.
 //! - `color`   : terminal colour-depth detection and per-frame degradation.
 //! - `i18n`    : `Language` enum + translation tables (EN / TR / DE).
 //! - `theme`   : Catppuccin Mocha palette and per-type colors.
@@ -24,6 +25,7 @@ mod cli;
 mod color;
 mod compare;
 mod i18n;
+mod json;
 mod models;
 mod query;
 mod retry;

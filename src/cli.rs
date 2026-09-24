@@ -6,6 +6,8 @@
 //! no keybinding because they are not something you do mid-session — they are
 //! what you reach for from a shell when something looks wrong, and until now
 //! they meant finding `$XDG_CACHE_HOME/pokeductor` by hand and guessing.
+//! `--json` is the other: the one way for a script to read what the app knows,
+//! which it cannot do through a terminal interface.
 //!
 //! Output here stays in English while the interface is translated. Clap writes
 //! its own help and errors in English regardless, so translating the handful of
@@ -19,6 +21,7 @@ use clap::{Parser, ValueEnum};
 use crate::cache;
 use crate::color::Choice;
 use crate::i18n::Language;
+use crate::json;
 use crate::theme::Theme;
 
 /// A terminal Pokedex and evolution analyzer.
@@ -45,12 +48,19 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "PALETTE")]
     theme: Option<Theme>,
 
+    /// Print NAME as JSON and exit, instead of opening the interface
+    ///
+    /// NAME must come down to one species: an exact name, a Pokedex number,
+    /// or a fragment only one name contains. Anything else exits non-zero.
+    #[arg(long, requires = "name", conflicts_with_all = ["lang", "color", "theme"])]
+    json: bool,
+
     /// Delete the on-disk cache and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "cache_dir"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "cache_dir", "json"])]
     clear_cache: bool,
 
     /// Print the cache directory and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "json"])]
     cache_dir: bool,
 }
 
@@ -102,6 +112,12 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         } else {
             println!("Nothing to remove: {} does not exist", dir.display());
         }
+        return Ok(Outcome::Handled);
+    }
+
+    // `requires = "name"` has already made sure there is one.
+    if let (true, Some(name)) = (cli.json, &cli.name) {
+        json::run(name).await?;
         return Ok(Outcome::Handled);
     }
 
@@ -274,6 +290,19 @@ mod tests {
         assert!(parse(&["--cache-dir", "gengar"]).is_err());
         assert!(parse(&["--cache-dir", "--lang", "tr"]).is_err());
         assert!(parse(&["--clear-cache", "--color", "never"]).is_err());
+    }
+
+    #[test]
+    fn json_needs_a_name_and_nothing_that_only_shapes_the_interface() {
+        let cli = parse(&["--json", "gengar"]).expect("a name is all it needs");
+        assert!(cli.json);
+        assert_eq!(cli.name.as_deref(), Some("gengar"));
+        assert!(parse(&["--json"]).is_err());
+        assert!(parse(&["--json", "gengar", "--lang", "tr"]).is_err());
+        assert!(parse(&["--json", "gengar", "--theme", "dmg"]).is_err());
+        assert!(parse(&["--json", "gengar", "--color", "never"]).is_err());
+        assert!(parse(&["--json", "gengar", "--cache-dir"]).is_err());
+        assert!(parse(&["--json", "gengar", "--clear-cache"]).is_err());
     }
 
     #[test]

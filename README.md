@@ -422,13 +422,14 @@ Arguments:
   [NAME]  Open directly on this species, e.g. `pokeductor gengar`
 
 Options:
-      --lang <LANG>   Start in this UI language [possible values: en, tr, de, fr, es, it]
-      --color <WHEN>  How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
+      --lang <LANG>      Start in this UI language [possible values: en, tr, de, fr, es, it]
+      --color <WHEN>     How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
       --theme <PALETTE>  Draw the interface in this palette [possible values: pico8, dmg]
-      --clear-cache   Delete the on-disk cache and exit
-      --cache-dir     Print the cache directory and exit
-  -h, --help          Print help (see more with '--help')
-  -V, --version       Print version
+      --json             Print NAME as JSON and exit, instead of opening the interface
+      --clear-cache      Delete the on-disk cache and exit
+      --cache-dir        Print the cache directory and exit
+  -h, --help             Print help (see more with '--help')
+  -V, --version          Print version
 ```
 
 `NAME` goes into the search box rather than through a parser of its own, so
@@ -466,6 +467,83 @@ $ pokeductor --cache-dir
 $ pokeductor --clear-cache
 Removed /home/you/.cache/pokeductor
 ```
+
+### JSON output
+
+`--json` prints one species and exits, without opening the interface. It reads
+the same cache the interface fills and fetches, and caches, whatever that
+cannot answer, so it works on a cold cache and offline on a warm one.
+
+```console
+$ pokeductor --json gengar | jq .stats.speed
+110
+```
+
+`NAME` has to come down to exactly one species, because a script needs an
+answer rather than a list:
+
+- an exact name wins, so `mew` is Mew and not Mewtwo;
+- a bare number is a Pokedex number (`--json 25` is Pikachu);
+- anything else is a fragment of a name, and only one name may contain it.
+
+A fragment several names contain (`pika`) is an error that lists some of them.
+Search terms like `type:ghost` describe a list rather than a species and are
+refused. Every miss exits `1` with the reason on stderr and nothing on stdout.
+
+The output is its own documented shape, not the app's internal record. All text
+is English whatever `--lang` the interface last ran in, heights are metres and
+weights kilograms:
+
+```json
+{
+  "schema": 1,
+  "name": "gengar",
+  "species": "gengar",
+  "dex": 94,
+  "genus": "Shadow Pokémon",
+  "flavor": "Under a full moon, this POKéMON likes to mimic the shadows of people and laugh at their fright.",
+  "types": ["ghost", "poison"],
+  "abilities": [{ "name": "cursed-body", "hidden": false }],
+  "stats": {
+    "hp": 60, "attack": 65, "defense": 60,
+    "special_attack": 130, "special_defense": 75, "speed": 110,
+    "total": 500
+  },
+  "height_m": 1.5,
+  "weight_kg": 40.5,
+  "legendary": false,
+  "mythical": false,
+  "baby": false,
+  "breeding": {
+    "egg_groups": ["indeterminate"],
+    "gender": { "male": 50.0, "female": 50.0 },
+    "capture_rate": 45,
+    "base_happiness": 70,
+    "growth_rate": "medium-slow",
+    "habitat": "cave"
+  },
+  "forms": ["gengar", "gengar-mega", "gengar-gmax"],
+  "evolution": {
+    "name": "gastly",
+    "evolves_to": [
+      { "name": "haunter", "evolves_to": [{ "name": "gengar", "evolves_to": [] }] }
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | The shape's version. It goes up when a field is renamed, removed or changes type; adding a field does not, so ignore keys you do not know. |
+| `name` / `species` | The name it is filed under, and its species. They differ for a form: `raichu-alola` is a `raichu`. |
+| `dex` | National Pokedex number, shared by all of a species' forms. |
+| `genus`, `flavor` | English Pokedex text, or `null` where PokeAPI has none. |
+| `types` | In slot order, primary first. |
+| `stats` | Base stats by name, and their sum. |
+| `breeding.gender` | Male and female percentages, or `null` for a genderless species. |
+| `breeding.habitat` | Only recorded up to Generation IV, so `null` after it. |
+| `forms` | Every variety of the species, this one included. |
+| `evolution` | The whole chain from its root, as nested stages. What each step takes is not part of schema 1. |
 
 ---
 
