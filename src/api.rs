@@ -355,6 +355,27 @@ pub async fn fetch_pokemon_bundle(
     name: &str,
     variant: SpriteVariant,
 ) -> Result<(PokemonDetail, EvolutionTree, Option<Sprite>), ApiError> {
+    let (detail, evolution) = fetch_record(client, name).await?;
+
+    // The sprite is a nice-to-have: a missing or undecodable image must not
+    // sink the whole bundle, so failures here degrade to "no sprite". Only the
+    // palette currently on screen is fetched; the other one waits until the
+    // shiny toggle actually asks for it.
+    let sprite = match detail.sprite_url_for(variant) {
+        Some(url) => fetch_sprite(client, url).await.ok(),
+        None => None,
+    };
+
+    Ok((detail, evolution, sprite))
+}
+
+/// The bundle without its artwork: everything [`fetch_pokemon_bundle`] reads
+/// that is text. `--json` answers from this, since a sprite is a request it
+/// would only throw away.
+pub async fn fetch_record(
+    client: &reqwest::Client,
+    name: &str,
+) -> Result<(PokemonDetail, EvolutionTree), ApiError> {
     let mut detail = fetch_detail(client, name).await?;
 
     // The species record carries both the evolution chain *and* the Pokedex
@@ -371,17 +392,7 @@ pub async fn fetch_pokemon_bundle(
     detail.field = species.field;
     detail.forms = species.forms;
     let evolution = fetch_chain(client, &species.chain_url).await?;
-
-    // The sprite is a nice-to-have: a missing or undecodable image must not
-    // sink the whole bundle, so failures here degrade to "no sprite". Only the
-    // palette currently on screen is fetched; the other one waits until the
-    // shiny toggle actually asks for it.
-    let sprite = match detail.sprite_url_for(variant) {
-        Some(url) => fetch_sprite(client, url).await.ok(),
-        None => None,
-    };
-
-    Ok((detail, evolution, sprite))
+    Ok((detail, evolution))
 }
 
 /// Translates `text` from one language to another via MyMemory's free,

@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 history, so they are summaries rather than the record kept as the work landed.
 Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
+## [Unreleased]
+
+### Added
+
+- `pokeductor --json NAME` prints one species as JSON and exits, so a script
+  can read what the app knows. It answers from the cache and fetches what the
+  cache does not have. The output is a documented shape with its own `schema`
+  number, not the internal record. `NAME` has to name exactly one species; a
+  miss or an ambiguous fragment exits `1` with the reason on stderr. (#33)
+
 ## [0.5.0] - 2026-09-22
 
 ### Added
