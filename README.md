@@ -45,8 +45,8 @@ than the machine it was built on. On ARM it is the only build. None of the Linux
 builds link a system OpenSSL.
 
 ```bash
-tar xzf pokeductor-v0.5.0-x86_64-unknown-linux-musl.tar.gz
-./pokeductor-v0.5.0-x86_64-unknown-linux-musl/pokeductor
+tar xzf pokeductor-v0.6.0-x86_64-unknown-linux-musl.tar.gz
+./pokeductor-v0.6.0-x86_64-unknown-linux-musl/pokeductor
 ```
 
 ### Shell completions and man page
@@ -858,14 +858,14 @@ they land. A release moves that section under its version number, bumps
 `Cargo.toml`, and is tagged:
 
 ```bash
-git tag -a v0.5.0 -m "v0.5.0"
-git push origin v0.5.0
+git tag -a v0.6.0 -m "v0.6.0"
+git push origin v0.6.0
 ```
 
 The tag is the only manual step. Pushing it runs `.github/workflows/release.yml`,
 which re-runs the full check suite against the tagged tree, refuses to go on if
 the tag and the manifest disagree about the version or the changelog has no
-section for it, cross-compiles the five targets, attaches them with checksums to
+section for it, builds the six targets, attaches them with checksums to
 a GitHub release whose notes are that changelog section, and finally publishes to
 crates.io. Publishing needs a `CARGO_REGISTRY_TOKEN` repository secret.
 

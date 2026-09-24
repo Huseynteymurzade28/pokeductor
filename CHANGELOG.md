@@ -10,6 +10,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-24
+
 ### Added
 
 - `pokeductor --json NAME` prints one species as JSON and exits, so a script
@@ -226,7 +228,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   Unicode half-blocks, evolution chains as connected cards, a language menu, and
   the retro colour palette.
 
-[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.3.0...v0.3.1
