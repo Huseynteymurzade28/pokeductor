@@ -31,6 +31,12 @@ anyhow = "1"
 thiserror = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 clap = { version = "4.6.6", features = ["derive"] }
+# Completions and the man page come out of the binary itself rather than a
+# build script or an xtask, so anything that can build the crate — the release
+# workflow, a PKGBUILD working from the crates.io tarball — can produce them
+# from the exact flags it just built. Between them they add one crate, `roff`.
+clap_complete = "4.6"
+clap_mangen = "0.3"
 
 [profile.release]
 opt-level = 3

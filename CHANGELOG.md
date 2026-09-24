@@ -18,6 +18,11 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   number, not the internal record. `NAME` has to name exactly one species; a
   miss or an ambiguous fragment exits `1` with the reason on stderr. (#33)
 
+- Shell completions and a man page. `--completions SHELL` prints the script for
+  bash, zsh, fish, PowerShell or elvish, and a hidden `--man` prints the page.
+  Both are generated from the flag definitions, and every release archive now
+  carries them under `completions/` and `man/`. (#38)
+
 ## [0.5.0] - 2026-09-22
 
 ### Added
