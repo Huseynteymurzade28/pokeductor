@@ -23,6 +23,18 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   Both are generated from the flag definitions, and every release archive now
   carries them under `completions/` and `man/`. (#38)
 
+- Release binaries for 64-bit ARM Linux, `aarch64-unknown-linux-musl`, built
+  natively on an ARM runner. Statically linked like the x86_64 musl build, so
+  a Raspberry Pi or an ARM server no longer has to build from crates.io. (#39)
+
+### Security
+
+- rustls 0.23.40 → 0.23.45 for
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285): TLS 1.3
+  handshake messages sent at the wrong encryption level were accepted rather
+  than ending the connection. The handshake stays authenticated, so it could
+  not be used to alter one, but 0.5.0 shipped with the affected version.
+
 ## [0.5.0] - 2026-09-22
 
 ### Added

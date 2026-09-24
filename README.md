@@ -34,13 +34,15 @@ carries an archive per platform, with a `.sha256` beside it:
 |---|---|
 | Linux (any distribution) | `x86_64-unknown-linux-musl.tar.gz` |
 | Linux (glibc) | `x86_64-unknown-linux-gnu.tar.gz` |
+| Linux (64-bit ARM: Raspberry Pi, ARM servers) | `aarch64-unknown-linux-musl.tar.gz` |
 | macOS (Apple silicon) | `aarch64-apple-darwin.tar.gz` |
 | macOS (Intel) | `x86_64-apple-darwin.tar.gz` |
 | Windows | `x86_64-pc-windows-msvc.zip` |
 
-Take the **musl** one on Linux unless you have a reason not to: it is statically
-linked and carries no glibc floor, so it runs on distributions older than the
-machine it was built on. Both Linux builds link no system OpenSSL.
+Take the **musl** one on x86_64 Linux unless you have a reason not to: it is
+statically linked and carries no glibc floor, so it runs on distributions older
+than the machine it was built on. On ARM it is the only build. None of the Linux
+builds link a system OpenSSL.
 
 ```bash
 tar xzf pokeductor-v0.5.0-x86_64-unknown-linux-musl.tar.gz
