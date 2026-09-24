@@ -3,7 +3,7 @@
 //! Everything in [`crate::cache`] is a second copy of something PokeAPI
 //! already knows: delete it and the next run refills it. What this module
 //! keeps is the opposite — the choices the user made. The party they
-//! assembled, the language they read the interface in, the palette and the
+//! assembled, the species they marked as favourites, the language they read the interface in, the palette and the
 //! ordering they left the sidebar in. Nothing can reconstruct those, and
 //! losing a six-member party to a stray `q` is what makes a tool feel
 //! disposable.
@@ -55,6 +55,10 @@ pub struct Session {
     /// Whether the shiny palette was on.
     #[serde(default)]
     pub shiny: bool,
+    /// Species marked as favourites, as raw API names. Added without a
+    /// version bump: a file from before favourites reads as having none.
+    #[serde(default)]
+    pub favourites: Vec<String>,
 }
 
 impl Session {
@@ -65,18 +69,26 @@ impl Session {
     /// treated as untrusted input on the way in. Restoring a nine-member party
     /// would break an invariant the rest of the app relies on, and it is not
     /// worth an error message when dropping the overflow says the same thing.
+    ///
+    /// Favourites get the same treatment minus the limit, since there is none.
     fn sanitized(mut self) -> Self {
-        let mut seen = Vec::with_capacity(self.team.len());
-        self.team.retain(|name| {
-            let keep = !name.trim().is_empty() && !seen.contains(name);
-            if keep {
-                seen.push(name.clone());
-            }
-            keep
-        });
+        dedupe_names(&mut self.team);
         self.team.truncate(team::MAX_MEMBERS);
+        dedupe_names(&mut self.favourites);
         self
     }
+}
+
+/// Drops blank names and every repeat after the first, keeping the order.
+fn dedupe_names(names: &mut Vec<String>) {
+    let mut seen = Vec::with_capacity(names.len());
+    names.retain(|name| {
+        let keep = !name.trim().is_empty() && !seen.contains(name);
+        if keep {
+            seen.push(name.clone());
+        }
+        keep
+    });
 }
 
 /// Wrapper that carries the format version, mirroring the cache's envelope.
@@ -172,6 +184,7 @@ mod tests {
             sort: Some("name".into()),
             theme: Some("dmg".into()),
             shiny: true,
+            favourites: vec!["gengar".into(), "mew".into()],
         };
         let bytes = encode(&session).expect("encode");
         assert_eq!(decode(&bytes), session);
@@ -198,6 +211,10 @@ mod tests {
         assert_eq!(session.sort, None);
         assert_eq!(session.theme, None, "a file from before palettes existed");
         assert!(!session.shiny);
+        assert!(
+            session.favourites.is_empty(),
+            "a file from before favourites"
+        );
     }
 
     #[test]
@@ -212,5 +229,18 @@ mod tests {
     fn repeats_and_blanks_are_dropped_in_order() {
         let session = session_with_team(&["snorlax", "", "gyarados", "snorlax", "   "]).sanitized();
         assert_eq!(session.team, ["snorlax", "gyarados"]);
+    }
+
+    #[test]
+    fn favourites_lose_repeats_and_blanks_but_have_no_limit() {
+        let mut names: Vec<String> = (0..20).map(|n| format!("mon{n}")).collect();
+        names.extend(["mon3".to_string(), " ".to_string()]);
+        let session = Session {
+            favourites: names,
+            ..Session::default()
+        }
+        .sanitized();
+        assert_eq!(session.favourites.len(), 20);
+        assert_eq!(session.favourites[3], "mon3");
     }
 }

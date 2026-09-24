@@ -13,7 +13,7 @@
 //! rosters are in flight, and the fetch a new term kicks off. This module only
 //! ever reads the rosters that have already landed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ratatui::widgets::ListState;
 
@@ -82,6 +82,9 @@ pub struct Browser {
     /// An entry that is present but empty means "we asked and got nothing
     /// back", which is a different thing from not having asked.
     pub rosters: HashMap<RosterTerm, HashSet<String>>,
+    /// Species marked as favourites, by raw API name. What `fav:` narrows to.
+    /// Ordered so the session file lists them the same way every run.
+    pub favourites: BTreeSet<String>,
 }
 
 impl Browser {
@@ -103,7 +106,11 @@ impl Browser {
             .all
             .iter()
             .enumerate()
-            .filter(|(_, p)| query.matches_entry(p) && self.in_every_roster(&query, &p.name))
+            .filter(|(_, p)| {
+                query.matches_entry(p)
+                    && self.in_every_roster(&query, &p.name)
+                    && (!query.favourites || self.favourites.contains(&p.name))
+            })
             .map(|(idx, _)| idx)
             .collect();
 
@@ -150,6 +157,27 @@ impl Browser {
             .rosters
             .iter()
             .any(|term| !self.rosters.contains_key(term))
+    }
+
+    /// Marks the highlighted species as a favourite, or unmarks it.
+    ///
+    /// Under a `fav:` filter an unmarked species no longer belongs in the list,
+    /// so the list is rebuilt; the cursor then lands where
+    /// [`recompute`](Self::recompute) always puts it when its species goes.
+    pub fn toggle_favourite(&mut self) {
+        let Some(name) = self.current_name() else {
+            return;
+        };
+        if !self.favourites.remove(&name) {
+            self.favourites.insert(name);
+        }
+        if self.parsed.favourites {
+            self.recompute();
+        }
+    }
+
+    pub fn is_favourite(&self, name: &str) -> bool {
+        self.favourites.contains(name)
     }
 
     /// Cycles the sort order, keeping the highlighted species under the cursor
@@ -379,5 +407,60 @@ mod tests {
         assert_eq!(browser.index_of("pikachu"), Some(3));
         assert_eq!(browser.position_of("pikachu"), None);
         assert_eq!(browser.index_of("missingno"), None);
+    }
+
+    /// Marks each of `names` from the list, the way the key does.
+    fn mark(browser: &mut Browser, names: &[&str]) {
+        for name in names {
+            let row = browser.position_of(name).expect("visible to be marked");
+            browser.list_state.select(Some(row));
+            browser.toggle_favourite();
+        }
+    }
+
+    #[test]
+    fn marking_twice_leaves_a_species_as_it_was() {
+        let mut browser = kanto_ghosts();
+        mark(&mut browser, &["gengar"]);
+        assert!(browser.is_favourite("gengar"));
+        mark(&mut browser, &["gengar"]);
+        assert!(!browser.is_favourite("gengar"));
+    }
+
+    #[test]
+    fn fav_narrows_to_favourites_and_needs_nothing_fetched() {
+        let mut browser = kanto_ghosts();
+        mark(&mut browser, &["pikachu", "gastly"]);
+        search(&mut browser, "fav:");
+        assert_eq!(visible(&browser), ["pikachu", "gastly"]);
+        assert!(!browser.awaiting_roster());
+    }
+
+    #[test]
+    fn fav_combines_with_the_other_terms() {
+        let mut browser = kanto_ghosts();
+        mark(&mut browser, &["pikachu", "gastly", "gengar"]);
+        search(&mut browser, "fav: g");
+        assert_eq!(visible(&browser), ["gastly", "gengar"]);
+        search(&mut browser, "fav: dex:90-93");
+        assert_eq!(visible(&browser), ["gastly"]);
+    }
+
+    #[test]
+    fn unmarking_under_fav_drops_the_species_from_the_list() {
+        let mut browser = kanto_ghosts();
+        mark(&mut browser, &["gastly", "gengar"]);
+        search(&mut browser, "fav:");
+        mark(&mut browser, &["gastly"]);
+        assert_eq!(visible(&browser), ["gengar"]);
+        assert_eq!(browser.current_name().as_deref(), Some("gengar"));
+    }
+
+    #[test]
+    fn with_no_favourites_fav_is_an_empty_list() {
+        let mut browser = kanto_ghosts();
+        search(&mut browser, "fav:");
+        assert!(browser.filtered.is_empty());
+        assert!(!browser.awaiting_roster(), "empty, not loading");
     }
 }
