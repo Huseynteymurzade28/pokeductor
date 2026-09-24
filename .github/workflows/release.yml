@@ -60,9 +60,39 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
 
+  # Completions and the man page are text generated from the flag definitions,
+  # the same on every platform, so they are made once here rather than by each
+  # build — which could not run its own binary anyway where it cross-compiles,
+  # as the Intel Mac build does on an ARM runner.
+  extras:
+    name: Completions and man page
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate
+        run: |
+          cargo build --locked
+          bin=target/debug/pokeductor
+          mkdir -p extras/completions extras/man
+          "$bin" --completions bash       > extras/completions/pokeductor.bash
+          "$bin" --completions zsh        > extras/completions/_pokeductor
+          "$bin" --completions fish       > extras/completions/pokeductor.fish
+          "$bin" --completions powershell > extras/completions/_pokeductor.ps1
+          "$bin" --completions elvish     > extras/completions/pokeductor.elv
+          "$bin" --man                    > extras/man/pokeductor.1
+          ls -l extras/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extras
+          path: extras
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.target }}
-    needs: verify
+    needs: [verify, extras]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -96,6 +126,11 @@ jobs:
 
       - run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - uses: actions/download-artifact@v5
+        with:
+          name: extras
+          path: extras
+
       # tar on Unix, zip on Windows — each platform's `curl | extract` habit.
       # The checksum sits beside the archive rather than in one combined file so
       # a single download can be verified without fetching anything else.
@@ -110,6 +145,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/pokeductor" "dist/$name/"
           fi
           cp README.md LICENSE CHANGELOG.md "dist/$name/"
+          cp -r extras/completions extras/man "dist/$name/"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "$name.zip" "$name" > /dev/null
@@ -141,9 +177,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Only the per-target archives. `extras` is already inside every one of
+      # them, and its directories would make `dist/*` below fail to upload.
       - uses: actions/download-artifact@v5
         with:
           path: dist
+          pattern: "*-*"
           merge-multiple: true
 
       # The notes are the changelog's section for this version, so the two are

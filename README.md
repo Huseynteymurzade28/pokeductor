@@ -47,6 +47,19 @@ tar xzf pokeductor-v0.5.0-x86_64-unknown-linux-musl.tar.gz
 ./pokeductor-v0.5.0-x86_64-unknown-linux-musl/pokeductor
 ```
 
+### Shell completions and man page
+
+Release archives carry `completions/` for bash, zsh, fish, PowerShell and
+elvish, and `man/pokeductor.1`. Installed any other way, the binary prints
+them itself, generated from the same flag definitions `--help` is:
+
+```bash
+pokeductor --completions fish > ~/.config/fish/completions/pokeductor.fish
+pokeductor --completions bash > ~/.local/share/bash-completion/completions/pokeductor
+pokeductor --completions zsh  > "${fpath[1]}/_pokeductor"
+pokeductor --man > pokeductor.1   # for packagers; left out of --help
+```
+
 ### With cargo
 
 ```bash
@@ -422,14 +435,15 @@ Arguments:
   [NAME]  Open directly on this species, e.g. `pokeductor gengar`
 
 Options:
-      --lang <LANG>      Start in this UI language [possible values: en, tr, de, fr, es, it]
-      --color <WHEN>     How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
-      --theme <PALETTE>  Draw the interface in this palette [possible values: pico8, dmg]
-      --json             Print NAME as JSON and exit, instead of opening the interface
-      --clear-cache      Delete the on-disk cache and exit
-      --cache-dir        Print the cache directory and exit
-  -h, --help             Print help (see more with '--help')
-  -V, --version          Print version
+      --lang <LANG>          Start in this UI language [possible values: en, tr, de, fr, es, it]
+      --color <WHEN>         How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
+      --theme <PALETTE>      Draw the interface in this palette [possible values: pico8, dmg]
+      --json                 Print NAME as JSON and exit, instead of opening the interface
+      --clear-cache          Delete the on-disk cache and exit
+      --cache-dir            Print the cache directory and exit
+      --completions <SHELL>  Print a completion script for SHELL and exit [possible values: bash, elvish, fish, powershell, zsh]
+  -h, --help                 Print help (see more with '--help')
+  -V, --version              Print version
 ```
 
 `NAME` goes into the search box rather than through a parser of its own, so

@@ -13,12 +13,11 @@
 //! preference, and a script comparing `genus` across machines should not get a
 //! different answer from each.
 
-use std::io::Write;
-
 use serde::Serialize;
 
 use crate::api;
 use crate::cache;
+use crate::cli;
 use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, StatKind};
 
 /// Goes up when a field is renamed, removed or changes type. See the module
@@ -36,19 +35,12 @@ pub async fn run(name: &str) -> anyhow::Result<()> {
     print(&species)
 }
 
-/// Writes the output, treating a reader that stopped early — `| head` — as
-/// done rather than as a failure. `println!` panics there, and a script that
-/// only wanted the first lines should not see a panic message for it.
+/// Writes the output through [`cli::print`], which ends quietly on a closed
+/// pipe.
 fn print(species: &Species) -> anyhow::Result<()> {
-    let mut out = std::io::stdout().lock();
-    let written = serde_json::to_writer_pretty(&mut out, species)
-        .map_err(std::io::Error::from)
-        .and_then(|()| writeln!(out))
-        .and_then(|()| out.flush());
-    match written {
-        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        other => Ok(other?),
-    }
+    let mut out = serde_json::to_vec_pretty(species)?;
+    out.push(b'\n');
+    Ok(cli::print(&out)?)
 }
 
 /// The master list, cache first. A stale list is refreshed, and still used if

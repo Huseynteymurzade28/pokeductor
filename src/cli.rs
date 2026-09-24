@@ -7,16 +7,20 @@
 //! what you reach for from a shell when something looks wrong, and until now
 //! they meant finding `$XDG_CACHE_HOME/pokeductor` by hand and guessing.
 //! `--json` is the other: the one way for a script to read what the app knows,
-//! which it cannot do through a terminal interface.
+//! which it cannot do through a terminal interface. `--completions` and the
+//! hidden `--man` are for whoever installs it, so the shell and `man` know the
+//! flags below without anyone writing them out a second time.
 //!
 //! Output here stays in English while the interface is translated. Clap writes
 //! its own help and errors in English regardless, so translating the handful of
 //! lines around them would make the surface less consistent, not more.
 
+use std::io::Write;
 use std::path::Path;
 
 use clap::builder::PossibleValue;
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
+use clap_complete::Shell;
 
 use crate::cache;
 use crate::color::Choice;
@@ -62,6 +66,15 @@ pub struct Cli {
     /// Print the cache directory and exit
     #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "json"])]
     cache_dir: bool,
+
+    /// Print a completion script for SHELL and exit
+    #[arg(long, value_enum, value_name = "SHELL", exclusive = true)]
+    completions: Option<Shell>,
+
+    /// Print the man page, as roff, and exit. For packagers, so it stays out
+    /// of `--help`.
+    #[arg(long, hide = true, exclusive = true)]
+    man: bool,
 }
 
 /// The state the arguments ask the TUI to open in.
@@ -100,6 +113,16 @@ pub async fn run() -> anyhow::Result<Outcome> {
 /// The half of [`run`] that does not touch the process arguments, so the
 /// behaviour is reachable from a test with a hand-built `Cli`.
 async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
+    if let Some(shell) = cli.completions {
+        print(&completions(shell))?;
+        return Ok(Outcome::Handled);
+    }
+
+    if cli.man {
+        print(&man_page()?)?;
+        return Ok(Outcome::Handled);
+    }
+
     if cli.cache_dir {
         println!("{}", cache_dir()?.display());
         return Ok(Outcome::Handled);
@@ -127,6 +150,33 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         theme: cli.theme,
         color: cli.color,
     }))
+}
+
+/// The completion script for `shell`, generated from the flags as defined.
+fn completions(shell: Shell) -> Vec<u8> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    let mut script = Vec::new();
+    clap_complete::generate(shell, &mut command, name, &mut script);
+    script
+}
+
+/// The man page, generated from the same definition `--help` is.
+fn man_page() -> std::io::Result<Vec<u8>> {
+    let mut page = Vec::new();
+    clap_mangen::Man::new(Cli::command()).render(&mut page)?;
+    Ok(page)
+}
+
+/// Writes `bytes` to stdout, treating a reader that stopped early — `| head` —
+/// as done rather than as a failure. `println!` panics there, and a script
+/// that only wanted the first lines should not see a panic message for it.
+pub fn print(bytes: &[u8]) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    match out.write_all(bytes).and_then(|()| out.flush()) {
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 /// The resolved cache directory, or an error explaining why there is none.
@@ -197,7 +247,6 @@ impl ValueEnum for Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("pokeductor").chain(args.iter().copied()))
@@ -303,6 +352,64 @@ mod tests {
         assert!(parse(&["--json", "gengar", "--color", "never"]).is_err());
         assert!(parse(&["--json", "gengar", "--cache-dir"]).is_err());
         assert!(parse(&["--json", "gengar", "--clear-cache"]).is_err());
+    }
+
+    /// Every flag a user can see, spelled as it is typed.
+    fn visible_long_flags() -> Vec<String> {
+        Cli::command()
+            .get_arguments()
+            .filter(|arg| !arg.is_hide_set())
+            .filter_map(|arg| arg.get_long())
+            .map(|long| format!("--{long}"))
+            .collect()
+    }
+
+    #[test]
+    fn every_completion_script_knows_every_visible_flag() {
+        let flags = visible_long_flags();
+        assert!(flags.contains(&"--json".to_string()), "sanity: {flags:?}");
+        for shell in Shell::value_variants() {
+            let script = String::from_utf8(completions(*shell)).unwrap();
+            for flag in &flags {
+                // Some shells list a flag by its bare name.
+                let bare = flag.trim_start_matches('-');
+                assert!(
+                    script.contains(flag.as_str()) || script.contains(bare),
+                    "{shell} completions are missing {flag}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn completion_scripts_offer_the_values_a_flag_accepts() {
+        let script = String::from_utf8(completions(Shell::Bash)).unwrap();
+        for value in ["pico8", "dmg", "truecolor", "tr", "de"] {
+            assert!(script.contains(value), "bash completions lack {value}");
+        }
+    }
+
+    #[test]
+    fn the_man_page_documents_every_visible_flag() {
+        let page = String::from_utf8(man_page().unwrap()).unwrap();
+        assert!(page.starts_with(".ie"), "roff, not plain text");
+        for flag in visible_long_flags() {
+            // roff escapes a hyphen that must not be typeset as a dash.
+            let escaped = flag.replace('-', "\\-");
+            assert!(page.contains(&escaped), "man page is missing {flag}");
+        }
+        // `--man` itself is for packagers and stays out of the page.
+        assert!(!page.contains("\\-\\-man"));
+    }
+
+    #[test]
+    fn the_generators_stand_alone() {
+        assert!(parse(&["--completions", "fish"]).is_ok());
+        assert!(parse(&["--man"]).is_ok());
+        assert!(parse(&["--completions", "fish", "gengar"]).is_err());
+        assert!(parse(&["--completions", "fish", "--man"]).is_err());
+        assert!(parse(&["--man", "--lang", "tr"]).is_err());
+        assert!(parse(&["--completions", "tcsh"]).is_err());
     }
 
     #[test]
