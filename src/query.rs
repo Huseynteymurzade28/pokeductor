@@ -14,6 +14,7 @@
 //! egg:dragon           every species in the Dragon breeding group
 //! gen:1 gen:2          introduced in either generation
 //! gen:1 type:ghost ga  all three, combined
+//! fav:                 the species marked as favourites
 //! ```
 //!
 //! Anything that is not a recognised term is treated as ordinary text, so a
@@ -52,6 +53,14 @@ pub struct Query {
     /// Combined with OR, for the same reason generations are: a species has
     /// exactly one dex number.
     pub dex: Vec<RangeInclusive<u32>>,
+    /// Whether a `fav:` term asked for favourites only.
+    ///
+    /// Unlike the roster terms this needs nothing fetched: favourites are a
+    /// set the app already holds, so the caller checks it without a loading
+    /// state. Anything after the colon is ignored — there is only one list of
+    /// favourites to narrow to, and `fav:yes` reading as "no filter" would be
+    /// a surprise.
+    pub favourites: bool,
 }
 
 impl Query {
@@ -91,6 +100,7 @@ impl Query {
                         query.dex.push(range);
                     }
                 }
+                Some(("fav" | "f", _)) => query.favourites = true,
                 _ => words.push(token),
             }
         }
@@ -400,5 +410,24 @@ mod tests {
         let query = Query::parse("dex:1-151 saur");
         assert!(query.matches_entry(&entry("bulbasaur", 1)));
         assert!(!query.matches_entry(&entry("pikachu", 25)));
+    }
+
+    #[test]
+    fn a_fav_term_asks_for_favourites_whatever_follows_the_colon() {
+        for raw in ["fav:", "f:", "fav:yes", "FAV:"] {
+            let query = Query::parse(&raw.to_lowercase());
+            assert!(query.favourites, "{raw} should ask for favourites");
+            assert_eq!(query.text, "", "{raw} is not a name to search for");
+        }
+        assert!(!Query::parse("favourite").favourites, "no colon, no term");
+    }
+
+    #[test]
+    fn a_fav_term_leaves_the_other_terms_in_place() {
+        let query = Query::parse("fav: gen:1 type:ghost ga");
+        assert!(query.favourites);
+        assert_eq!(query.generations, [1]);
+        assert_eq!(query.rosters.len(), 1);
+        assert_eq!(query.text, "ga");
     }
 }

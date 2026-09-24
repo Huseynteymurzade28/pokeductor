@@ -10,6 +10,14 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+### Added
+
+- Favourites. `B` marks or unmarks the highlighted species, and `fav:` narrows
+  the list to them, combining with the other search terms. The name is drawn
+  bold and in yellow rather than in a third marker column, so it still stands
+  out in the Game Boy palette and with no colour. The sidebar title counts them
+  once there is one, and they are kept between runs in the session file. (#32)
+
 ## [0.6.0] - 2026-09-24
 
 ### Added

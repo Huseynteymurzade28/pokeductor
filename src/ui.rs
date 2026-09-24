@@ -151,10 +151,17 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         SortKey::Dex => s.sort_dex,
         SortKey::Name => s.sort_name,
     };
+    // The favourite count sits in the title only once there is one, so an
+    // install that never marks anything never sees the star.
+    let favourites = match app.browser.favourites.len() {
+        0 => String::new(),
+        n => format!("★{n} "),
+    };
     let title = format!(
-        "{}({}) ⇅ {} ",
+        "{}({}) {}⇅ {} ",
         s.sidebar_title,
         app.browser.filtered.len(),
+        favourites,
         sort_badge
     );
     let list_block = panel_block_owned(title, list_focused);
@@ -195,11 +202,22 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
             // a marker always means the same thing in the same place.
             let pin = if app.is_pinned(&p.name) { "◆" } else { " " };
             let party = if app.is_in_team(&p.name) { "●" } else { " " };
+            // A favourite is marked on its name rather than in a third slot,
+            // which would cost the names a column. The colour alone would not
+            // do: the Game Boy palette has four shades and `--color never` has
+            // none, so the name is bold as well, which survives both.
+            let name = if app.browser.is_favourite(&p.name) {
+                Style::default()
+                    .fg(theme::yellow())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::text())
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(pin, Style::default().fg(theme::teal())),
                 Span::styled(party, Style::default().fg(theme::green())),
                 Span::styled(dex, Style::default().fg(theme::overlay())),
-                Span::styled(title_case(&p.name), Style::default().fg(theme::text())),
+                Span::styled(title_case(&p.name), name),
             ]))
         })
         .collect();
@@ -1560,6 +1578,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("X", h.act_shiny),
         ("R", h.act_random),
         ("Space", h.act_party_toggle),
+        ("B", h.act_favourite),
         ("P", h.act_party_card),
         ("S", h.act_sort),
         ("L", h.act_language),
@@ -1574,6 +1593,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("ability:levitate", h.act_by_ability),
         ("egg:dragon", h.act_by_egg),
         ("gen:1", h.act_by_generation),
+        ("fav:", h.act_by_favourite),
         ("", ""),
         ("", h.ctx_evolution),
         ("← → ↑ ↓ · h j k l", h.act_chain_move),
@@ -2751,6 +2771,77 @@ mod tests {
         assert!(!frame.contains("Haunter"), "filtered out, so not drawn");
         assert!(frame.contains("(2)"), "the title counts what survived");
         assert!(frame.contains("▶"), "and the cursor sits on a row");
+    }
+
+    #[test]
+    fn a_favourite_is_marked_on_its_name_in_a_way_that_survives_no_colour() {
+        // `showing_gengar` draws with no colour at all, which is the case the
+        // marking has to survive: the tint is gone, and bold is what is left.
+        let mut app = showing_gengar();
+        app.browser.favourites.insert("gastly".to_string());
+        app.browser.list_state.select(Some(2)); // the cursor row is bold anyway
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test backend");
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("a frame draws");
+        let buffer = terminal.backend().buffer().clone();
+        let text: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).map_or(" ", |cell| cell.symbol()))
+                    .collect()
+            })
+            .collect();
+        let bold_at = |name: &str| {
+            let (y, row) = text
+                .iter()
+                .enumerate()
+                .find(|(_, row)| row.contains(name))
+                .unwrap_or_else(|| panic!("{name} is drawn"));
+            // One symbol per cell, so a char index is a column.
+            let chars: Vec<char> = row.chars().collect();
+            let x = (0..chars.len())
+                .find(|&i| chars[i..].iter().collect::<String>().starts_with(name))
+                .expect("found above");
+            buffer
+                .cell((x as u16, y as u16))
+                .unwrap()
+                .modifier
+                .contains(Modifier::BOLD)
+        };
+
+        assert!(bold_at("Gastly"), "a favourite is bold");
+        assert!(!bold_at("Haunter"), "anything else is not");
+        let frame = text.join("\n");
+        assert!(frame.contains("★1"), "and the title counts them:\n{frame}");
+    }
+
+    #[test]
+    fn the_help_card_lists_the_favourite_bindings_in_every_language() {
+        for language in Language::ALL {
+            let mut app = showing_gengar();
+            app.language = language;
+            app.help_card = true;
+            let h = &language.strings().help_card;
+            // At the size the card was designed for, whole rather than cut off.
+            let frame = screen(&mut app, 120, 40);
+            // The party row is the one beside it, and was the first to be cut
+            // off in Italian.
+            for label in [h.act_favourite, h.act_by_favourite, h.act_party_toggle] {
+                assert!(
+                    frame.contains(label),
+                    "{language:?} lacks {label:?}:\n{frame}"
+                );
+            }
+            assert!(frame.contains("fav:"));
+        }
+    }
+
+    #[test]
+    fn with_no_favourites_the_title_has_no_star() {
+        let mut app = showing_gengar();
+        assert!(!screen(&mut app, 120, 40).contains('★'));
     }
 
     #[test]

@@ -367,6 +367,7 @@ impl App {
             sort: Some(self.browser.sort.code().to_string()),
             theme: Some(self.theme.code().to_string()),
             shiny: self.sprite_variant.is_shiny(),
+            favourites: self.browser.favourites.iter().cloned().collect(),
         }
     }
 
@@ -400,6 +401,9 @@ impl App {
             self.sprite_variant = SpriteVariant::Shiny;
         }
         self.team = session.team;
+        // Before the list arrives, so a `fav:` query from the command line
+        // narrows against the restored set rather than an empty one.
+        self.browser.favourites = session.favourites.into_iter().collect();
 
         // The party card reads typings out of `details`, which is empty on a
         // cold start, so a restored member contributes nothing to the analysis
@@ -1256,6 +1260,7 @@ impl App {
             KeyCode::Char('l') | KeyCode::Char('L') => self.open_language_picker(),
             KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
             KeyCode::Char(' ') => self.toggle_team_membership(),
+            KeyCode::Char('b') | KeyCode::Char('B') => self.browser.toggle_favourite(),
             KeyCode::Char('p') | KeyCode::Char('P') => self.open_team_card(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_moves(),
@@ -2274,5 +2279,26 @@ mod tests {
             ..Session::default()
         });
         assert_eq!(app.theme, Theme::default());
+    }
+    #[test]
+    fn b_marks_the_highlighted_species_and_the_next_run_gets_it_back() {
+        let mut app = app_listing(&[(92, "gastly"), (94, "gengar")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        app.browser.list_state.select(Some(1));
+
+        app.handle_list_key(press(KeyCode::Char('b')));
+        assert!(app.browser.is_favourite("gengar"));
+        assert!(!app.browser.is_favourite("gastly"));
+        let stored = app.snapshot();
+        assert_eq!(stored.favourites, ["gengar"]);
+
+        let (mut next, _rx) = App::new(Startup::default()).expect("client builds");
+        next.restore(stored);
+        assert!(next.browser.is_favourite("gengar"));
+
+        // And the same key takes it back off.
+        app.handle_list_key(press(KeyCode::Char('B')));
+        assert!(app.snapshot().favourites.is_empty());
     }
 }

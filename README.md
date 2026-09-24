@@ -132,6 +132,16 @@ then `R` is a random Ghost, `gen:1` then `R` is a random Kanto species — which
 the one way through thirteen hundred entries that does not need you to know
 what you are looking for.
 
+`B` marks the highlighted species as a favourite, and `B` again unmarks it.
+Favourites are the species you want to come back to without spending a party
+slot on them, which would also change what the party card says about the team.
+A favourite's name is drawn bold and in yellow, bold so it still stands out in
+the Game Boy palette and under `--color never`. The sidebar title counts them
+(`★3`) once there is at least one. `fav:` narrows the list to them and combines
+with every other term: `fav: type:ghost` is your favourite Ghost types. Unlike
+`type:`, it needs nothing fetched. Favourites are kept between runs with the
+party.
+
 ### Species details and abilities
 
 The info panel carries the dex number, genus, typing, abilities, physical
@@ -371,6 +381,7 @@ no refetch:
 | | `X` | Toggle shiny artwork |
 | | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
+| | `B` | Mark / unmark as a favourite |
 | | `P` | Party card |
 | | `S` | Cycle sort: Pokédex order ↔ A–Z |
 | | `L` | Language picker |
@@ -414,6 +425,7 @@ no refetch:
 | `gen:1` | introduced in Generation I (`g:` also works) |
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
+| `fav:` | the species marked with `B` (`f:` also works) |
 
 `dex:` and `gen:` filters skip alternate forms such as `raichu-alola`: their
 ids sit above 10000 and are not dex numbers, so there is nothing to test a range
@@ -647,7 +659,7 @@ kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
 `~/.local/state/pokeductor`):
 
 ```
-session.json              party, language, sort order, palette, shiny toggle
+session.json              party, favourites, language, sort order, palette, shiny toggle
 ```
 
 Written once, as the app exits, and read once, before the first frame. A run
