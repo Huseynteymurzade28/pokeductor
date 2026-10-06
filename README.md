@@ -74,6 +74,13 @@ Or from a clone:
 cargo run --release
 ```
 
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), the same
+command downloads the prebuilt archive for your platform instead of compiling:
+
+```bash
+cargo binstall pokeductor
+```
+
 ### Arch Linux
 
 Packaged in the [AUR](https://aur.archlinux.org/packages/pokeductor), built from
