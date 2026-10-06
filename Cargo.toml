@@ -41,3 +41,14 @@ clap_mangen = "0.3"
 [profile.release]
 opt-level = 3
 lto = true
+
+# `cargo binstall pokeductor` downloads the release archive for the host
+# instead of compiling. The names follow what `release.yml` uploads: one
+# directory per archive, named like the archive, with the binary inside.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"

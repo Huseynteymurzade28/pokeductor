@@ -25,6 +25,9 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   party and head-to-head cards, and in the move list. `type:` accepts a type's
   name in any of the six languages, with or without accents, so `type:geist`
   and `type:hayalet` both find the Ghost types. (#45)
+- `cargo binstall pokeductor` installs the prebuilt release binary rather than
+  compiling. It takes effect from this release, the first published with the
+  metadata it reads. (#40)
 
 ## [0.6.0] - 2026-09-24
 
