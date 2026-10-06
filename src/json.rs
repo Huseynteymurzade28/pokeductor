@@ -18,7 +18,9 @@ use serde::Serialize;
 use crate::api;
 use crate::cache;
 use crate::cli;
-use crate::models::{EvolutionTree, PokemonDetail, PokemonEntry, StatKind};
+use crate::models::{
+    EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail, PokemonEntry, StatKind,
+};
 
 /// Goes up when a field is renamed, removed or changes type. See the module
 /// docs for what does not count.
@@ -217,13 +219,71 @@ pub struct Gender {
     pub female: f32,
 }
 
-/// One stage of an evolution chain. What it takes to evolve is not in schema
-/// 1: the conditions are a wide struct of mostly-empty fields, and settling a
-/// shape for them is its own piece of work.
+/// One stage of an evolution chain.
 #[derive(Debug, Serialize)]
 pub struct Stage {
     pub name: String,
+    /// What the previous stage takes to become this one. `null` at the root,
+    /// which nothing evolves into.
+    pub requires: Option<Requires>,
     pub evolves_to: Vec<Stage>,
+}
+
+/// What one evolution step takes.
+///
+/// Not [`EvolutionCondition`] serialized as-is: that is eighteen fields named
+/// for the code that reads them, nearly all of them empty on any given step,
+/// with PokeAPI's numeric codes for gender and Tyrogue's stat comparison.
+/// Here an unset condition is left out rather than written as `null`, so a
+/// step reads as what it takes, and the codes are spelled out as words.
+#[derive(Debug, Default, Serialize)]
+pub struct Requires {
+    /// PokeAPI's trigger slug: `level-up`, `use-item`, `trade`, `shed`, or one
+    /// of the rarer ones verbatim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_level: Option<u32>,
+    /// An item used on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    /// An item it holds while the trigger happens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held_item: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub known_move: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub known_move_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_happiness: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_affection: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_beauty: Option<u32>,
+    /// `day`, `night` or `dusk`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_of_day: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// `male` or `female`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<&'static str>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub overworld_rain: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub upside_down: bool,
+    /// The species it has to be traded for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trade_species: Option<String>,
+    /// A species that has to be in the party.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub party_species: Option<String>,
+    /// A type some party member has to have.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub party_type: Option<String>,
+    /// Attack against Defense, for Tyrogue: `greater`, `equal` or `less`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_vs_defense: Option<&'static str>,
 }
 
 impl Species {
@@ -288,7 +348,49 @@ impl Stage {
     fn new(tree: &EvolutionTree) -> Self {
         Stage {
             name: tree.name.clone(),
+            requires: tree.condition.as_ref().map(Requires::new),
             evolves_to: tree.children.iter().map(Stage::new).collect(),
+        }
+    }
+}
+
+impl Requires {
+    fn new(condition: &EvolutionCondition) -> Self {
+        let c = condition.clone();
+        Requires {
+            trigger: c.trigger.map(|trigger| match trigger {
+                EvolutionTrigger::LevelUp => "level-up".to_string(),
+                EvolutionTrigger::Trade => "trade".to_string(),
+                EvolutionTrigger::UseItem => "use-item".to_string(),
+                EvolutionTrigger::Shed => "shed".to_string(),
+                EvolutionTrigger::Other(slug) => slug,
+            }),
+            min_level: c.min_level,
+            item: c.item,
+            held_item: c.held_item,
+            known_move: c.known_move,
+            known_move_type: c.known_move_type,
+            min_happiness: c.min_happiness,
+            min_affection: c.min_affection,
+            min_beauty: c.min_beauty,
+            time_of_day: c.time_of_day,
+            location: c.location,
+            // PokeAPI's gender ids.
+            gender: match c.gender {
+                Some(1) => Some("female"),
+                Some(2) => Some("male"),
+                _ => None,
+            },
+            overworld_rain: c.needs_overworld_rain,
+            upside_down: c.turn_upside_down,
+            trade_species: c.trade_species,
+            party_species: c.party_species,
+            party_type: c.party_type,
+            attack_vs_defense: c.relative_physical_stats.map(|cmp| match cmp {
+                1 => "greater",
+                -1 => "less",
+                _ => "equal",
+            }),
         }
     }
 }
@@ -423,16 +525,39 @@ mod tests {
                 habitat: Some("cave".into()),
             },
         };
-        let stage = |name: &str, children| EvolutionTree {
-            name: name.into(),
+        let chain = EvolutionTree {
+            name: "gastly".into(),
             condition: None,
-            children,
+            children: vec![step(
+                "haunter",
+                EvolutionCondition {
+                    trigger: Some(EvolutionTrigger::LevelUp),
+                    min_level: Some(25),
+                    ..EvolutionCondition::default()
+                },
+                vec![step(
+                    "gengar",
+                    EvolutionCondition {
+                        trigger: Some(EvolutionTrigger::Trade),
+                        ..EvolutionCondition::default()
+                    },
+                    vec![],
+                )],
+            )],
         };
-        let chain = stage(
-            "gastly",
-            vec![stage("haunter", vec![stage("gengar", vec![])])],
-        );
         (detail, chain)
+    }
+
+    fn step(
+        name: &str,
+        condition: EvolutionCondition,
+        children: Vec<EvolutionTree>,
+    ) -> EvolutionTree {
+        EvolutionTree {
+            name: name.into(),
+            condition: Some(condition),
+            children,
+        }
     }
 
     /// The shape is the contract, so it is written out in full rather than
@@ -478,9 +603,15 @@ mod tests {
                 "forms": ["gengar", "gengar-mega"],
                 "evolution": {
                     "name": "gastly",
+                    "requires": null,
                     "evolves_to": [{
                         "name": "haunter",
-                        "evolves_to": [{ "name": "gengar", "evolves_to": [] }]
+                        "requires": { "trigger": "level-up", "min_level": 25 },
+                        "evolves_to": [{
+                            "name": "gengar",
+                            "requires": { "trigger": "trade" },
+                            "evolves_to": []
+                        }]
                     }]
                 }
             })
@@ -493,5 +624,99 @@ mod tests {
         detail.field.gender_rate = -1;
         let value = serde_json::to_value(Species::new(&detail, &chain)).unwrap();
         assert_eq!(value["breeding"]["gender"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn each_branch_of_a_branching_chain_keeps_its_own_requirements() {
+        let eevee = EvolutionTree {
+            name: "eevee".into(),
+            condition: None,
+            children: vec![
+                step(
+                    "vaporeon",
+                    EvolutionCondition {
+                        trigger: Some(EvolutionTrigger::UseItem),
+                        item: Some("water-stone".into()),
+                        ..EvolutionCondition::default()
+                    },
+                    vec![],
+                ),
+                step(
+                    "umbreon",
+                    EvolutionCondition {
+                        trigger: Some(EvolutionTrigger::LevelUp),
+                        min_happiness: Some(160),
+                        time_of_day: Some("night".into()),
+                        ..EvolutionCondition::default()
+                    },
+                    vec![],
+                ),
+            ],
+        };
+        let value = serde_json::to_value(Stage::new(&eevee)).unwrap();
+        assert_eq!(
+            value["evolves_to"],
+            json!([
+                {
+                    "name": "vaporeon",
+                    "requires": { "trigger": "use-item", "item": "water-stone" },
+                    "evolves_to": []
+                },
+                {
+                    "name": "umbreon",
+                    "requires": {
+                        "trigger": "level-up",
+                        "min_happiness": 160,
+                        "time_of_day": "night"
+                    },
+                    "evolves_to": []
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn numeric_codes_are_written_out_as_words() {
+        let requires = |condition| serde_json::to_value(Requires::new(&condition)).unwrap();
+        let hitmonlee = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::LevelUp),
+            min_level: Some(20),
+            relative_physical_stats: Some(1),
+            ..EvolutionCondition::default()
+        };
+        assert_eq!(requires(hitmonlee)["attack_vs_defense"], "greater");
+        let froslass = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::UseItem),
+            item: Some("dawn-stone".into()),
+            gender: Some(1),
+            ..EvolutionCondition::default()
+        };
+        assert_eq!(requires(froslass)["gender"], "female");
+    }
+
+    #[test]
+    fn flags_that_are_off_are_left_out_and_ones_that_are_on_are_true() {
+        let sliggoo = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::LevelUp),
+            min_level: Some(50),
+            needs_overworld_rain: true,
+            ..EvolutionCondition::default()
+        };
+        assert_eq!(
+            serde_json::to_value(Requires::new(&sliggoo)).unwrap(),
+            json!({ "trigger": "level-up", "min_level": 50, "overworld_rain": true })
+        );
+    }
+
+    #[test]
+    fn a_rare_trigger_is_carried_through_as_its_slug() {
+        let condition = EvolutionCondition {
+            trigger: Some(EvolutionTrigger::Other("three-critical-hits".into())),
+            ..EvolutionCondition::default()
+        };
+        assert_eq!(
+            serde_json::to_value(Requires::new(&condition)).unwrap(),
+            json!({ "trigger": "three-critical-hits" })
+        );
     }
 }

@@ -553,9 +553,12 @@ weights kilograms:
   "forms": ["gengar", "gengar-mega", "gengar-gmax"],
   "evolution": {
     "name": "gastly",
-    "evolves_to": [
-      { "name": "haunter", "evolves_to": [{ "name": "gengar", "evolves_to": [] }] }
-    ]
+    "requires": null,
+    "evolves_to": [{
+      "name": "haunter",
+      "requires": { "trigger": "level-up", "min_level": 25 },
+      "evolves_to": [{ "name": "gengar", "requires": { "trigger": "trade" }, "evolves_to": [] }]
+    }]
   }
 }
 ```
@@ -571,7 +574,8 @@ weights kilograms:
 | `breeding.gender` | Male and female percentages, or `null` for a genderless species. |
 | `breeding.habitat` | Only recorded up to Generation IV, so `null` after it. |
 | `forms` | Every variety of the species, this one included. |
-| `evolution` | The whole chain from its root, as nested stages. What each step takes is not part of schema 1. |
+| `evolution` | The whole chain from its root, as nested stages. |
+| `evolution…requires` | What the stage above takes to become this one, or `null` at the root. Only the conditions that apply are present: `trigger` (`level-up`, `use-item`, `trade`, `shed`, or a rarer PokeAPI slug), `min_level`, `item`, `held_item`, `known_move`, `known_move_type`, `min_happiness`, `min_affection`, `min_beauty`, `time_of_day` (`day`, `night`, `dusk`), `location`, `gender` (`male`, `female`), `overworld_rain` and `upside_down` (present only as `true`), `trade_species`, `party_species`, `party_type`, and `attack_vs_defense` (`greater`, `equal`, `less`). |
 
 ---
 

@@ -17,6 +17,10 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   bold and in yellow rather than in a third marker column, so it still stands
   out in the Game Boy palette and with no colour. The sidebar title counts them
   once there is one, and they are kept between runs in the session file. (#32)
+- `--json` prints what each evolution step takes. Every stage but the root has
+  a `requires` object: the trigger, plus only the conditions that apply (a
+  level, an item, happiness, time of day, ...). The root's is `null`. It is an
+  added field, so `schema` stays at 1. (#36)
 
 ## [0.6.0] - 2026-09-24
 
