@@ -59,12 +59,28 @@ pub struct Cli {
     #[arg(long, requires = "name", conflicts_with_all = ["lang", "color", "theme"])]
     json: bool,
 
+    /// Print every species QUERY matches as JSON Lines and exit
+    ///
+    /// QUERY is anything the search box takes (`type:ghost`, `gen:1`,
+    /// `ability:levitate egg:dragon`), and each match is one line holding the
+    /// object `--json` prints, in Pokedex order. No match prints nothing and
+    /// exits 0.
+    #[arg(
+        long,
+        value_name = "QUERY",
+        conflicts_with_all = ["name", "json", "lang", "color", "theme"]
+    )]
+    json_list: Option<String>,
+
     /// Delete the on-disk cache and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "cache_dir", "json"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["name", "lang", "color", "theme", "cache_dir", "json", "json_list"]
+    )]
     clear_cache: bool,
 
     /// Print the cache directory and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "json"])]
+    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "json", "json_list"])]
     cache_dir: bool,
 
     /// Print a completion script for SHELL and exit
@@ -144,6 +160,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         return Ok(Outcome::Handled);
     }
 
+    if let Some(query) = &cli.json_list {
+        json::run_list(query).await?;
+        return Ok(Outcome::Handled);
+    }
+
     Ok(Outcome::Launch(Startup {
         language: cli.lang,
         species: cli.name,
@@ -171,11 +192,15 @@ fn man_page() -> std::io::Result<Vec<u8>> {
 /// Writes `bytes` to stdout, treating a reader that stopped early — `| head` —
 /// as done rather than as a failure. `println!` panics there, and a script
 /// that only wanted the first lines should not see a panic message for it.
-pub fn print(bytes: &[u8]) -> std::io::Result<()> {
+///
+/// Answers whether the reader is still there, so a command producing output
+/// a line at a time can stop working once nobody is reading.
+pub fn print(bytes: &[u8]) -> std::io::Result<bool> {
     let mut out = std::io::stdout().lock();
     match out.write_all(bytes).and_then(|()| out.flush()) {
-        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        other => other,
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -352,6 +377,17 @@ mod tests {
         assert!(parse(&["--json", "gengar", "--color", "never"]).is_err());
         assert!(parse(&["--json", "gengar", "--cache-dir"]).is_err());
         assert!(parse(&["--json", "gengar", "--clear-cache"]).is_err());
+    }
+
+    #[test]
+    fn json_list_takes_a_query_and_nothing_that_only_shapes_the_interface() {
+        let cli = parse(&["--json-list", "type:ghost gen:1"]).expect("a query is enough");
+        assert_eq!(cli.json_list.as_deref(), Some("type:ghost gen:1"));
+        assert!(parse(&["--json-list"]).is_err());
+        assert!(parse(&["--json-list", "type:ghost", "gengar"]).is_err());
+        assert!(parse(&["--json-list", "type:ghost", "--json"]).is_err());
+        assert!(parse(&["--json-list", "type:ghost", "--lang", "tr"]).is_err());
+        assert!(parse(&["--json-list", "type:ghost", "--cache-dir"]).is_err());
     }
 
     /// Every flag a user can see, spelled as it is typed.

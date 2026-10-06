@@ -28,6 +28,11 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 - `cargo binstall pokeductor` installs the prebuilt release binary rather than
   compiling. It takes effect from this release, the first published with the
   metadata it reads. (#40)
+- `pokeductor --json-list QUERY` prints every species a search matches as JSON
+  Lines, one `--json` object per line, in Pokedex order. Every search-box term
+  works. No match prints nothing and exits `0`. Lines stream as records
+  arrive, with a counter on stderr when output is piped, and stopping the
+  reader stops the fetching. (#37)
 
 ## [0.6.0] - 2026-09-24
 
