@@ -105,6 +105,137 @@ impl Language {
             StatKind::Speed => s.stat_speed,
         }
     }
+
+    /// A type's name in this language, for a PokeAPI type slug. A slug the
+    /// table does not know (`stellar`, `shadow`) is title-cased as it comes.
+    pub fn type_name(self, slug: &str) -> String {
+        TYPE_NAMES
+            .iter()
+            .find(|(known, _)| *known == slug)
+            .map(|(_, names)| names[self.index()].to_string())
+            .unwrap_or_else(|| title_case(slug))
+    }
+}
+
+/// Every type's name in each language, in [`Language::ALL`] order.
+///
+/// Written out here rather than fetched: PokeAPI has these for every language
+/// but Turkish, but the type is on nearly every card, and eighteen fixed words
+/// are not worth a request and a cache entry each. The Turkish names are the
+/// ones Turkish fan communities settled on, since the games were never
+/// released in Turkish.
+const TYPE_NAMES: [(&str, [&str; 6]); 18] = [
+    (
+        "normal",
+        ["Normal", "Normal", "Normal", "Normal", "Normal", "Normale"],
+    ),
+    ("fire", ["Fire", "Ateş", "Feuer", "Feu", "Fuego", "Fuoco"]),
+    ("water", ["Water", "Su", "Wasser", "Eau", "Agua", "Acqua"]),
+    (
+        "electric",
+        [
+            "Electric",
+            "Elektrik",
+            "Elektro",
+            "Électrik",
+            "Eléctrico",
+            "Elettro",
+        ],
+    ),
+    (
+        "grass",
+        ["Grass", "Çimen", "Pflanze", "Plante", "Planta", "Erba"],
+    ),
+    ("ice", ["Ice", "Buz", "Eis", "Glace", "Hielo", "Ghiaccio"]),
+    (
+        "fighting",
+        ["Fighting", "Dövüş", "Kampf", "Combat", "Lucha", "Lotta"],
+    ),
+    (
+        "poison",
+        ["Poison", "Zehir", "Gift", "Poison", "Veneno", "Veleno"],
+    ),
+    (
+        "ground",
+        ["Ground", "Yer", "Boden", "Sol", "Tierra", "Terra"],
+    ),
+    (
+        "flying",
+        ["Flying", "Uçan", "Flug", "Vol", "Volador", "Volante"],
+    ),
+    (
+        "psychic",
+        ["Psychic", "Psişik", "Psycho", "Psy", "Psíquico", "Psico"],
+    ),
+    (
+        "bug",
+        ["Bug", "Böcek", "Käfer", "Insecte", "Bicho", "Coleottero"],
+    ),
+    (
+        "rock",
+        ["Rock", "Kaya", "Gestein", "Roche", "Roca", "Roccia"],
+    ),
+    (
+        "ghost",
+        [
+            "Ghost", "Hayalet", "Geist", "Spectre", "Fantasma", "Spettro",
+        ],
+    ),
+    (
+        "dragon",
+        ["Dragon", "Ejderha", "Drache", "Dragon", "Dragón", "Drago"],
+    ),
+    (
+        "dark",
+        [
+            "Dark",
+            "Karanlık",
+            "Unlicht",
+            "Ténèbres",
+            "Siniestro",
+            "Buio",
+        ],
+    ),
+    (
+        "steel",
+        ["Steel", "Çelik", "Stahl", "Acier", "Acero", "Acciaio"],
+    ),
+    ("fairy", ["Fairy", "Peri", "Fee", "Fée", "Hada", "Folletto"]),
+];
+
+/// The type slug a typed name stands for, in any of the six languages.
+///
+/// Any language rather than only the current one: someone who has learned
+/// `type:geist` keeps it after switching the interface to English, and no
+/// two languages use one word for different types, so nothing is ambiguous.
+/// Accents are optional, because `type:electrik` is what a keyboard without
+/// them produces.
+pub fn type_slug(typed: &str) -> Option<&'static str> {
+    let typed = fold(typed);
+    TYPE_NAMES
+        .iter()
+        .find(|(slug, names)| *slug == typed || names.iter().any(|name| fold(name) == typed))
+        .map(|(slug, _)| *slug)
+}
+
+/// Lowercases `text` and strips the accents the type names use, so a name
+/// typed with or without them compares equal.
+fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' | 'ı' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            'ğ' => 'g',
+            'ñ' => 'n',
+            'ş' => 's',
+            other => other,
+        })
+        .collect()
 }
 
 /// A fully populated set of UI strings. Using a struct of `&'static str` keeps
@@ -1380,6 +1511,8 @@ impl Strings {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -1467,5 +1600,44 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(english.summary(&condition), "Use Water Stone");
+    }
+
+    #[test]
+    fn every_type_in_the_chart_has_a_name_in_every_language() {
+        for slug in crate::typechart::TYPES {
+            for language in Language::ALL {
+                let name = language.type_name(slug);
+                assert!(!name.is_empty(), "{slug} has no {language:?} name");
+                assert_eq!(type_slug(&name), Some(slug), "{name} does not read back");
+            }
+        }
+    }
+
+    #[test]
+    fn no_word_names_two_different_types_across_languages() {
+        let mut seen: HashMap<String, &str> = HashMap::new();
+        for (slug, names) in TYPE_NAMES {
+            for name in names.iter().copied().chain([slug]) {
+                if let Some(other) = seen.insert(fold(name), slug) {
+                    assert_eq!(other, slug, "{name} names both {other} and {slug}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_type_name_is_read_with_or_without_its_accents() {
+        assert_eq!(type_slug("Électrik"), Some("electric"));
+        assert_eq!(type_slug("electrik"), Some("electric"));
+        assert_eq!(type_slug("KARANLIK"), Some("dark"));
+        assert_eq!(type_slug("celik"), Some("steel"));
+        assert_eq!(type_slug("ghost"), Some("ghost"));
+        assert_eq!(type_slug("gho"), None);
+    }
+
+    #[test]
+    fn a_type_the_table_does_not_know_is_title_cased() {
+        assert_eq!(Language::German.type_name("stellar"), "Stellar");
+        assert_eq!(Language::German.type_name("ghost"), "Geist");
     }
 }

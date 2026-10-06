@@ -419,6 +419,7 @@ no refetch:
 | `dex:25` | Pokédex number 25, without the name fallback (`d:` also works) |
 | `dex:1-151` | every number in that range — the Kanto dex |
 | `type:water` | every Water Pokémon (`t:` also works) |
+| `type:wasser` | the same, by its name in any interface language; accents optional |
 | `type:water type:flying` | Water **and** Flying — Gyarados, Mantine, … |
 | `ability:levitate` | every Pokémon that can have Levitate (`a:` also works) |
 | `egg:dragon` | every species in the Dragon breeding group (`e:` also works) |
@@ -816,6 +817,11 @@ PokeAPI in `en`, `de`, `fr`, `es` and `it`. Ability text is taken from the game
 flavour entries rather than the effect entries: PokeAPI carries flavour in all
 five of those languages, while effect text exists only in English, German and
 French.
+
+Type names are a fixed table in `i18n.rs` rather than fetched, Turkish
+included, and `type:` accepts a type's name in any of the six languages, so a
+search uses the word the chips show. Species, egg group, growth rate and
+habitat names are still shown, and searched, in English.
 
 Item, move and location names inside evolution requirements stay in English —
 they arrive as PokeAPI slugs, and localizing each would cost an extra request

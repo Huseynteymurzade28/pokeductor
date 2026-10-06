@@ -333,7 +333,7 @@ fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
         format!("{}: ", s.types_label),
         Style::default().fg(theme::subtext()),
     )];
-    type_spans.extend(type_chips(&detail.types));
+    type_spans.extend(type_chips(&detail.types, app.language));
     lines.push(Line::from(type_spans));
 
     // Ability names. These come in the same payload as the types, so the row
@@ -1413,7 +1413,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
             .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )];
-    head.extend(type_chips(&detail.types));
+    head.extend(type_chips(&detail.types, app.language));
     lines.push(Line::from(head));
     lines.push(Line::raw(""));
 
@@ -1433,7 +1433,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     lines.push(section_heading(s.matchups_defense));
     for group in typechart::defensive_groups(&detail.types, &certain) {
-        lines.extend(chip_rows(group.label, &group.types, text_w));
+        lines.extend(chip_rows(group.label, &group.types, app.language, text_w));
     }
 
     // Directly under the numbers, because it is the numbers this explains:
@@ -1457,7 +1457,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
             Style::default().fg(theme::overlay()),
         )));
     } else {
-        lines.extend(chip_rows("", &coverage, text_w));
+        lines.extend(chip_rows("", &coverage, app.language, text_w));
     }
 
     // Two border rows plus the hint row at the foot.
@@ -1490,11 +1490,11 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 }
 
 /// Renders a list of types as coloured chips, separated by a space.
-fn type_chips(types: &[String]) -> Vec<Span<'static>> {
+fn type_chips(types: &[String], language: Language) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(types.len() * 2);
     for ty in types {
         spans.push(Span::styled(
-            format!(" {} ", title_case(ty)),
+            format!(" {} ", language.type_name(ty)),
             Style::default().fg(theme::base()).bg(theme::type_color(ty)),
         ));
         spans.push(Span::raw(" "));
@@ -1514,7 +1514,12 @@ fn section_heading(text: &str) -> Line<'static> {
 /// Lays `types` out as chips in a labelled row, wrapping onto further rows when
 /// they overflow `max_width`. Continuation rows are indented under the chips so
 /// the label column stays clean.
-fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>> {
+fn chip_rows(
+    label: &str,
+    types: &[&str],
+    language: Language,
+    max_width: usize,
+) -> Vec<Line<'static>> {
     let indent = " ".repeat(MATCHUP_LABEL_W);
     let mut rows: Vec<Line> = Vec::new();
     let mut spans: Vec<Span> = vec![Span::styled(
@@ -1526,7 +1531,7 @@ fn chip_rows(label: &str, types: &[&str], max_width: usize) -> Vec<Line<'static>
     let mut used = MATCHUP_LABEL_W;
 
     for ty in types {
-        let chip = format!(" {} ", title_case(ty));
+        let chip = format!(" {} ", language.type_name(ty));
         let chip_w = chip.chars().count() + 1; // chip plus its trailing space
         if used + chip_w > max_width && used > MATCHUP_LABEL_W {
             rows.push(Line::from(std::mem::take(&mut spans)));
@@ -1821,10 +1826,12 @@ fn move_columns(
     // Everything but the name is fixed-width — the leading space, the level
     // column and its separator, the type column and its separators, and the
     // four numeric columns — so the name absorbs whatever is left over.
-    let name_w = width.saturating_sub(12 + 4 * MOVE_NUM_W + 8).max(8);
+    let name_w = width.saturating_sub(13 + 4 * MOVE_NUM_W + 8).max(8);
     (
         format!(" {learn:>7} {name:<name_w$} "),
-        format!("{type_name:<9}"),
+        // Wide enough for the longest type name in any language, Italian's
+        // COLEOTTERO.
+        format!("{type_name:<10}"),
         format!(
             " {category:<MOVE_NUM_W$}{power:>MOVE_NUM_W$}{accuracy:>MOVE_NUM_W$}{pp:>MOVE_NUM_W$}"
         ),
@@ -1861,7 +1868,7 @@ fn move_row<'a>(
     // record already answered for, and blanks rather than zeros for the rest.
     let (type_name, category, power, accuracy, pp) = match info {
         Some(info) => (
-            info.type_name.to_uppercase(),
+            app.language.type_name(&info.type_name).to_uppercase(),
             damage_class_label(s, &info.damage_class).to_string(),
             info.power
                 .map_or_else(|| "—".to_string(), |p| p.to_string()),
@@ -2067,7 +2074,7 @@ fn ability_immunity_row(
         ),
         Span::styled(" → ", Style::default().fg(theme::overlay())),
         Span::styled(
-            format!(" {} ", title_case(immunity.immune_to)),
+            format!(" {} ", app.language.type_name(immunity.immune_to)),
             Style::default()
                 .fg(theme::base())
                 .bg(theme::type_color(immunity.immune_to)),
@@ -2155,7 +2162,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
             Span::styled(format!(" {:<12} ", title_case(name)), name_style),
         ];
         match app.details.get(name) {
-            Some(detail) => row.extend(type_chips(&detail.types)),
+            Some(detail) => row.extend(type_chips(&detail.types, app.language)),
             None => row.push(Span::styled(
                 s.loading.to_string(),
                 Style::default().fg(theme::overlay()),
@@ -2182,14 +2189,14 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
                 let (group, rest) = remaining.split_at(split);
                 let types: Vec<&str> = group.iter().map(|row| row.attacker).collect();
                 let label = format!("{count}/{}", loaded.len());
-                lines.extend(chip_rows(&label, &types, text_w));
+                lines.extend(chip_rows(&label, &types, app.language, text_w));
                 remaining = rest;
             }
         }
 
         lines.push(Line::raw(""));
         lines.push(section_heading(s.team_unresisted));
-        push_chip_section(&mut lines, &analysis.unresisted, text_w, s);
+        push_chip_section(&mut lines, &analysis.unresisted, text_w, s, app.language);
 
         // Placed directly under "resisted by nobody", because that is exactly
         // the claim it qualifies: the chart cannot see these, so an unresisted
@@ -2207,7 +2214,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
         lines.push(Line::raw(""));
         lines.push(section_heading(s.team_offense_gaps));
-        push_chip_section(&mut lines, &analysis.offense_gaps, text_w, s);
+        push_chip_section(&mut lines, &analysis.offense_gaps, text_w, s, app.language);
     }
 
     let height = (lines.len() as u16 + 3).min(full.height);
@@ -2241,11 +2248,17 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 /// Renders one chip section, or the "nothing to report" line when it is empty.
 /// On this card an empty section is good news, so it reads as reassurance
 /// rather than as missing data.
-fn push_chip_section(lines: &mut Vec<Line<'static>>, types: &[&str], width: usize, s: &Strings) {
+fn push_chip_section(
+    lines: &mut Vec<Line<'static>>,
+    types: &[&str],
+    width: usize,
+    s: &Strings,
+    language: Language,
+) {
     if types.is_empty() {
         lines.push(all_clear(s));
     } else {
-        lines.extend(chip_rows("", types, width));
+        lines.extend(chip_rows("", types, language, width));
     }
 }
 
@@ -2324,9 +2337,9 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     // columns rather than as one list of pairs.
     let head =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[0]);
-    frame.render_widget(Paragraph::new(side_heading(left)), head[0]);
+    frame.render_widget(Paragraph::new(side_heading(left, app.language)), head[0]);
     frame.render_widget(
-        Paragraph::new(side_heading(right)).alignment(Alignment::Right),
+        Paragraph::new(side_heading(right, app.language)).alignment(Alignment::Right),
         head[1],
     );
 
@@ -2360,9 +2373,12 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(Paragraph::new(section_heading(s.compare_best_hit)), body[4]);
     let hits =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[5]);
-    frame.render_widget(Paragraph::new(best_hit_line(left, right)), hits[0]);
     frame.render_widget(
-        Paragraph::new(best_hit_line(right, left)).alignment(Alignment::Right),
+        Paragraph::new(best_hit_line(left, right, app.language)),
+        hits[0],
+    );
+    frame.render_widget(
+        Paragraph::new(best_hit_line(right, left, app.language)).alignment(Alignment::Right),
         hits[1],
     );
 
@@ -2384,7 +2400,7 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 }
 
 /// One side's name, dex number and typing, for the top of the comparison card.
-fn side_heading(species: &PokemonDetail) -> Vec<Line<'static>> {
+fn side_heading(species: &PokemonDetail, language: Language) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
             Span::styled(
@@ -2398,7 +2414,7 @@ fn side_heading(species: &PokemonDetail) -> Vec<Line<'static>> {
                 Style::default().fg(theme::overlay()),
             ),
         ]),
-        Line::from(type_chips(&species.types)),
+        Line::from(type_chips(&species.types, language)),
     ]
 }
 
@@ -2485,14 +2501,18 @@ fn margin_label(left: u32, right: u32, s: &Strings) -> String {
 
 /// The hardest same-type hit `attacker` has on `defender`, as a chip and a
 /// multiplier.
-fn best_hit_line(attacker: &PokemonDetail, defender: &PokemonDetail) -> Line<'static> {
+fn best_hit_line(
+    attacker: &PokemonDetail,
+    defender: &PokemonDetail,
+    language: Language,
+) -> Line<'static> {
     let Some(hit) = compare::best_hit(attacker, defender) else {
         return Line::raw("");
     };
     let label = typechart::multiplier_label(hit.multiplier);
     Line::from(vec![
         Span::styled(
-            format!(" {} ", title_case(hit.attack_type)),
+            format!(" {} ", language.type_name(hit.attack_type)),
             Style::default()
                 .fg(theme::base())
                 .bg(theme::type_color(hit.attack_type))
@@ -2891,6 +2911,15 @@ mod tests {
             panel.contains("Total: 190"),
             "the stat total is summed, not stored"
         );
+    }
+
+    #[test]
+    fn type_chips_are_named_in_the_interface_language() {
+        let mut app = showing_gengar();
+        app.language = Language::German;
+        let panel = right_column(&mut app, 120, 40);
+        assert!(panel.contains("Geist") && panel.contains("Gift"), "{panel}");
+        assert!(!panel.contains("Ghost"), "{panel}");
     }
 
     #[test]
