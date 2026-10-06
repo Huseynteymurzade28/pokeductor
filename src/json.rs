@@ -1,4 +1,6 @@
-//! `pokeductor --json NAME`: one species, as JSON, for scripts.
+//! `pokeductor --json NAME`: one species, as JSON, for scripts. And
+//! `--json-list QUERY`: every species a search matches, one per line, in the
+//! same shape.
 //!
 //! The output is its own set of types rather than [`PokemonDetail`]
 //! serialized as-is. That struct is shaped by the code that reads it — sprite
@@ -13,14 +15,23 @@
 //! preference, and a script comparing `genus` across machines should not get a
 //! different answer from each.
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io::IsTerminal;
+
+use anyhow::Context;
+use futures::StreamExt;
 use serde::Serialize;
 
-use crate::api;
+use crate::api::{self, ApiError};
+use crate::browser::Browser;
 use crate::cache;
 use crate::cli;
 use crate::models::{
-    EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail, PokemonEntry, StatKind,
+    EvolutionCondition, EvolutionTree, EvolutionTrigger, PokemonDetail, PokemonEntry, RosterKind,
+    RosterTerm, StatKind,
 };
+use crate::query::Query;
+use crate::session;
 
 /// Goes up when a field is renamed, removed or changes type. See the module
 /// docs for what does not count.
@@ -42,7 +53,146 @@ pub async fn run(name: &str) -> anyhow::Result<()> {
 fn print(species: &Species) -> anyhow::Result<()> {
     let mut out = serde_json::to_vec_pretty(species)?;
     out.push(b'\n');
-    Ok(cli::print(&out)?)
+    cli::print(&out)?;
+    Ok(())
+}
+
+/// How many species records `--json-list` has in flight at once. The client
+/// caps requests process-wide on its own; this only keeps enough records
+/// queued that the cap is the limit, without starting a thousand futures for
+/// an unfiltered list.
+const LIST_AHEAD: usize = 8;
+
+/// Prints every species `raw` matches as JSON Lines, in Pokedex order.
+///
+/// Each line is written as soon as its record is in and every record before
+/// it has been written, so a slow cold-cache run shows progress on stdout
+/// itself, and a reader that stops early (`| head -5`) stops the fetching
+/// too, which makes a `--limit` flag unnecessary.
+pub async fn run_list(raw: &str) -> anyhow::Result<()> {
+    let client = api::build_client()?;
+    let entries = list(&client).await?;
+    let query = Query::parse(raw);
+
+    let mut rosters = HashMap::new();
+    for term in &query.rosters {
+        rosters.insert(term.clone(), roster(&client, term).await?);
+    }
+    let favourites = match query.favourites {
+        true => session::load().await.favourites.into_iter().collect(),
+        false => BTreeSet::new(),
+    };
+    let matches = matching(&entries, raw, rosters, favourites);
+
+    let mut progress = Progress::new(matches.len());
+    let mut records = futures::stream::iter(&matches)
+        .map(|entry| async {
+            record(&client, &entry.name)
+                .await
+                .with_context(|| format!("could not fetch {}", entry.name))
+        })
+        .buffered(LIST_AHEAD);
+    while let Some(record) = records.next().await {
+        let (detail, evolution) = record?;
+        progress.advance();
+        let mut line = serde_json::to_vec(&Species::new(&detail, &evolution))?;
+        line.push(b'\n');
+        if !cli::print(&line)? {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// A roster, cache first, the way the sidebar resolves one.
+///
+/// A name PokeAPI has no roster for (`type:plasma`) is an empty roster, so the
+/// query matches nothing and the answer is an empty list. Any other failure is
+/// an error: unlike the sidebar, which can show a term as unanswered, a script
+/// reading an empty output would take it as the answer.
+async fn roster(client: &reqwest::Client, term: &RosterTerm) -> anyhow::Result<HashSet<String>> {
+    if let Some(members) = cache::load_roster(term).await {
+        return Ok(members.into_iter().collect());
+    }
+    match api::fetch_roster(client, term).await {
+        Ok(members) => {
+            cache::store_roster(term, &members).await;
+            Ok(members.into_iter().collect())
+        }
+        Err(ApiError::NotFound(_)) => Ok(HashSet::new()),
+        Err(err) => {
+            let kind = match term.kind {
+                RosterKind::Type => "type",
+                RosterKind::Ability => "ability",
+                RosterKind::EggGroup => "egg",
+            };
+            Err(err).with_context(|| format!("could not resolve {kind}:{}", term.value))
+        }
+    }
+}
+
+/// The entries `raw` matches, in Pokedex order, with alternate forms after.
+///
+/// This is the sidebar's own filter, fed the rosters and favourites it would
+/// have, so the command line and the search box cannot disagree about what a
+/// query means.
+pub fn matching(
+    entries: &[PokemonEntry],
+    raw: &str,
+    rosters: HashMap<RosterTerm, HashSet<String>>,
+    favourites: BTreeSet<String>,
+) -> Vec<PokemonEntry> {
+    let mut browser = Browser {
+        all: entries.to_vec(),
+        query: raw.to_string(),
+        rosters,
+        favourites,
+        ..Browser::default()
+    };
+    browser.recompute();
+    browser
+        .filtered
+        .iter()
+        .map(|&idx| browser.all[idx].clone())
+        .collect()
+}
+
+/// A `12/151` counter on stderr while records are fetched.
+///
+/// Only drawn when stderr is a terminal and stdout is not: with output piped
+/// somewhere, the counter is the only sign of life on a cold cache, and with
+/// both on one terminal it would be drawn over the lines it is counting. The
+/// line is cleared again when the counter is dropped, error or not, so the
+/// terminal is left with nothing but what the command printed.
+struct Progress {
+    done: usize,
+    total: usize,
+    shown: bool,
+}
+
+impl Progress {
+    fn new(total: usize) -> Self {
+        Progress {
+            done: 0,
+            total,
+            shown: total > 0 && std::io::stderr().is_terminal() && !std::io::stdout().is_terminal(),
+        }
+    }
+
+    fn advance(&mut self) {
+        self.done += 1;
+        if self.shown {
+            eprint!("\r{}/{}", self.done, self.total);
+        }
+    }
+}
+
+impl Drop for Progress {
+    fn drop(&mut self) {
+        if self.shown {
+            eprint!("\r\x1b[2K");
+        }
+    }
 }
 
 /// The master list, cache first. A stale list is refreshed, and still used if
@@ -92,7 +242,7 @@ pub enum Miss {
     },
     #[error(
         "--json takes a species name or Pokedex number, not a search term like {0:?}; \
-         filters are for the list in the interface"
+         --json-list prints every species a search matches"
     )]
     SearchTerm(String),
 }
@@ -718,5 +868,114 @@ mod tests {
             serde_json::to_value(Requires::new(&condition)).unwrap(),
             json!({ "trigger": "three-critical-hits" })
         );
+    }
+
+    /// A slice of the master list with forms mixed in out of order, the way
+    /// PokeAPI serves them after the numbered species.
+    fn kanto_and_friends() -> Vec<PokemonEntry> {
+        vec![
+            entry("bulbasaur", 1),
+            entry("gastly", 92),
+            entry("haunter", 93),
+            entry("gengar", 94),
+            entry("gengar-mega", 10038),
+            entry("misdreavus", 200),
+            entry("dragonite", 149),
+        ]
+    }
+
+    fn ghosts() -> (RosterTerm, HashSet<String>) {
+        let members = ["gengar-mega", "misdreavus", "gengar", "gastly", "haunter"];
+        (
+            RosterTerm::new(RosterKind::Type, "ghost"),
+            members.iter().map(|m| m.to_string()).collect(),
+        )
+    }
+
+    fn names(entries: &[PokemonEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn a_roster_term_lists_its_members_in_dex_order_with_forms_last() {
+        let found = matching(
+            &kanto_and_friends(),
+            "type:ghost",
+            HashMap::from([ghosts()]),
+            BTreeSet::new(),
+        );
+        assert_eq!(
+            names(&found),
+            ["gastly", "haunter", "gengar", "misdreavus", "gengar-mega"]
+        );
+    }
+
+    #[test]
+    fn terms_combine_the_way_they_do_in_the_search_box() {
+        let found = matching(
+            &kanto_and_friends(),
+            "type:ghost gen:1 ga",
+            HashMap::from([ghosts()]),
+            BTreeSet::new(),
+        );
+        assert_eq!(names(&found), ["gastly", "gengar"]);
+        let found = matching(
+            &kanto_and_friends(),
+            "dex:1-93",
+            HashMap::new(),
+            BTreeSet::new(),
+        );
+        assert_eq!(names(&found), ["bulbasaur", "gastly", "haunter"]);
+    }
+
+    #[test]
+    fn a_type_named_in_another_language_reaches_the_same_roster() {
+        let found = matching(
+            &kanto_and_friends(),
+            "type:geist gen:2",
+            HashMap::from([ghosts()]),
+            BTreeSet::new(),
+        );
+        assert_eq!(names(&found), ["misdreavus"]);
+    }
+
+    #[test]
+    fn fav_lists_the_favourites_it_is_given() {
+        let favourites = BTreeSet::from(["dragonite".to_string(), "gastly".to_string()]);
+        let found = matching(&kanto_and_friends(), "fav:", HashMap::new(), favourites);
+        assert_eq!(names(&found), ["gastly", "dragonite"]);
+    }
+
+    #[test]
+    fn a_query_that_matches_nothing_is_an_empty_list() {
+        let empty = (RosterTerm::new(RosterKind::Type, "plasma"), HashSet::new());
+        assert!(matching(
+            &kanto_and_friends(),
+            "type:plasma",
+            HashMap::from([empty]),
+            BTreeSet::new()
+        )
+        .is_empty());
+        assert!(matching(
+            &kanto_and_friends(),
+            "agumon",
+            HashMap::new(),
+            BTreeSet::new()
+        )
+        .is_empty());
+    }
+
+    /// JSON Lines needs every object on exactly one line, which the flavor
+    /// text could break if it were not escaped.
+    #[test]
+    fn a_list_line_is_one_line_that_parses_on_its_own() {
+        let (mut detail, chain) = gengar();
+        detail
+            .flavors
+            .insert("en".into(), "Line one.\nLine two.".into());
+        let line = serde_json::to_string(&Species::new(&detail, &chain)).unwrap();
+        assert!(!line.contains('\n'));
+        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed["name"], "gengar");
     }
 }

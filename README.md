@@ -461,6 +461,7 @@ Options:
       --color <WHEN>         How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
       --theme <PALETTE>      Draw the interface in this palette [possible values: pico8, dmg]
       --json                 Print NAME as JSON and exit, instead of opening the interface
+      --json-list <QUERY>    Print every species QUERY matches as JSON Lines and exit
       --clear-cache          Delete the on-disk cache and exit
       --cache-dir            Print the cache directory and exit
       --completions <SHELL>  Print a completion script for SHELL and exit [possible values: bash, elvish, fish, powershell, zsh]
@@ -524,7 +525,8 @@ answer rather than a list:
 
 A fragment several names contain (`pika`) is an error that lists some of them.
 Search terms like `type:ghost` describe a list rather than a species and are
-refused. Every miss exits `1` with the reason on stderr and nothing on stdout.
+refused; `--json-list` below is for those. Every miss exits `1` with the reason
+on stderr and nothing on stdout.
 
 The output is its own documented shape, not the app's internal record. All text
 is English whatever `--lang` the interface last ran in, heights are metres and
@@ -584,6 +586,33 @@ weights kilograms:
 | `forms` | Every variety of the species, this one included. |
 | `evolution` | The whole chain from its root, as nested stages. |
 | `evolution…requires` | What the stage above takes to become this one, or `null` at the root. Only the conditions that apply are present: `trigger` (`level-up`, `use-item`, `trade`, `shed`, or a rarer PokeAPI slug), `min_level`, `item`, `held_item`, `known_move`, `known_move_type`, `min_happiness`, `min_affection`, `min_beauty`, `time_of_day` (`day`, `night`, `dusk`), `location`, `gender` (`male`, `female`), `overworld_rain` and `upside_down` (present only as `true`), `trade_species`, `party_species`, `party_type`, and `attack_vs_defense` (`greater`, `equal`, `less`). |
+
+
+### JSON Lines for a search
+
+`--json-list QUERY` takes anything the search box does and prints every
+species it matches, one JSON object per line, in Pokedex order with alternate
+forms last. Each object is the same shape `--json` prints, so the table above
+documents both:
+
+```console
+$ pokeductor --json-list 'type:ghost gen:1' | jq -c '[.name, .stats.speed]'
+["gastly",80]
+["haunter",95]
+["gengar",110]
+```
+
+- Every search term works, including `type:` names in any interface language
+  and `fav:`, which reads the favourites from the session file.
+- A query that matches nothing prints nothing and exits `0`: an empty list is
+  an answer. A name PokeAPI has no roster for (`type:plasma`) counts as
+  matching nothing. A network failure is an error, exiting `1`, rather than an
+  empty list a script would take at its word.
+- On a cold cache each species is a few requests, so a whole generation takes
+  a while the first time and is instant after. Lines are written as they
+  arrive, a `12/151` counter runs on stderr while stdout is piped to
+  something other than a terminal, and a reader that stops early
+  (`| head -5`) stops the fetching too.
 
 ---
 
