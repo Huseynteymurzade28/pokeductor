@@ -28,6 +28,10 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 - `cargo binstall pokeductor` installs the prebuilt release binary rather than
   compiling. It takes effect from this release, the first published with the
   metadata it reads. (#40)
+- `brew install huseynteymurzade28/tap/pokeductor` on macOS and Linux. The
+  release workflow writes the formula from each release's checksums, tries
+  it with `brew install` and `brew test` on both platforms, and pushes it to
+  the tap, so it is updated by the tag like everything else. (#40)
 - `pokeductor --json-list QUERY` prints every species a search matches as JSON
   Lines, one `--json` object per line, in Pokedex order. Every search-box term
   works. No match prints nothing and exits `0`. Lines stream as records

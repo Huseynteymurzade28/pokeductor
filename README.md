@@ -81,6 +81,15 @@ command downloads the prebuilt archive for your platform instead of compiling:
 cargo binstall pokeductor
 ```
 
+### Homebrew
+
+On macOS and Linux, from the project's own tap. It installs the prebuilt
+binary along with the shell completions and the man page:
+
+```bash
+brew install huseynteymurzade28/tap/pokeductor
+```
+
 ### Arch Linux
 
 Packaged in the [AUR](https://aur.archlinux.org/packages/pokeductor), built from
@@ -93,8 +102,8 @@ yay -S pokeductor
 ### Requirements
 
 - **Rust 1.88 or newer** (2021 edition) — via [rustup](https://rustup.rs/).
-  Only for building it yourself: the prebuilt binaries and the AUR package need
-  no toolchain.
+  Only for building it yourself: the prebuilt binaries, Homebrew and the AUR
+  package need no toolchain.
 - A **truecolor (24-bit) terminal** for sprites at their best. Not a
   requirement: a 256-colour terminal gets the artwork quantized to its palette,
   and one with no colour at all gets the interface without sprites rather than a
@@ -924,11 +933,17 @@ The tag is the only manual step. Pushing it runs `.github/workflows/release.yml`
 which re-runs the full check suite against the tagged tree, refuses to go on if
 the tag and the manifest disagree about the version or the changelog has no
 section for it, builds the six targets, attaches them with checksums to
-a GitHub release whose notes are that changelog section, and finally publishes to
+a GitHub release whose notes are that changelog section, and publishes to
 crates.io. Publishing needs a `CARGO_REGISTRY_TOKEN` repository secret.
 
-crates.io is last because it is the step that cannot be undone, only yanked. The
-AUR package is updated by hand afterwards, since it builds from the crates.io
+crates.io comes after the binaries because it is the step that cannot be
+undone, only yanked. Homebrew follows it: the formula is rendered from the
+release's checksums by `.github/homebrew/render.sh`, installed and tested on
+macOS and Linux, and only then pushed to
+[`homebrew-tap`](https://github.com/Huseynteymurzade28/homebrew-tap) with the
+deploy key in the `TAP_DEPLOY_KEY` secret. A manual run of the workflow tries
+the formula against the latest release and stops short of the push. The AUR
+package is updated by hand afterwards, since it builds from the crates.io
 tarball and cannot be prepared before it exists.
 
 ## Credits
