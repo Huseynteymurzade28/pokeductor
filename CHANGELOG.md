@@ -21,6 +21,10 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   a `requires` object: the trigger, plus only the conditions that apply (a
   level, an item, happiness, time of day, ...). The root's is `null`. It is an
   added field, so `schema` stays at 1. (#36)
+- Type names follow the interface language, on the info card, the matchup,
+  party and head-to-head cards, and in the move list. `type:` accepts a type's
+  name in any of the six languages, with or without accents, so `type:geist`
+  and `type:hayalet` both find the Ghost types. (#45)
 
 ## [0.6.0] - 2026-09-24
 

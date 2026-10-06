@@ -9,6 +9,7 @@
 //! dex:25               dex number 25, without the name fallback
 //! dex:1-151            every dex number in that range — generation 1
 //! type:water           every Water Pokemon
+//! type:wasser          the same, by its name in another interface language
 //! type:water type:fly  Water *and* Flying — Gyarados, Mantine, ...
 //! ability:levitate     every Pokemon that can have Levitate
 //! egg:dragon           every species in the Dragon breeding group
@@ -22,6 +23,7 @@
 
 use std::ops::RangeInclusive;
 
+use crate::i18n;
 use crate::models::{PokemonEntry, RosterKind, RosterTerm};
 
 /// A parsed search query. The default value matches everything.
@@ -75,8 +77,11 @@ impl Query {
                 // below: filtering on the empty string, or falling back to
                 // searching names for "type:", both answer a question nobody
                 // asked.
+                // A type's name in any interface language reaches it, since
+                // the chips show it in that language.
                 Some(("type" | "t", value)) => {
-                    query.push_roster(RosterKind::Type, value);
+                    let slug = i18n::type_slug(value).unwrap_or(value);
+                    query.push_roster(RosterKind::Type, slug);
                 }
                 Some(("ability" | "a", value)) => {
                     query.push_roster(RosterKind::Ability, value);
@@ -298,6 +303,22 @@ mod tests {
         assert_eq!(slug("egg:water-1"), "water1");
         // The API's own spelling still works.
         assert_eq!(slug("egg:monster"), "monster");
+    }
+
+    #[test]
+    fn a_type_answers_to_its_name_in_any_interface_language() {
+        let slug = |raw: &str| Query::parse(raw).rosters[0].value.clone();
+        assert_eq!(slug("type:geist"), "ghost");
+        assert_eq!(slug("t:Hayalet"), "ghost");
+        assert_eq!(slug("type:ténèbres"), "dark");
+        assert_eq!(slug("type:tenebres"), "dark");
+        // A name it does not know is passed through as the slug it may be.
+        assert_eq!(slug("type:stellar"), "stellar");
+    }
+
+    #[test]
+    fn a_type_named_two_ways_is_recorded_once() {
+        assert_eq!(Query::parse("type:ghost type:geist").rosters, [ghost()]);
     }
 
     #[test]
