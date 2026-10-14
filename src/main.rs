@@ -19,6 +19,7 @@
 
 mod api;
 mod app;
+mod base_stats;
 mod browser;
 mod cache;
 mod cli;

@@ -62,7 +62,7 @@ pub struct Cli {
     /// Print every species QUERY matches as JSON Lines and exit
     ///
     /// QUERY is anything the search box takes (`type:ghost`, `gen:1`,
-    /// `ability:levitate egg:dragon`), and each match is one line holding the
+    /// `ability:levitate egg:dragon`, `bst>600`), and each match is one line holding the
     /// object `--json` prints, in Pokedex order. No match prints nothing and
     /// exits 0.
     #[arg(

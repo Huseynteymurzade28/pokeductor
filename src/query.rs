@@ -16,6 +16,8 @@
 //! gen:1 gen:2          introduced in either generation
 //! gen:1 type:ghost ga  all three, combined
 //! fav:                 the species marked as favourites
+//! spe>=110             base Speed of at least 110
+//! bst>600 type:dragon  base stat total over 600, and Dragon
 //! ```
 //!
 //! Anything that is not a recognised term is treated as ordinary text, so a
@@ -23,6 +25,7 @@
 
 use std::ops::RangeInclusive;
 
+use crate::base_stats::{self, StatKey};
 use crate::i18n;
 use crate::models::{PokemonEntry, RosterKind, RosterTerm};
 
@@ -63,6 +66,50 @@ pub struct Query {
     /// favourites to narrow to, and `fav:yes` reading as "no filter" would be
     /// a surprise.
     pub favourites: bool,
+    /// Comparisons on base stats, from terms like `spe>=110`.
+    ///
+    /// Combined with AND, like the roster terms: `hp>100 def>100` is the
+    /// bulky ones, and an OR there would only ever widen to "any stat is
+    /// high". Read from the built-in table, so nothing is fetched.
+    pub stats: Vec<StatTerm>,
+}
+
+/// One base-stat comparison from the search box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatTerm {
+    pub key: StatKey,
+    pub op: Comparison,
+    pub value: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Comparison {
+    Less,
+    LessOrEqual,
+    Equal,
+    GreaterOrEqual,
+    Greater,
+}
+
+impl Comparison {
+    fn holds(self, left: u16, right: u16) -> bool {
+        match self {
+            Comparison::Less => left < right,
+            Comparison::LessOrEqual => left <= right,
+            Comparison::Equal => left == right,
+            Comparison::GreaterOrEqual => left >= right,
+            Comparison::Greater => left > right,
+        }
+    }
+}
+
+impl StatTerm {
+    /// Whether the entry PokeAPI calls `name` satisfies the comparison. An
+    /// entry the built-in table has no row for satisfies none, as an
+    /// alternate form satisfies no `gen:`.
+    pub fn matches(&self, name: &str) -> bool {
+        base_stats::lookup(name).is_some_and(|stats| self.op.holds(stats.get(self.key), self.value))
+    }
 }
 
 impl Query {
@@ -71,6 +118,16 @@ impl Query {
         let mut words: Vec<&str> = Vec::new();
 
         for token in raw.split_whitespace() {
+            match parse_stat_term(token) {
+                StatToken::Term(term) => {
+                    if !query.stats.contains(&term) {
+                        query.stats.push(term);
+                    }
+                    continue;
+                }
+                StatToken::Unfinished => continue,
+                StatToken::NotStat => {}
+            }
             match token.split_once(':') {
                 // A roster term with nothing after the colon is one the user is
                 // still typing, and is dropped for the same reason `gen:` is
@@ -158,7 +215,47 @@ impl Query {
                 return false;
             }
         }
-        true
+        self.stats.iter().all(|term| term.matches(&entry.name))
+    }
+}
+
+/// What a search-box token turned out to be, as far as stat terms go.
+#[derive(Debug, PartialEq, Eq)]
+enum StatToken {
+    Term(StatTerm),
+    /// A stat key and an operator with no usable number after them — `spe>`
+    /// on its way to `spe>100`. Dropped, as a half-typed `gen:` is, rather
+    /// than searched for as a name.
+    Unfinished,
+    /// Not a stat term at all: no operator, or no stat key before it. `spe`
+    /// alone stays text, since it is how `spearow` starts.
+    NotStat,
+}
+
+/// Reads a stat term: a key, an operator (`<`, `<=`, `=`, `>=`, `>`) and a
+/// number, with no spaces between them.
+fn parse_stat_term(token: &str) -> StatToken {
+    let Some(at) = token.find(['<', '>', '=']) else {
+        return StatToken::NotStat;
+    };
+    let (key, rest) = token.split_at(at);
+    let Some(key) = StatKey::parse(key) else {
+        return StatToken::NotStat;
+    };
+    let (op, value) = if let Some(value) = rest.strip_prefix(">=") {
+        (Comparison::GreaterOrEqual, value)
+    } else if let Some(value) = rest.strip_prefix("<=") {
+        (Comparison::LessOrEqual, value)
+    } else if let Some(value) = rest.strip_prefix('>') {
+        (Comparison::Greater, value)
+    } else if let Some(value) = rest.strip_prefix('<') {
+        (Comparison::Less, value)
+    } else {
+        (Comparison::Equal, &rest[1..])
+    };
+    match value.parse() {
+        Ok(value) => StatToken::Term(StatTerm { key, op, value }),
+        Err(_) => StatToken::Unfinished,
     }
 }
 
@@ -450,5 +547,90 @@ mod tests {
         assert_eq!(query.generations, [1]);
         assert_eq!(query.rosters.len(), 1);
         assert_eq!(query.text, "ga");
+    }
+
+    fn stat(key: StatKey, op: Comparison, value: u16) -> StatTerm {
+        StatTerm { key, op, value }
+    }
+
+    #[test]
+    fn every_comparison_operator_parses() {
+        use Comparison::*;
+        for (raw, op) in [
+            ("spe<50", Less),
+            ("spe<=50", LessOrEqual),
+            ("spe=50", Equal),
+            ("spe>=50", GreaterOrEqual),
+            ("spe>50", Greater),
+        ] {
+            let query = Query::parse(raw);
+            assert_eq!(query.stats, [stat(StatKey::Speed, op, 50)], "{raw}");
+            assert_eq!(query.text, "", "{raw} is not a name to search for");
+        }
+    }
+
+    #[test]
+    fn stat_terms_combine_with_each_other_and_with_the_rest() {
+        let query = Query::parse("hp>100 DEF>=100 type:water gen:3 wal");
+        assert_eq!(
+            query.stats,
+            [
+                stat(StatKey::Hp, Comparison::Greater, 100),
+                stat(StatKey::Defense, Comparison::GreaterOrEqual, 100),
+            ]
+        );
+        assert_eq!(query.rosters.len(), 1);
+        assert_eq!(query.generations, [3]);
+        assert_eq!(query.text, "wal");
+    }
+
+    #[test]
+    fn a_half_typed_stat_term_is_dropped_rather_than_searched_for() {
+        for raw in ["spe>", "spe>=", "bst=", "hp>abc", "atk<-5"] {
+            let query = Query::parse(raw);
+            assert!(query.stats.is_empty(), "{raw}");
+            assert_eq!(query.text, "", "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_stat_key_with_no_operator_is_a_name_fragment() {
+        // `spe` is how `spearow` starts, and `hp` is no species, but neither
+        // has asked for a comparison yet.
+        let query = Query::parse("spe");
+        assert!(query.stats.is_empty());
+        assert_eq!(query.text, "spe");
+        // Nor is an operator after something that is not a stat.
+        assert_eq!(Query::parse("luck>5").text, "luck>5");
+    }
+
+    #[test]
+    fn a_repeated_stat_term_is_recorded_once() {
+        assert_eq!(Query::parse("spe>100 speed>100").stats.len(), 1);
+    }
+
+    #[test]
+    fn stat_terms_read_the_built_in_table() {
+        let query = Query::parse("spe>=150");
+        assert!(query.matches_entry(&entry("ninjask", 291)));
+        assert!(!query.matches_entry(&entry("shuckle", 213)));
+
+        let bulky = Query::parse("def>=200 spd>=200");
+        assert!(bulky.matches_entry(&entry("shuckle", 213)));
+        assert!(!bulky.matches_entry(&entry("blissey", 242)));
+    }
+
+    #[test]
+    fn stat_terms_reach_alternate_forms() {
+        // Unlike `dex:` and `gen:`, a form has stats of its own to test.
+        let query = Query::parse("spa>=95");
+        assert!(query.matches_entry(&entry("raichu-alola", 10100)));
+        assert!(!query.matches_entry(&entry("raichu", 26)));
+    }
+
+    #[test]
+    fn an_entry_missing_from_the_table_matches_no_stat_term() {
+        assert!(!Query::parse("bst>0").matches_entry(&entry("missingno", 0)));
+        assert!(Query::parse("").matches_entry(&entry("missingno", 0)));
     }
 }

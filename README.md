@@ -128,7 +128,8 @@ line](#command-line) for the full set of flags.
 The sidebar lists every entry PokeAPI serves — 1351 of them today, species and
 alternate forms alike — with National Pokédex numbers. A bare number looks up
 that Pokédex number — `25` finds Pikachu — and beyond plain name matching the
-search box takes `dex:`, `type:`, `ability:`, `egg:` and `gen:` terms:
+search box takes `dex:`, `type:`, `ability:`, `egg:` and `gen:` terms, and
+comparisons on base stats:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-search.png" alt="Searching for type:ghost gen:1, narrowing the list to Gastly, Haunter and Gengar" width="900">
 
@@ -139,9 +140,22 @@ across kinds: `type:water type:flying` finds the dual-typed ones, and
 generation and carries exactly one number, so requiring two at once could only
 ever match nothing.
 Anything that is not a recognised term is treated as ordinary text, so a stray
-colon degrades to a name search instead of an error. `S` cycles the sort between
-Pokédex order and alphabetical; the highlighted species stays under the cursor
-across a re-sort or a narrowing search.
+colon degrades to a name search instead of an error.
+
+A stat term is a stat, an operator and a number with no spaces: `spe>=110` is
+everything with a base Speed of 110 or more, and `bst>600` everything whose
+base stat total is over 600. The keys are `hp`, `atk`, `def`, `spa`, `spd`,
+`spe` and `bst`, and the operators `<`, `<=`, `=`, `>=` and `>`. Stat terms
+combine with **AND**, with each other and with everything else, so
+`type:ghost spe>=110` is the fast Ghosts and `hp>100 def>100` the bulky ones.
+Base stats come from a table built into the binary rather than from the API,
+since PokeAPI serves them one species at a time: filtering on them is instant
+and works offline. Unlike `dex:` and `gen:`, they reach alternate forms, which
+have stats of their own.
+
+`S` cycles the sort between Pokédex order, alphabetical, highest base stat
+total and fastest; the highlighted species stays under the cursor across a
+re-sort or a narrowing search.
 
 `R` loads a species at random from whatever the list is narrowed to — `type:ghost`
 then `R` is a random Ghost, `gen:1` then `R` is a random Kanto species — which is
@@ -443,6 +457,9 @@ no refetch:
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
 | `fav:` | the species marked with `B` (`f:` also works) |
+| `spe>=110` | base Speed of 110 or more (`speed>=110` also works) |
+| `bst>600` | base stat total over 600 (`total>600` also works) |
+| `hp>100 def>100` | both at once |
 
 `dex:` and `gen:` filters skip alternate forms such as `raichu-alola`: their
 ids sit above 10000 and are not dex numbers, so there is nothing to test a range
@@ -640,7 +657,8 @@ through to disk.
 | `cli.rs` | Argument parsing, and the commands that answer without a terminal. |
 | `color.rs` | Terminal colour-depth detection, and the per-frame degradation pass. |
 | `session.rs` | Party and preferences carried over from the previous run. |
-| `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`) parsing. |
+| `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`, `spe>=110`) parsing. |
+| `base_stats.rs` | Every entry's base stats, built in from a table `scripts/base-stats.py` generates. |
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
