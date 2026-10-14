@@ -17,14 +17,15 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ratatui::widgets::ListState;
 
+use crate::base_stats::{self, StatKey};
 use crate::models::{PokemonEntry, RosterTerm};
 use crate::query::Query;
 
 /// How the sidebar orders whatever survived the filter.
 ///
-/// Both keys are derived from data the list response already carries, so
-/// sorting never costs a request. Ordering by base-stat total would: it needs
-/// every species' stats, which is 1300 fetches for one keypress.
+/// None of the keys costs a request: the first two come from the list
+/// response, and the stat orders from the built-in base stat table, since
+/// fetching every species' stats would be 1300 requests for one keypress.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SortKey {
     /// National Pokedex order — PokeAPI's own, and the default.
@@ -32,6 +33,11 @@ pub enum SortKey {
     Dex,
     /// Alphabetical by name.
     Name,
+    /// Highest base stat total first.
+    Total,
+    /// Fastest first. The one single stat with an order of its own, because
+    /// who moves first is the question a stat is most often looked up for.
+    Speed,
 }
 
 impl SortKey {
@@ -39,7 +45,9 @@ impl SortKey {
     pub fn next(self) -> Self {
         match self {
             SortKey::Dex => SortKey::Name,
-            SortKey::Name => SortKey::Dex,
+            SortKey::Name => SortKey::Total,
+            SortKey::Total => SortKey::Speed,
+            SortKey::Speed => SortKey::Dex,
         }
     }
 
@@ -49,6 +57,8 @@ impl SortKey {
         match self {
             SortKey::Dex => "dex",
             SortKey::Name => "name",
+            SortKey::Total => "total",
+            SortKey::Speed => "speed",
         }
     }
 
@@ -58,6 +68,8 @@ impl SortKey {
         match code {
             "dex" => Some(SortKey::Dex),
             "name" => Some(SortKey::Name),
+            "total" => Some(SortKey::Total),
+            "speed" => Some(SortKey::Speed),
             _ => None,
         }
     }
@@ -119,11 +131,24 @@ impl Browser {
             SortKey::Name => {
                 filtered.sort_unstable_by(|&a, &b| self.all[a].name.cmp(&self.all[b].name));
             }
+            SortKey::Total => self.sort_by_stat(&mut filtered, StatKey::Total),
+            SortKey::Speed => self.sort_by_stat(&mut filtered, StatKey::Speed),
         }
 
         self.filtered = filtered;
         self.parsed = query;
         self.restore_highlight(anchor);
+    }
+
+    /// Orders `filtered` highest `key` first, ties in dex order so equal
+    /// stats keep a stable, familiar arrangement. An entry the table has no
+    /// row for goes last rather than being placed as if its stat were zero.
+    fn sort_by_stat(&self, filtered: &mut [usize], key: StatKey) {
+        filtered.sort_unstable_by_key(|&idx| {
+            let entry = &self.all[idx];
+            let stat = base_stats::lookup(&entry.name).map(|stats| stats.get(key));
+            (std::cmp::Reverse(stat), entry.id)
+        });
     }
 
     /// Whether `name` is in the roster of every filter term the query asks
@@ -268,7 +293,7 @@ mod tests {
 
     #[test]
     fn every_sort_key_reads_back_out_of_its_code() {
-        for sort in [SortKey::Dex, SortKey::Name] {
+        for sort in [SortKey::Dex, SortKey::Name, SortKey::Total, SortKey::Speed] {
             assert_eq!(SortKey::from_code(sort.code()), Some(sort));
         }
     }
@@ -329,8 +354,47 @@ mod tests {
         );
 
         browser.cycle_sort();
+        assert_eq!(browser.sort, SortKey::Total);
+        browser.cycle_sort();
+        assert_eq!(browser.sort, SortKey::Speed);
+        browser.cycle_sort();
         assert_eq!(browser.sort, SortKey::Dex);
         assert_eq!(browser.current_name().as_deref(), Some("pikachu"));
+    }
+
+    #[test]
+    fn the_stat_sorts_put_the_highest_first_and_unknowns_last() {
+        let mut browser = browsing(&[
+            (0, "missingno"),
+            (25, "pikachu"),
+            (92, "gastly"),
+            (94, "gengar"),
+            (213, "shuckle"),
+        ]);
+        browser.sort = SortKey::Total;
+        browser.recompute();
+        // Shuckle 505, Gengar 500, Pikachu 320, Gastly 310: the totals, not
+        // any one stat, which would put Shuckle last.
+        assert_eq!(
+            visible(&browser),
+            ["shuckle", "gengar", "pikachu", "gastly", "missingno"]
+        );
+
+        browser.sort = SortKey::Speed;
+        browser.recompute();
+        assert_eq!(
+            visible(&browser),
+            ["gengar", "pikachu", "gastly", "shuckle", "missingno"]
+        );
+    }
+
+    #[test]
+    fn equal_stats_fall_back_to_dex_order() {
+        // Raichu and its Alolan form are both Speed 110.
+        let mut browser = browsing(&[(10100, "raichu-alola"), (26, "raichu")]);
+        browser.sort = SortKey::Speed;
+        browser.recompute();
+        assert_eq!(visible(&browser), ["raichu", "raichu-alola"]);
     }
 
     #[test]

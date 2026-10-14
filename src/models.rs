@@ -78,7 +78,7 @@ impl RosterTerm {
 }
 
 /// Highest National Pokedex number PokeAPI currently carries.
-const MAX_DEX_NUMBER: u32 = 1025;
+pub const MAX_DEX_NUMBER: u32 = 1025;
 
 /// Last dex number of each generation, in order. These boundaries are fixed
 /// history — a released generation never gains or loses species — so deriving

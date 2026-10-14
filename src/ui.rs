@@ -150,6 +150,8 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let sort_badge = match app.browser.sort {
         SortKey::Dex => s.sort_dex,
         SortKey::Name => s.sort_name,
+        SortKey::Total => s.sort_total,
+        SortKey::Speed => s.sort_speed,
     };
     // The favourite count sits in the title only once there is one, so an
     // install that never marks anything never sees the star.
@@ -1599,6 +1601,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("egg:dragon", h.act_by_egg),
         ("gen:1", h.act_by_generation),
         ("fav:", h.act_by_favourite),
+        ("spe>=100", h.act_by_stat),
         ("", ""),
         ("", h.ctx_evolution),
         ("← → ↑ ↓ · h j k l", h.act_chain_move),
@@ -2856,6 +2859,32 @@ mod tests {
             }
             assert!(frame.contains("fav:"));
         }
+    }
+
+    #[test]
+    fn the_help_card_lists_the_stat_term_in_every_language() {
+        for language in Language::ALL {
+            let mut app = showing_gengar();
+            app.language = language;
+            app.help_card = true;
+            let label = language.strings().help_card.act_by_stat;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(label),
+                "{language:?} lacks {label:?}:\n{frame}"
+            );
+            assert!(frame.contains("spe>=100"));
+        }
+    }
+
+    #[test]
+    fn the_sidebar_title_names_the_stat_sorts() {
+        let s = Language::English.strings();
+        let mut app = showing_gengar();
+        app.browser.sort = SortKey::Total;
+        assert!(screen(&mut app, 120, 40).contains(&format!("⇅ {}", s.sort_total)));
+        app.browser.sort = SortKey::Speed;
+        assert!(screen(&mut app, 120, 40).contains(&format!("⇅ {}", s.sort_speed)));
     }
 
     #[test]

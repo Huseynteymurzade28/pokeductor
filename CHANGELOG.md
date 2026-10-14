@@ -37,6 +37,12 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   works. No match prints nothing and exits `0`. Lines stream as records
   arrive, with a counter on stderr when output is piped, and stopping the
   reader stops the fetching. (#37)
+- Search by base stats. `spe>=110`, `bst>600`, `hp>100 def>100`: the six
+  stats and their total, with `<`, `<=`, `=`, `>=` and `>`, combined with AND
+  with each other and with every other term, in the search box and in
+  `--json-list`. The stats come from a table built into the binary, generated
+  from PokeAPI's data by `scripts/base-stats.py`, so filtering costs no
+  request. `S` now also sorts by base stat total and by Speed. (#51)
 
 ## [0.6.0] - 2026-09-24
 
