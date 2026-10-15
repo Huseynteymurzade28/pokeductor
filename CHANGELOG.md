@@ -43,6 +43,11 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   `--json-list`. The stats come from a table built into the binary, generated
   from PokeAPI's data by `scripts/base-stats.py`, so filtering costs no
   request. `S` now also sorts by base stat total and by Speed. (#51)
+- A stat calculator. `I` opens it over the species on display: level, nature,
+  and an IV and EV per stat, edited in place with arrows, digits and `+` `-`,
+  and each stat's final value by the games' own formula. The nature's raised
+  and lowered stats are marked, and EVs past 252 in a stat or 510 in all are
+  flagged rather than refused. It needs no network. (#53)
 
 ## [0.6.0] - 2026-09-24
 

@@ -16,6 +16,7 @@ use crate::models::{
     egg_group_label, form_label, title_case, CatchEase, EvolutionTree, FieldData, LearnMethod,
     LearnedMove, PokemonDetail, Sprite,
 };
+use crate::statcalc::{self, Field};
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
 use crate::typechart;
@@ -68,6 +69,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.team_card {
         render_team(frame, app, &strings, area);
+    }
+    if app.stat_card {
+        render_stat_calc(frame, app, &strings, area);
     }
     if app.forms_card {
         render_forms(frame, app, &strings, area);
@@ -1581,6 +1585,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("C", h.act_compare),
         ("A", h.act_abilities),
         ("M", h.act_moves),
+        ("I", h.act_stat_calc),
         ("V", h.act_forms),
         ("X", h.act_shiny),
         ("R", h.act_random),
@@ -2248,6 +2253,172 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(hint, rows[1]);
 }
 
+/// Width of the stat calculator card, borders included.
+const STAT_CARD_W: u16 = 64;
+/// Width of the label column on the calculator's rows.
+const STAT_LABEL_W: usize = 12;
+
+/// The stat calculator: level and nature, then a row per stat with its base,
+/// the IV and EV being edited, and what they come to.
+///
+/// The nature's effect is shown twice on purpose: spelled out beside the
+/// nature, and as a ▲ or ▼ on the stat it touches, which is where the reader's
+/// eye is when deciding where EVs go. Over-cap EVs are flagged with a `!` as
+/// well as in red, so the flag survives `--color never`.
+fn render_stat_calc(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let Some(detail) = app.selected_detail() else {
+        return;
+    };
+    let Some(bases) = statcalc::bases(detail) else {
+        return;
+    };
+    let calc = &app.calculator;
+    let finals = calc.finals(bases);
+    let field = calc.field();
+    let language = app.language;
+
+    let area = centered_fixed(STAT_CARD_W, 19, full);
+    if area.width < 44 || area.height < 19 {
+        return; // too cramped to line the columns up; leave the main view alone
+    }
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            s.calc_title,
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::surface()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let label = |text: &str| {
+        Span::styled(
+            format!(" {:<width$}", text, width = STAT_LABEL_W - 1),
+            Style::default().fg(theme::subtext()),
+        )
+    };
+    // The cell under the cursor is drawn inverted, which reads in every
+    // palette and with no colour at all.
+    let cell = |text: String, at: Field, color: Color| {
+        let style = Style::default().fg(color);
+        Span::styled(
+            text,
+            match field == at {
+                true => style.add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                false => style,
+            },
+        )
+    };
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" {}", title_case(&detail.name)),
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+        Line::from(vec![
+            label(s.calc_level),
+            cell(
+                format!("‹ {:>3} ›", calc.level),
+                Field::Level,
+                theme::text(),
+            ),
+        ]),
+    ];
+    let mut nature = vec![
+        label(s.calc_nature),
+        cell(
+            format!("‹ {} ›", calc.nature.name()),
+            Field::Nature,
+            theme::text(),
+        ),
+    ];
+    if let (Some(up), Some(down)) = (calc.nature.raised(), calc.nature.lowered()) {
+        nature.push(Span::styled(
+            format!("  ▲ {}", language.stat_label(up)),
+            Style::default().fg(theme::green()),
+        ));
+        nature.push(Span::styled(
+            format!("  ▼ {}", language.stat_label(down)),
+            Style::default().fg(theme::red()),
+        ));
+    }
+    lines.push(Line::from(nature));
+    lines.push(Line::default());
+
+    let heading = Style::default()
+        .fg(theme::overlay())
+        .add_modifier(Modifier::BOLD);
+    lines.push(Line::from(vec![
+        Span::raw(" ".repeat(STAT_LABEL_W)),
+        Span::styled(format!("{:>5}", s.calc_base), heading),
+        Span::styled(format!("{:>6}", "IV"), heading),
+        Span::styled(format!("{:>7}", "EV"), heading),
+        Span::styled(format!("{:>7}", s.calc_stat), heading),
+    ]));
+
+    for (i, kind) in compare::STAT_ORDER.into_iter().enumerate() {
+        let (mark, color) = if calc.nature.raised() == Some(kind) {
+            (" ▲", theme::green())
+        } else if calc.nature.lowered() == Some(kind) {
+            (" ▼", theme::red())
+        } else {
+            ("", theme::text())
+        };
+        let (ev_flag, ev_color) = match calc.over_stat(i) {
+            true => ("!", theme::red()),
+            false => (" ", theme::text()),
+        };
+        lines.push(Line::from(vec![
+            label(language.stat_label(kind)),
+            Span::styled(
+                format!("{:>5}", bases[i]),
+                Style::default().fg(theme::subtext()),
+            ),
+            Span::raw("  "),
+            cell(format!("{:>4}", calc.ivs[i]), Field::Iv(i), theme::text()),
+            Span::raw("  "),
+            cell(format!("{:>4}", calc.evs[i]), Field::Ev(i), ev_color),
+            Span::styled(ev_flag, Style::default().fg(theme::red())),
+            Span::styled(
+                format!("{:>6}", finals[i]),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(mark, Style::default().fg(color)),
+        ]));
+    }
+
+    lines.push(Line::default());
+    let over = calc.over_total();
+    lines.push(Line::from(vec![
+        label("EV"),
+        Span::styled(
+            format!(
+                "{} / {}{}",
+                calc.ev_total(),
+                statcalc::TOTAL_EV_CAP,
+                if over { " !" } else { "" }
+            ),
+            Style::default().fg(if over { theme::red() } else { theme::text() }),
+        ),
+    ]));
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.calc_hint,
+        Style::default().fg(theme::overlay()),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
 /// Renders one chip section, or the "nothing to report" line when it is empty.
 /// On this card an empty section is good news, so it reads as reassurance
 /// rather than as missing data.
@@ -2875,6 +3046,92 @@ mod tests {
             );
             assert!(frame.contains("spe>=100"));
         }
+    }
+
+    /// Gengar with all six base stats, which is what the calculator needs.
+    fn showing_full_gengar() -> App {
+        let mut app = showing_gengar();
+        let stats = compare::STAT_ORDER
+            .iter()
+            .zip([60, 65, 60, 130, 75, 110])
+            .map(|(&kind, base)| Stat { kind, base })
+            .collect();
+        app.details.get_mut("gengar").unwrap().stats = stats;
+        app
+    }
+
+    #[test]
+    fn the_stat_calculator_draws_every_stat_and_the_whole_hint_in_every_language() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = showing_full_gengar();
+            app.language = language;
+            app.stat_card = true;
+            let frame = screen(&mut app, 120, 40);
+            for kind in compare::STAT_ORDER {
+                let label = language.stat_label(kind);
+                assert!(
+                    frame.contains(label),
+                    "{language:?} lacks {label}:\n{frame}"
+                );
+            }
+            for text in [s.calc_level, s.calc_nature, s.calc_hint, "0 / 510"] {
+                assert!(
+                    frame.contains(text),
+                    "{language:?} lacks {text:?}:\n{frame}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_stat_calculator_shows_finals_marks_the_nature_and_flags_spreads() {
+        let mut app = showing_full_gengar();
+        app.stat_card = true;
+        app.calculator.level = 100;
+        app.calculator.nature = statcalc::Nature::named("Timid").unwrap();
+        app.calculator.evs = [0, 0, 4, 252, 0, 255];
+        let frame = screen(&mut app, 120, 40);
+        // Speed: (220 + 31 + 63 + 5) × 1.1, and Attack lowered by Timid.
+        let row = |label: &str, base: &str| {
+            frame
+                .lines()
+                // The info panel's own stat bars sit behind the card.
+                .find(|l| l.contains(label) && l.contains(base) && !l.contains('█'))
+                .unwrap_or_else(|| panic!("no {label} row:\n{frame}"))
+        };
+        let speed = row("Speed", " 110 ");
+        assert!(speed.contains("350 ▲"), "{speed}");
+        assert!(speed.contains("255!"), "over 252 in one stat:\n{speed}");
+        let attack = row("Attack", " 65 ");
+        assert!(attack.contains("▼"), "{attack}");
+        assert!(frame.contains("511 / 510 !"), "over 510 in all:\n{frame}");
+    }
+
+    #[test]
+    fn the_calculators_cursor_reads_without_colour() {
+        // The Game Boy palette is four shades of one green, and `--color
+        // never` has none, so the cursor cannot be a hue: it is drawn
+        // inverted. (The nature and the caps are carried by ▲ ▼ and `!`,
+        // which the test above already reads as plain text.)
+        let mut app = showing_full_gengar();
+        app.stat_card = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test backend");
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("a frame draws");
+        let buffer = terminal.backend().buffer();
+        let card = centered_fixed(STAT_CARD_W, 19, buffer.area);
+        let reversed: String = card
+            .positions()
+            .filter_map(|pos| buffer.cell(pos))
+            .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+            .map(|cell| cell.symbol())
+            .collect();
+        assert_eq!(
+            reversed, "‹  50 ›",
+            "only the level, where the cursor opens"
+        );
     }
 
     #[test]
