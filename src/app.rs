@@ -6,6 +6,7 @@
 //! alongside terminal input and a steady animation tick via `tokio::select!`.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -19,6 +20,7 @@ use crate::api::ApiError;
 use crate::browser::{Browser, SortKey};
 use crate::cache;
 use crate::cli::Startup;
+use crate::clipboard;
 use crate::color::{self, Depth};
 use crate::i18n::Language;
 use crate::models::{
@@ -26,6 +28,7 @@ use crate::models::{
     Sprite, SpriteVariant,
 };
 use crate::session::{self, Session};
+use crate::showdown;
 use crate::statcalc::{self, Calculator};
 use crate::team;
 use crate::theme::{self, Theme};
@@ -153,6 +156,14 @@ pub struct App {
     /// The spread the calculator holds. Outlives the card and the species,
     /// so one spread can be read off species after species.
     pub calculator: Calculator,
+    /// Whether the party was just copied, so the card can say so in place of
+    /// its key hint. Cleared by the next key, which is soon enough to have
+    /// been read and late enough not to flash.
+    pub team_copied: bool,
+    /// Text the event loop should hand the terminal for the clipboard. Kept
+    /// as state rather than written from the key handler, so the handler
+    /// stays a pure state change tests can drive without a terminal.
+    pub clipboard: Option<String>,
     /// Localized ability text, keyed by ability slug.
     pub abilities: HashMap<String, AbilityInfo>,
     /// Ability lookups in flight, so each is requested only once.
@@ -243,6 +254,8 @@ impl App {
             team_cursor: 0,
             stat_card: false,
             calculator: Calculator::default(),
+            team_copied: false,
+            clipboard: None,
             abilities: HashMap::new(),
             ability_loading: HashSet::new(),
             ability_card: false,
@@ -337,6 +350,16 @@ impl App {
                 _ = ticker.tick(), if animating => {
                     self.spinner = self.spinner.wrapping_add(1);
                 }
+            }
+
+            // Written between frames, where ratatui is not mid-way through
+            // its own output. A terminal that does not understand OSC 52
+            // ignores it, which is also why there is no error to report.
+            if let Some(text) = self.clipboard.take() {
+                let mut out = std::io::stdout();
+                let _ = out
+                    .write_all(clipboard::osc52(&text).as_bytes())
+                    .and_then(|()| out.flush());
             }
         }
 
@@ -936,10 +959,12 @@ impl App {
     fn open_team_card(&mut self) {
         self.team_cursor = 0;
         self.team_card = true;
+        self.team_copied = false;
     }
 
     fn handle_team_key(&mut self, key: KeyEvent) {
         let len = self.team.len();
+        self.team_copied = false;
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('p' | 'P' | 'q' | 'Q') => {
                 self.team_card = false;
@@ -951,8 +976,33 @@ impl App {
                 self.team_cursor = (self.team_cursor + 1) % len;
             }
             KeyCode::Char('c') | KeyCode::Char('C') => self.pin_or_compare_member(),
+            KeyCode::Char('e') | KeyCode::Char('E') => self.copy_team(),
             _ => {}
         }
+    }
+
+    /// Puts the party on the clipboard as a Showdown team, the same text
+    /// `--export-party` prints.
+    ///
+    /// A member whose record is still in flight is exported under its own
+    /// name, which is right for all but the handful of default forms PokeAPI
+    /// files under a suffix (`deoxys-normal`); waiting for it instead would
+    /// make the key do nothing for no visible reason.
+    fn copy_team(&mut self) {
+        if self.team.is_empty() {
+            return;
+        }
+        let slugs: Vec<&str> = self
+            .team
+            .iter()
+            .map(|name| {
+                self.details
+                    .get(name)
+                    .map_or(name.as_str(), showdown::export_slug)
+            })
+            .collect();
+        self.clipboard = Some(showdown::export(&slugs));
+        self.team_copied = true;
     }
 
     /// The comparison key on the party card, over the member under the
@@ -2010,6 +2060,46 @@ mod tests {
         app.details.clear();
         app.handle_event(Event::Key(press(KeyCode::Char('i'))));
         assert!(!app.stat_card);
+    }
+
+    #[test]
+    fn the_export_key_on_the_party_card_copies_a_showdown_team() {
+        let mut app = app_with_raichu();
+        app.details.insert(
+            "deoxys-normal".to_string(),
+            with_forms(
+                "deoxys-normal",
+                "deoxys",
+                &["deoxys-normal", "deoxys-attack"],
+            ),
+        );
+        app.team = vec![
+            "raichu-alola".to_string(),
+            "deoxys-normal".to_string(),
+            "mr-mime".to_string(), // still in flight: exported by its own name
+        ];
+        app.open_team_card();
+
+        app.handle_team_key(press(KeyCode::Char('e')));
+        assert_eq!(
+            app.clipboard.as_deref(),
+            Some("Raichu-Alola\n\nDeoxys\n\nMr. Mime\n")
+        );
+        assert!(app.team_copied);
+
+        // The confirmation lasts until the next key, and the card stays open.
+        app.handle_team_key(press(KeyCode::Down));
+        assert!(!app.team_copied);
+        assert!(app.team_card);
+    }
+
+    #[test]
+    fn an_empty_party_puts_nothing_on_the_clipboard() {
+        let mut app = app_with_raichu();
+        app.open_team_card();
+        app.handle_team_key(press(KeyCode::Char('e')));
+        assert_eq!(app.clipboard, None);
+        assert!(!app.team_copied);
     }
 
     #[test]

@@ -416,6 +416,13 @@ The party is picked up where it was left: it is written out on exit and
 restored on the next run, along with the language, the palette and the sort
 order. See [Session state](#session-state).
 
+`E` on the party card copies it as a [Pokémon Showdown](https://pokemonshowdown.com/)
+team, ready to paste into Showdown's teambuilder or any damage calculator, and
+[`--import-party`](#showdown-teams) brings a team from there back in. The copy
+goes through the terminal (OSC 52) rather than a clipboard library, so it works
+over SSH; under tmux it needs `set -g set-clipboard on`. Where a terminal
+ignores it, `pokeductor --export-party` prints the same text.
+
 ### Help
 
 Every binding in one place, grouped by where it applies:
@@ -469,6 +476,7 @@ no refetch:
 | | `F` · `Esc` | Close |
 | **Party card** | `↑` `↓` · `j` `k` | Move between members |
 | | `C` | Pin the member / compare two |
+| | `E` | Copy the party as a Showdown team |
 | | `P` · `Esc` | Close |
 | **Forms card** | `↑` `↓` · `j` `k` | Move between forms |
 | | `Enter` | Load the highlighted form |
@@ -532,6 +540,8 @@ Options:
       --theme <PALETTE>      Draw the interface in this palette [possible values: pico8, dmg]
       --json                 Print NAME as JSON and exit, instead of opening the interface
       --json-list <QUERY>    Print every species QUERY matches as JSON Lines and exit
+      --export-party         Print the saved party as a Pokemon Showdown team and exit
+      --import-party <FILE>  Replace the saved party with a Pokemon Showdown team and exit
       --clear-cache          Delete the on-disk cache and exit
       --cache-dir            Print the cache directory and exit
       --completions <SHELL>  Print a completion script for SHELL and exit [possible values: bash, elvish, fish, powershell, zsh]
@@ -574,6 +584,42 @@ $ pokeductor --cache-dir
 $ pokeductor --clear-cache
 Removed /home/you/.cache/pokeductor
 ```
+
+### Showdown teams
+
+`--export-party` prints the saved party in Pokémon Showdown's plain-text team
+format, which every team builder, damage calculator and battle simulator reads;
+`--import-party FILE` reads one (`-` for standard input) and makes it the saved
+party, which the interface opens with next time:
+
+```console
+$ pokeductor --export-party
+Raichu-Alola
+
+Deoxys
+
+Mr. Mime
+$ pokeductor --import-party team.txt
+Party set to raichu-alola, garchomp, indeedee-female
+```
+
+An export holds only species lines, since the party holds only species; the
+teambuilder fills in the rest. An import takes a full Showdown export as it
+is — nicknames, gender markers, items, abilities, EVs, natures and moves are
+read past rather than rejected — and keeps the species. Names are translated
+both ways between Showdown's spelling and PokeAPI's (`Mr. Mime` ↔ `mr-mime`,
+`Deoxys` ↔ `deoxys-normal`, `Indeedee-F` ↔ `indeedee-female`).
+
+A species that does not resolve, the same species twice, or a seventh set is
+an error naming the line, and leaves the saved party as it was:
+
+```console
+$ pokeductor --import-party team.txt
+Error: line 9: no species is called "Missingno"
+```
+
+Run it while the interface is closed: an open one writes its own party on exit,
+and the last to write wins.
 
 ### JSON output
 
@@ -701,6 +747,8 @@ through to disk.
 | `cli.rs` | Argument parsing, and the commands that answer without a terminal. |
 | `color.rs` | Terminal colour-depth detection, and the per-frame degradation pass. |
 | `session.rs` | Party and preferences carried over from the previous run. |
+| `showdown.rs` | The party in Pokémon Showdown's team format, both ways, and the name mapping between Showdown and PokeAPI. |
+| `clipboard.rs` | Copying text through the terminal with OSC 52. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`, `spe>=110`) parsing. |
 | `base_stats.rs` | Every entry's base stats, built in from a table `scripts/base-stats.py` generates. |
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |

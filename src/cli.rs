@@ -7,7 +7,10 @@
 //! what you reach for from a shell when something looks wrong, and until now
 //! they meant finding `$XDG_CACHE_HOME/pokeductor` by hand and guessing.
 //! `--json` is the other: the one way for a script to read what the app knows,
-//! which it cannot do through a terminal interface. `--completions` and the
+//! which it cannot do through a terminal interface. `--export-party` and
+//! `--import-party` carry the party to and from Showdown's team format, so a
+//! team can be pasted between tools without going through the interface.
+//! `--completions` and the
 //! hidden `--man` are for whoever installs it, so the shell and `man` know the
 //! flags below without anyone writing them out a second time.
 //!
@@ -16,7 +19,9 @@
 //! lines around them would make the surface less consistent, not more.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
 
 use clap::builder::PossibleValue;
 use clap::{CommandFactory, Parser, ValueEnum};
@@ -26,6 +31,8 @@ use crate::cache;
 use crate::color::Choice;
 use crate::i18n::Language;
 use crate::json;
+use crate::session;
+use crate::showdown;
 use crate::theme::Theme;
 
 /// A terminal Pokedex and evolution analyzer.
@@ -71,6 +78,19 @@ pub struct Cli {
         conflicts_with_all = ["name", "json", "lang", "color", "theme"]
     )]
     json_list: Option<String>,
+
+    /// Print the saved party as a Pokemon Showdown team and exit
+    #[arg(long, exclusive = true)]
+    export_party: bool,
+
+    /// Replace the saved party with a Pokemon Showdown team and exit
+    ///
+    /// FILE is a team as Showdown or any team builder exports it, or `-` for
+    /// standard input. Only species are kept; items, abilities, EVs and moves
+    /// are read past. A species that does not resolve, a repeat, or more than
+    /// six sets is an error naming the line, and leaves the party as it was.
+    #[arg(long, value_name = "FILE", exclusive = true)]
+    import_party: Option<PathBuf>,
 
     /// Delete the on-disk cache and exit
     #[arg(
@@ -139,6 +159,16 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         return Ok(Outcome::Handled);
     }
 
+    if cli.export_party {
+        export_party().await?;
+        return Ok(Outcome::Handled);
+    }
+
+    if let Some(path) = &cli.import_party {
+        import_party(path).await?;
+        return Ok(Outcome::Handled);
+    }
+
     if cli.cache_dir {
         println!("{}", cache_dir()?.display());
         return Ok(Outcome::Handled);
@@ -171,6 +201,62 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         theme: cli.theme,
         color: cli.color,
     }))
+}
+
+/// Prints the saved party as a Showdown team. An empty party prints nothing.
+///
+/// Each member's record is needed to tell a default form from an alternate
+/// one (see [`showdown::export_slug`]). The interface fetched them all when
+/// they joined, so this is normally answered from the cache.
+async fn export_party() -> anyhow::Result<()> {
+    let party = session::load().await.team;
+    if party.is_empty() {
+        return Ok(());
+    }
+    let client = crate::api::build_client()?;
+    let mut slugs = Vec::with_capacity(party.len());
+    for name in &party {
+        let (detail, _) = json::record(&client, name)
+            .await
+            .with_context(|| format!("could not fetch {name}"))?;
+        slugs.push(showdown::export_slug(&detail).to_string());
+    }
+    let slugs: Vec<&str> = slugs.iter().map(String::as_str).collect();
+    print(showdown::export(&slugs).as_bytes())?;
+    Ok(())
+}
+
+/// Reads a Showdown team from `path` (`-` for stdin) and makes it the saved
+/// party, keeping every other preference the session holds.
+///
+/// The session layer is best-effort and never reports a failed write, which is
+/// right for the interface but not here, where the write is the whole point:
+/// the file is read back, and a party that did not land is an error.
+async fn import_party(path: &Path) -> anyhow::Result<()> {
+    let text = if path == Path::new("-") {
+        std::io::read_to_string(std::io::stdin()).context("could not read standard input")?
+    } else {
+        tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("could not read {}", path.display()))?
+    };
+    let sets = showdown::parse(&text);
+    // Checked before the list is fetched, so a wrong file fails offline too.
+    if sets.is_empty() {
+        return Err(showdown::ImportError::Empty.into());
+    }
+    let client = crate::api::build_client()?;
+    let entries = json::list(&client).await?;
+    let party = showdown::resolve(&sets, &entries)?;
+
+    let mut stored = session::load().await;
+    stored.team = party.clone();
+    session::store(&stored).await;
+    if session::load().await.team != party {
+        anyhow::bail!("could not save the party: the session file was not written");
+    }
+    println!("Party set to {}", party.join(", "));
+    Ok(())
 }
 
 /// The completion script for `shell`, generated from the flags as defined.
@@ -446,6 +532,19 @@ mod tests {
         assert!(parse(&["--completions", "fish", "--man"]).is_err());
         assert!(parse(&["--man", "--lang", "tr"]).is_err());
         assert!(parse(&["--completions", "tcsh"]).is_err());
+    }
+
+    #[test]
+    fn the_party_commands_stand_alone() {
+        assert!(parse(&["--export-party"]).unwrap().export_party);
+        assert_eq!(
+            parse(&["--import-party", "-"]).unwrap().import_party,
+            Some(PathBuf::from("-"))
+        );
+        assert!(parse(&["--import-party"]).is_err());
+        assert!(parse(&["--export-party", "gengar"]).is_err());
+        assert!(parse(&["--export-party", "--import-party", "team.txt"]).is_err());
+        assert!(parse(&["--import-party", "team.txt", "--lang", "tr"]).is_err());
     }
 
     #[test]

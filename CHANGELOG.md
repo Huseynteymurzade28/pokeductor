@@ -48,6 +48,13 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   and each stat's final value by the games' own formula. The nature's raised
   and lowered stats are marked, and EVs past 252 in a stat or 510 in all are
   flagged rather than refused. It needs no network. (#53)
+- The party travels in Pokémon Showdown's team format. `--export-party` prints
+  it, `E` on the party card copies it to the clipboard through the terminal
+  (OSC 52, so it works over SSH), and `--import-party FILE` (or `-` for stdin)
+  replaces it with a team pasted from Showdown or any team builder. Only
+  species are kept; everything else in a set is read past. Names map both ways
+  (`Mr. Mime`, `Deoxys`, `Indeedee-F`), and a species that does not resolve, a
+  repeat, or a seventh set is an error naming the line. (#52)
 
 ## [0.6.0] - 2026-09-24
 
