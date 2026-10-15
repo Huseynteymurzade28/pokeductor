@@ -197,7 +197,7 @@ impl Drop for Progress {
 
 /// The master list, cache first. A stale list is refreshed, and still used if
 /// the refresh fails: a list a month old answers every species but the newest.
-async fn list(client: &reqwest::Client) -> anyhow::Result<Vec<PokemonEntry>> {
+pub(crate) async fn list(client: &reqwest::Client) -> anyhow::Result<Vec<PokemonEntry>> {
     let cached = cache::load_list().await;
     if let Some(cached) = &cached {
         if cached.fresh {
@@ -217,7 +217,7 @@ async fn list(client: &reqwest::Client) -> anyhow::Result<Vec<PokemonEntry>> {
 }
 
 /// A species' record, cache first, under the same key the TUI files it by.
-async fn record(
+pub(crate) async fn record(
     client: &reqwest::Client,
     name: &str,
 ) -> anyhow::Result<(PokemonDetail, EvolutionTree)> {

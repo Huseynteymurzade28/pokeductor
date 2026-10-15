@@ -1618,6 +1618,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("", h.ctx_party),
         ("↑ ↓ · j k", h.act_move),
         ("C", h.act_compare),
+        ("E", h.act_copy_team),
         ("", ""),
         ("", h.ctx_forms),
         ("↑ ↓ · j k", h.act_move),
@@ -2245,11 +2246,11 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
     frame.render_widget(Paragraph::new(lines), rows[0]);
 
-    let hint = Paragraph::new(Line::from(Span::styled(
-        s.team_close_hint,
-        Style::default().fg(theme::overlay()),
-    )))
-    .alignment(Alignment::Center);
+    let hint = match app.team_copied {
+        true => Span::styled(s.team_copied, Style::default().fg(theme::green())),
+        false => Span::styled(s.team_close_hint, Style::default().fg(theme::overlay())),
+    };
+    let hint = Paragraph::new(Line::from(hint)).alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
 }
 
@@ -3132,6 +3133,45 @@ mod tests {
             reversed, "‹  50 ›",
             "only the level, where the cursor opens"
         );
+    }
+
+    #[test]
+    fn the_help_card_lists_the_copy_key_without_pushing_anything_off() {
+        for language in Language::ALL {
+            let mut app = showing_gengar();
+            app.language = language;
+            app.help_card = true;
+            let h = &language.strings().help_card;
+            let frame = screen(&mut app, 120, 40);
+            // Quitting is the last row of the column the new binding joined.
+            for label in [h.act_copy_team, "Ctrl-C"] {
+                assert!(
+                    frame.contains(label),
+                    "{language:?} lacks {label:?}:\n{frame}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_party_card_names_the_copy_key_then_confirms_the_copy() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = showing_gengar();
+            app.language = language;
+            app.team = vec!["gengar".to_string()];
+            app.team_card = true;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(s.team_close_hint),
+                "{language:?} hint is cut off:\n{frame}"
+            );
+
+            app.team_copied = true;
+            let frame = screen(&mut app, 120, 40);
+            assert!(frame.contains(s.team_copied), "{language:?}:\n{frame}");
+            assert!(!frame.contains(s.team_close_hint));
+        }
     }
 
     #[test]
