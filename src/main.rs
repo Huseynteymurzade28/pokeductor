@@ -12,6 +12,7 @@
 //! - `query`   : search-box syntax (`type:`, `gen:`) parsing.
 //! - `retry`   : retry classification and backoff policy for network requests.
 //! - `session`: party and preferences carried over from the previous run.
+//! - `statcalc`: final stats from level, nature, IVs and EVs.
 //! - `typechart`: offline type-effectiveness chart.
 //! - `team`    : team-level type analysis built on top of it.
 //! - `app`     : state machine + `tokio::select!` event loop.
@@ -31,6 +32,7 @@ mod models;
 mod query;
 mod retry;
 mod session;
+mod statcalc;
 mod team;
 mod theme;
 mod typechart;

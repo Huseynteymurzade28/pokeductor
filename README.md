@@ -225,6 +225,44 @@ games the species appears in, named beside its own name so there is no doubt
 which. Level-up moves come first and in the order they are learned, then egg
 moves, then TMs and tutor moves alphabetically.
 
+### Stat calculator
+
+`I` opens a calculator over the species on display: what its base stats come
+to at a given level, nature, and IV and EV spread, by the formula the games
+use — every division truncated, in the games' order, so the numbers match the
+summary screen and Showdown to the point.
+
+```
+╔ Stat calculator ═════════════════════════════════════════════╗
+║ Garchomp                                                     ║
+║                                                              ║
+║ Level      ‹  50 ›                                           ║
+║ Nature     ‹ Jolly ›  ▲ Speed  ▼ Sp. Atk                     ║
+║                                                              ║
+║             Base    IV     EV   Stat                         ║
+║ HP           108    31     0    183                          ║
+║ Attack       130    31   252    182                          ║
+║ Defense       95    31     4    116                          ║
+║ Sp. Atk       80    31     0     90 ▼                        ║
+║ Sp. Def       85    31     0    105                          ║
+║ Speed        102    31   252    169 ▲                        ║
+║                                                              ║
+║ EV         508 / 510                                         ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+It opens on level 50, perfect IVs and no EVs. Arrows move between cells, and
+`←` `→` pick the nature on its row. Digits type a value in place, `+` and `-`
+step it (EVs in fours, since only every fourth one counts), Backspace takes a
+digit off, and `R` goes back to the defaults. The spread is kept while you
+move between species, so one spread can be read off several.
+
+An EV spread past 252 in a stat or 510 in all is flagged with a `!` rather than
+refused, so a spread from an older guide still computes. Shedinja's HP is 1
+whatever it is trained in. Nature names stay in English in every language, the
+way Showdown writes them. The base stats are on the record the info panel
+already shows, so the card needs no network.
+
 ### Evolution chains
 
 Chains are laid out as connected sprite cards, each stage labelled with what it
@@ -407,6 +445,7 @@ no refetch:
 | | `C` | Pin the species / compare two |
 | | `A` | Ability card |
 | | `M` | Moves card |
+| | `I` | Stat calculator |
 | | `V` | Alternate forms card |
 | | `X` | Toggle shiny artwork |
 | | `R` | Load a random species from the current filter |
@@ -434,6 +473,11 @@ no refetch:
 | **Forms card** | `↑` `↓` · `j` `k` | Move between forms |
 | | `Enter` | Load the highlighted form |
 | | `V` · `Esc` | Close |
+| **Stat calculator** | `↑` `↓` `←` `→` · `h` `j` `k` `l` | Move between cells; pick the nature |
+| | `0`–`9` · `Backspace` | Type a value in place |
+| | `+` `-` | Step the value (EVs by 4) |
+| | `R` | Back to level 50, 31 IVs, no EVs |
+| | `I` · `Esc` | Close |
 | **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
 | | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
 | | `M` · `Esc` | Close |
@@ -664,6 +708,7 @@ through to disk.
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
 | `typechart.rs` | Offline Generation VI+ type-effectiveness chart and matchup analysis. |
 | `team.rs` | Team-level type analysis built on top of the chart. |
+| `statcalc.rs` | Final stats from level, nature, IVs and EVs, and the calculator card's editing rules. |
 | `compare.rs` | Head-to-head arithmetic for two species: stat rows, winners, best same-type hit. |
 | `i18n.rs` | `Language` enum and translation tables for the six UI languages. |
 | `theme.rs` | The palettes — PICO-8 and Game Boy DMG — and the per-type accent colours. |

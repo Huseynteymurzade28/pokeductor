@@ -26,6 +26,7 @@ use crate::models::{
     Sprite, SpriteVariant,
 };
 use crate::session::{self, Session};
+use crate::statcalc::{self, Calculator};
 use crate::team;
 use crate::theme::{self, Theme};
 
@@ -147,6 +148,11 @@ pub struct App {
     /// Whether the team card is open, and which member it highlights.
     pub team_card: bool,
     pub team_cursor: usize,
+    /// Whether the stat calculator is open over the species on display.
+    pub stat_card: bool,
+    /// The spread the calculator holds. Outlives the card and the species,
+    /// so one spread can be read off species after species.
+    pub calculator: Calculator,
     /// Localized ability text, keyed by ability slug.
     pub abilities: HashMap<String, AbilityInfo>,
     /// Ability lookups in flight, so each is requested only once.
@@ -235,6 +241,8 @@ impl App {
             team_loading: HashSet::new(),
             team_card: false,
             team_cursor: 0,
+            stat_card: false,
+            calculator: Calculator::default(),
             abilities: HashMap::new(),
             ability_loading: HashSet::new(),
             ability_card: false,
@@ -835,6 +843,10 @@ impl App {
             self.handle_team_key(key);
             return;
         }
+        if self.stat_card {
+            self.handle_stat_key(key);
+            return;
+        }
         if self.forms_card {
             self.handle_forms_key(key);
             return;
@@ -1267,7 +1279,36 @@ impl App {
             KeyCode::Char('v') | KeyCode::Char('V') => self.open_forms(),
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
+            KeyCode::Char('i') | KeyCode::Char('I') => self.open_stat_card(),
             KeyCode::Char('?') => self.help_card = true,
+            _ => {}
+        }
+    }
+
+    /// Opens the stat calculator over the species on display. Its base stats
+    /// are on the record the info panel is already showing, so there is
+    /// nothing to fetch, and nothing to show until that record is in.
+    fn open_stat_card(&mut self) {
+        if self.selected_detail().and_then(statcalc::bases).is_some() {
+            self.stat_card = true;
+        }
+    }
+
+    /// The calculator's keys. Arrows move, digits and `+` `-` edit in place,
+    /// and the vim keys move too, since no field takes a letter.
+    fn handle_stat_key(&mut self, key: KeyEvent) {
+        let calc = &mut self.calculator;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('i' | 'I' | 'q' | 'Q') => self.stat_card = false,
+            KeyCode::Up | KeyCode::Char('k') => calc.move_row(-1),
+            KeyCode::Down | KeyCode::Char('j') => calc.move_row(1),
+            KeyCode::Left | KeyCode::Char('h') => calc.move_column(-1),
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => calc.move_column(1),
+            KeyCode::Char('+' | '=') => calc.step(1),
+            KeyCode::Char('-' | '_') => calc.step(-1),
+            KeyCode::Char(c @ '0'..='9') => calc.type_digit(c as u8 - b'0'),
+            KeyCode::Backspace => calc.backspace(),
+            KeyCode::Char('r' | 'R') => calc.reset(),
             _ => {}
         }
     }
@@ -1910,6 +1951,65 @@ mod tests {
         }
         assert!(app.show_species("raichu"));
         app
+    }
+
+    /// Garchomp, with the base stats the calculator reads.
+    fn app_with_garchomp() -> App {
+        let mut app = app_listing(&[(445, "garchomp")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        let stats = crate::compare::STAT_ORDER
+            .iter()
+            .zip([108, 130, 95, 80, 85, 102])
+            .map(|(&kind, base)| crate::models::Stat { kind, base })
+            .collect();
+        app.details.insert(
+            "garchomp".to_string(),
+            PokemonDetail {
+                stats,
+                ..loaded("garchomp")
+            },
+        );
+        assert!(app.show_species("garchomp"));
+        app
+    }
+
+    #[test]
+    fn the_stat_calculator_is_driven_from_the_keyboard() {
+        let mut app = app_with_garchomp();
+        app.handle_event(Event::Key(press(KeyCode::Char('i'))));
+        assert!(app.stat_card);
+
+        // Level 100, then down to Speed's EV, typed in.
+        for code in [
+            KeyCode::Char('1'),
+            KeyCode::Char('0'),
+            KeyCode::Char('0'),
+            KeyCode::Up,
+            KeyCode::Right,
+        ] {
+            app.handle_event(Event::Key(press(code)));
+        }
+        assert_eq!(app.calculator.level, 100);
+        assert_eq!(app.calculator.field(), statcalc::Field::Ev(5));
+        for code in [KeyCode::Char('2'), KeyCode::Char('5'), KeyCode::Char('2')] {
+            app.handle_event(Event::Key(press(code)));
+        }
+        assert_eq!(app.calculator.evs[5], 252);
+
+        // `q` closes the card rather than the app, and the spread is kept.
+        app.handle_event(Event::Key(press(KeyCode::Char('q'))));
+        assert!(!app.stat_card);
+        assert!(!app.should_quit);
+        assert_eq!(app.calculator.level, 100);
+    }
+
+    #[test]
+    fn the_stat_calculator_waits_for_a_record() {
+        let mut app = app_with_garchomp();
+        app.details.clear();
+        app.handle_event(Event::Key(press(KeyCode::Char('i'))));
+        assert!(!app.stat_card);
     }
 
     #[test]
