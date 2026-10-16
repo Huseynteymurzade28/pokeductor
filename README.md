@@ -45,8 +45,8 @@ than the machine it was built on. On ARM it is the only build. None of the Linux
 builds link a system OpenSSL.
 
 ```bash
-tar xzf pokeductor-v0.6.0-x86_64-unknown-linux-musl.tar.gz
-./pokeductor-v0.6.0-x86_64-unknown-linux-musl/pokeductor
+tar xzf pokeductor-v0.7.0-x86_64-unknown-linux-musl.tar.gz
+./pokeductor-v0.7.0-x86_64-unknown-linux-musl/pokeductor
 ```
 
 ### Shell completions and man page
@@ -1079,8 +1079,8 @@ they land. A release moves that section under its version number, bumps
 `Cargo.toml`, and is tagged:
 
 ```bash
-git tag -a v0.6.0 -m "v0.6.0"
-git push origin v0.6.0
+git tag -a v0.7.0 -m "v0.7.0"
+git push origin v0.7.0
 ```
 
 The tag is the only manual step. Pushing it runs `.github/workflows/release.yml`,

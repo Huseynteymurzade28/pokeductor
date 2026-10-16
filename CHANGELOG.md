@@ -10,6 +10,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-16
+
 ### Added
 
 - Favourites. `B` marks or unmarks the highlighted species, and `fav:` narrows
@@ -289,7 +291,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   Unicode half-blocks, evolution chains as connected cards, a language menu, and
   the retro colour palette.
 
-[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.3.1...v0.4.0
