@@ -55,6 +55,21 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   species are kept; everything else in a set is read past. Names map both ways
   (`Mr. Mime`, `Deoxys`, `Indeedee-F`), and a species that does not resolve, a
   repeat, or a seventh set is an error naming the line. (#52)
+- Type matchups for older games. `g` and `G` step the generation the matchup,
+  party and head-to-head cards read, from the list or from inside the cards,
+  and `--gen N` starts on one; the choice is kept in the session file. Each
+  generation uses its own chart (Generation I, II–V or VI onwards), leaves out
+  the types it did not have, reads each species as it was typed then (Clefairy
+  is Normal before Generation VI, Magnemite pure Electric in Generation I), and
+  has no ability immunities before Generation III. A species the generation did
+  not have is said to be absent rather than given an answer, and every card
+  names the generation in its title. (#57)
+
+### Changed
+
+- The cache format changed to carry past typings. Every cached record is
+  version-stamped, so the first run after upgrading reads the old cache as
+  empty and fetches what it shows again; nothing needs clearing by hand.
 
 ## [0.6.0] - 2026-09-24
 

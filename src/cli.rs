@@ -34,6 +34,7 @@ use crate::json;
 use crate::session;
 use crate::showdown;
 use crate::theme::Theme;
+use crate::typechart::{Generation, LATEST_GENERATION};
 
 /// A terminal Pokedex and evolution analyzer.
 #[derive(Debug, Parser)]
@@ -59,11 +60,20 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "PALETTE")]
     theme: Option<Theme>,
 
+    /// Read type matchups by generation N's rules, 1 to 9
+    ///
+    /// The matchup, party and head-to-head cards then use that generation's
+    /// type chart and each species' typing in those games: `--gen 1` has no
+    /// Steel, Dark or Fairy, and Ghost does nothing to Psychic. Defaults to
+    /// whatever the last run left, and to the newest generation before that.
+    #[arg(long = "gen", value_name = "N", value_parser = parse_generation)]
+    generation: Option<Generation>,
+
     /// Print NAME as JSON and exit, instead of opening the interface
     ///
     /// NAME must come down to one species: an exact name, a Pokedex number,
     /// or a fragment only one name contains. Anything else exits non-zero.
-    #[arg(long, requires = "name", conflicts_with_all = ["lang", "color", "theme"])]
+    #[arg(long, requires = "name", conflicts_with_all = ["lang", "color", "theme", "generation"])]
     json: bool,
 
     /// Print every species QUERY matches as JSON Lines and exit
@@ -75,7 +85,7 @@ pub struct Cli {
     #[arg(
         long,
         value_name = "QUERY",
-        conflicts_with_all = ["name", "json", "lang", "color", "theme"]
+        conflicts_with_all = ["name", "json", "lang", "color", "theme", "generation"]
     )]
     json_list: Option<String>,
 
@@ -95,12 +105,17 @@ pub struct Cli {
     /// Delete the on-disk cache and exit
     #[arg(
         long,
-        conflicts_with_all = ["name", "lang", "color", "theme", "cache_dir", "json", "json_list"]
+        conflicts_with_all = [
+            "name", "lang", "color", "theme", "generation", "cache_dir", "json", "json_list"
+        ]
     )]
     clear_cache: bool,
 
     /// Print the cache directory and exit
-    #[arg(long, conflicts_with_all = ["name", "lang", "color", "theme", "json", "json_list"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["name", "lang", "color", "theme", "generation", "json", "json_list"]
+    )]
     cache_dir: bool,
 
     /// Print a completion script for SHELL and exit
@@ -124,6 +139,9 @@ pub struct Startup {
     pub species: Option<String>,
     /// Palette to draw in, or `None` for whatever the previous session left.
     pub theme: Option<Theme>,
+    /// Generation whose type rules the cards read, or `None` for whatever the
+    /// previous session left.
+    pub generation: Option<Generation>,
     /// Colour depth to force, or [`Choice::Auto`] to work it out from the
     /// environment. Unlike the other two this is never `None`: "detect it"
     /// is itself one of the answers rather than the absence of one.
@@ -199,6 +217,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         language: cli.lang,
         species: cli.name,
         theme: cli.theme,
+        generation: cli.generation,
         color: cli.color,
     }))
 }
@@ -342,6 +361,16 @@ impl ValueEnum for Language {
     }
 }
 
+/// Reads `--gen`'s value. A number rather than an enum of nine names, because
+/// a number is how everyone already says it.
+fn parse_generation(value: &str) -> Result<Generation, String> {
+    value
+        .parse()
+        .ok()
+        .and_then(Generation::new)
+        .ok_or_else(|| format!("expected a generation from 1 to {LATEST_GENERATION}"))
+}
+
 /// Accepted `--theme` values come from [`Theme::ALL`] and the codes sessions
 /// are already stored with, so a third palette becomes a valid flag value by
 /// existing, exactly as a seventh language would.
@@ -373,6 +402,26 @@ mod tests {
         let cli = parse(&[]).expect("no arguments is valid");
         assert_eq!(cli.name, None);
         assert_eq!(cli.lang, None);
+    }
+
+    #[test]
+    fn a_generation_can_be_named_on_the_command_line() {
+        assert_eq!(
+            parse(&["--gen", "1"]).unwrap().generation,
+            Generation::new(1)
+        );
+        assert_eq!(
+            parse(&["--gen", "9"]).unwrap().generation,
+            Some(Generation::LATEST)
+        );
+        // Out of range, or not a number at all, is a usage error rather than
+        // a quiet fallback to the newest chart.
+        for bad in ["0", "10", "iv", "-1"] {
+            assert!(parse(&["--gen", bad]).is_err(), "--gen {bad}");
+        }
+        assert_eq!(parse(&[]).unwrap().generation, None);
+        // It shapes the interface, so it has no business beside --json.
+        assert!(parse(&["--json", "gengar", "--gen", "1"]).is_err());
     }
 
     #[test]

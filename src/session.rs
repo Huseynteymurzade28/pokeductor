@@ -59,6 +59,12 @@ pub struct Session {
     /// version bump: a file from before favourites reads as having none.
     #[serde(default)]
     pub favourites: Vec<String>,
+    /// Generation whose type rules the cards read, as its number, or `None`
+    /// for the newest. Stored only when it is not the newest, so a run that
+    /// never changed it keeps following the newest when a tenth arrives.
+    /// Added without a version bump, like favourites.
+    #[serde(default)]
+    pub generation: Option<u8>,
 }
 
 impl Session {
@@ -185,6 +191,7 @@ mod tests {
             theme: Some("dmg".into()),
             shiny: true,
             favourites: vec!["gengar".into(), "mew".into()],
+            generation: Some(1),
         };
         let bytes = encode(&session).expect("encode");
         assert_eq!(decode(&bytes), session);
@@ -215,6 +222,7 @@ mod tests {
             session.favourites.is_empty(),
             "a file from before favourites"
         );
+        assert_eq!(session.generation, None, "a file from before generations");
     }
 
     #[test]

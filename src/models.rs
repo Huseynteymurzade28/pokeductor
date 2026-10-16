@@ -9,6 +9,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::typechart::Generation;
+
 /// A single entry in the master Pokemon list shown in the sidebar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PokemonEntry {
@@ -34,12 +36,16 @@ impl PokemonEntry {
     /// says nothing about the species they belong to, and resolving that would
     /// cost a request per form.
     pub fn generation(&self) -> Option<u8> {
-        let dex = self.dex_number()?;
-        GENERATION_RANGES
-            .iter()
-            .position(|&last| dex <= last)
-            .map(|idx| idx as u8 + 1)
+        generation_of(self.dex_number()?)
     }
+}
+
+/// The generation a national dex number belongs to, if it is one.
+fn generation_of(dex: u32) -> Option<u8> {
+    GENERATION_RANGES
+        .iter()
+        .position(|&last| (1..=last).contains(&dex))
+        .map(|idx| idx as u8 + 1)
 }
 
 /// A property of a species that the master list cannot answer on its own.
@@ -330,6 +336,11 @@ pub struct PokemonDetail {
     pub is_mythical: bool,
     pub is_baby: bool,
     pub types: Vec<String>,
+    /// The typings this Pokemon had before [`types`](Self::types), oldest
+    /// first. Most have none; Clefairy was Normal until Fairy arrived, and
+    /// Magnemite was pure Electric in Generation I. Read through
+    /// [`types_in`](Self::types_in).
+    pub past_types: Vec<PastTyping>,
     /// Every ability the species can have, in PokeAPI slot order.
     pub abilities: Vec<Ability>,
     pub stats: Vec<Stat>,
@@ -445,7 +456,45 @@ pub fn egg_group_label(slug: &str) -> String {
     }
 }
 
+/// A typing a Pokemon used to have: the one it carried in every generation up
+/// to and including `until`, back to where the entry before it ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PastTyping {
+    pub until: u8,
+    pub types: Vec<String>,
+}
+
 impl PokemonDetail {
+    /// The typing this Pokemon had in `generation`'s games.
+    ///
+    /// The first past typing that lasted at least that long, or the current
+    /// one if every change predates it. Rotom-Wash shows why it cannot be
+    /// worked out from the chart alone: Electric/Ghost through Generation IV,
+    /// Electric/Water from Generation V, all under the same chart.
+    pub fn types_in(&self, generation: Generation) -> &[String] {
+        self.past_types
+            .iter()
+            .find(|past| past.until >= generation.number())
+            .map_or(&self.types, |past| &past.types)
+    }
+
+    /// Which generation introduced this species, from its national dex number.
+    ///
+    /// For an alternate form this is the species' generation, not the form's:
+    /// Alolan Raichu reads as Generation I. Nothing the record carries says
+    /// when a form arrived, and the regional ones did not exist before
+    /// Generation VII.
+    pub fn introduced_in(&self) -> Option<u8> {
+        generation_of(self.dex_number)
+    }
+
+    /// Whether the species was in `generation`'s games at all. A record with no
+    /// usable dex number is given the benefit of the doubt.
+    pub fn exists_in(&self, generation: Generation) -> bool {
+        self.introduced_in()
+            .is_none_or(|introduced| introduced <= generation.number())
+    }
+
     /// Sum of all base stats — a common "power level" heuristic.
     pub fn stat_total(&self) -> u32 {
         self.stats.iter().map(|s| s.base as u32).sum()
@@ -847,6 +896,7 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            past_types: Vec::new(),
             field: FieldData::default(),
         }
     }

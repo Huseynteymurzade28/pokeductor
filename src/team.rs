@@ -18,7 +18,7 @@
 use std::cmp::Reverse;
 
 use crate::models::PokemonDetail;
-use crate::typechart::{self, TYPES};
+use crate::typechart::{self, Generation};
 
 /// Largest party the analyser accepts, matching the games.
 pub const MAX_MEMBERS: usize = 6;
@@ -97,17 +97,24 @@ pub struct TeamAnalysis {
     /// Immunities the members' abilities grant, which the type chart cannot
     /// see. Reported alongside the lists above rather than folded into them.
     pub ability_immunities: Vec<AbilityImmunity>,
+    /// Members left out of every list above because their species was not in
+    /// the generation's games, as raw API names in party order.
+    pub absent: Vec<String>,
 }
 
-/// The immunities `species` owes to its abilities, in the order PokeAPI lists
-/// them. A species whose abilities grant none yields an empty list.
+/// The immunities `species` owes to its abilities in `generation`'s games, in
+/// the order PokeAPI lists them. A species whose abilities grant none yields an
+/// empty list, and so does every species before abilities existed.
 ///
 /// Both cards read the table through this one function on purpose. They used
 /// to answer "what is this immune to?" separately, and only the team card knew
 /// abilities existed, so the card that was *about* one species was the less
 /// accurate of the two. One mapping is what keeps them from drifting apart
 /// again.
-pub fn ability_immunities(species: &PokemonDetail) -> Vec<AbilityImmunity> {
+pub fn ability_immunities(species: &PokemonDetail, generation: Generation) -> Vec<AbilityImmunity> {
+    if !generation.has_abilities() {
+        return Vec::new();
+    }
     // Certain only when the species has nowhere else to land: with one
     // possible ability it must have this one.
     let certain = species.abilities.len() == 1;
@@ -125,18 +132,34 @@ pub fn ability_immunities(species: &PokemonDetail) -> Vec<AbilityImmunity> {
         .collect()
 }
 
-/// Analyses a party. An empty team yields an empty analysis rather than
+/// Analyses a party under `generation`'s chart, reading each member as it was
+/// typed in those games. An empty team yields an empty analysis rather than
 /// "weak to everything": with nothing to defend, there is nothing to report.
-pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
+///
+/// A member whose species was not in those games is left out and named in
+/// [`TeamAnalysis::absent`]. Reading it anyway would mean inventing a typing
+/// for it, and Sylveon under Generation I has none to invent.
+pub fn analyse(party: &[&PokemonDetail], generation: Generation) -> TeamAnalysis {
+    let (team, absent): (Vec<&PokemonDetail>, Vec<&PokemonDetail>) = party
+        .iter()
+        .copied()
+        .partition(|member| member.exists_in(generation));
+    let absent: Vec<String> = absent.iter().map(|member| member.name.clone()).collect();
     if team.is_empty() {
-        return TeamAnalysis::default();
+        return TeamAnalysis {
+            absent,
+            ..TeamAnalysis::default()
+        };
     }
 
+    let chart = generation.chart();
     let mut shared_weaknesses = Vec::new();
     let mut unresisted = Vec::new();
 
-    for attacker in TYPES {
-        let multipliers = team.iter().map(|m| typechart::combined(attacker, &m.types));
+    for &attacker in chart.types() {
+        let multipliers = team
+            .iter()
+            .map(|m| typechart::combined(chart, attacker, m.types_in(generation)));
 
         let mut weak = 0;
         let mut resisted_by_anyone = false;
@@ -162,14 +185,16 @@ pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
     // Stable, so types sharing a count keep canonical order.
     shared_weaknesses.sort_by_key(|row| Reverse(row.weak));
 
-    let offense_gaps = TYPES
-        .into_iter()
+    let offense_gaps = chart
+        .types()
+        .iter()
+        .copied()
         .filter(|defender| {
             !team.iter().any(|member| {
                 member
-                    .types
+                    .types_in(generation)
                     .iter()
-                    .any(|attacker| typechart::effectiveness(attacker, defender) > 1.5)
+                    .any(|attacker| chart.effectiveness(attacker, defender) > 1.5)
             })
         })
         .collect();
@@ -180,7 +205,7 @@ pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
     let ability_immunities = team
         .iter()
         .copied()
-        .flat_map(self::ability_immunities)
+        .flat_map(|member| self::ability_immunities(member, generation))
         .collect();
 
     TeamAnalysis {
@@ -188,14 +213,22 @@ pub fn analyse(team: &[&PokemonDetail]) -> TeamAnalysis {
         unresisted,
         offense_gaps,
         ability_immunities,
+        absent,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Ability, FieldData};
+    use crate::models::{Ability, FieldData, PastTyping};
+    use crate::typechart::Chart;
     use std::collections::HashMap;
+
+    const LATEST: Generation = Generation::LATEST;
+
+    fn gen(number: u8) -> Generation {
+        Generation::new(number).unwrap()
+    }
 
     fn member(name: &str, types: &[&str]) -> PokemonDetail {
         with_abilities(name, types, &[])
@@ -227,6 +260,7 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            past_types: Vec::new(),
             field: FieldData::default(),
         }
     }
@@ -241,13 +275,13 @@ mod tests {
 
     #[test]
     fn an_empty_team_reports_nothing() {
-        assert_eq!(analyse(&[]), TeamAnalysis::default());
+        assert_eq!(analyse(&[], LATEST), TeamAnalysis::default());
     }
 
     #[test]
     fn one_members_weakness_is_not_shared() {
         let charizard = member("charizard", &["fire", "flying"]);
-        let analysis = analyse(&[&charizard]);
+        let analysis = analyse(&[&charizard], LATEST);
         // Rock is ×4 on Charizard, but a party of one has nothing to share it
         // with, so it is that member's problem and not the team's.
         assert!(analysis.shared_weaknesses.is_empty());
@@ -258,7 +292,7 @@ mod tests {
         // Both are hit ×2 by Electric and neither resists it.
         let gyarados = member("gyarados", &["water", "flying"]);
         let pelipper = member("pelipper", &["water", "flying"]);
-        let analysis = analyse(&[&gyarados, &pelipper]);
+        let analysis = analyse(&[&gyarados, &pelipper], LATEST);
 
         assert_eq!(weakness_count(&analysis, "electric"), 2);
         assert!(analysis.unresisted.contains(&"electric"));
@@ -274,7 +308,7 @@ mod tests {
             .map(|n| member(n, &["water", "flying"]))
             .collect();
         let refs: Vec<&PokemonDetail> = team.iter().collect();
-        let analysis = analyse(&refs);
+        let analysis = analyse(&refs, LATEST);
 
         let counts: Vec<usize> = analysis.shared_weaknesses.iter().map(|r| r.weak).collect();
         let mut sorted = counts.clone();
@@ -287,7 +321,7 @@ mod tests {
     fn a_type_someone_resists_is_not_unresisted() {
         let magnezone = member("magnezone", &["electric", "steel"]);
         let gyarados = member("gyarados", &["water", "flying"]);
-        let analysis = analyse(&[&magnezone, &gyarados]);
+        let analysis = analyse(&[&magnezone, &gyarados], LATEST);
 
         // Magnezone resists Electric (Steel ×½ · Electric ×½), so the team has
         // an answer to it even though Gyarados is weak.
@@ -299,7 +333,7 @@ mod tests {
     #[test]
     fn offense_gaps_are_what_nobody_hits_hard() {
         let charizard = member("charizard", &["fire", "flying"]);
-        let analysis = analyse(&[&charizard]);
+        let analysis = analyse(&[&charizard], LATEST);
 
         // Fire hits Grass/Ice/Bug/Steel; Flying hits Grass/Fighting/Bug.
         for covered in ["grass", "ice", "bug", "steel", "fighting"] {
@@ -317,7 +351,7 @@ mod tests {
     fn a_sole_ability_grants_a_certain_immunity() {
         // Rotom has nothing but Levitate, so the Ground immunity is a fact.
         let rotom = with_abilities("rotom", &["electric", "ghost"], &["levitate"]);
-        let analysis = analyse(&[&rotom]);
+        let analysis = analyse(&[&rotom], LATEST);
 
         assert_eq!(
             analysis.ability_immunities,
@@ -334,7 +368,7 @@ mod tests {
     fn one_of_several_abilities_is_only_a_possibility() {
         // Vaporeon can have Water Absorb — or Hydration instead.
         let vaporeon = with_abilities("vaporeon", &["water"], &["water-absorb", "hydration"]);
-        let analysis = analyse(&[&vaporeon]);
+        let analysis = analyse(&[&vaporeon], LATEST);
 
         assert_eq!(analysis.ability_immunities.len(), 1);
         assert_eq!(analysis.ability_immunities[0].immune_to, "water");
@@ -344,7 +378,7 @@ mod tests {
     #[test]
     fn abilities_that_grant_no_immunity_are_ignored() {
         let bulbasaur = with_abilities("bulbasaur", &["grass"], &["overgrow", "chlorophyll"]);
-        let analysis = analyse(&[&bulbasaur]);
+        let analysis = analyse(&[&bulbasaur], LATEST);
         assert!(analysis.ability_immunities.is_empty());
     }
 
@@ -353,7 +387,7 @@ mod tests {
         // Levitate answers Ground, but the chart-level lists stay chart-level:
         // Gengar's typing alone still has no Ground resistance to report.
         let levitator = with_abilities("gengar", &["ghost", "poison"], &["levitate"]);
-        let analysis = analyse(&[&levitator]);
+        let analysis = analyse(&[&levitator], LATEST);
 
         assert!(analysis.unresisted.contains(&"ground"));
         assert_eq!(analysis.ability_immunities[0].immune_to, "ground");
@@ -366,8 +400,8 @@ mod tests {
         // the very same Rotom.
         let rotom = with_abilities("rotom", &["electric", "ghost"], &["levitate"]);
         assert_eq!(
-            ability_immunities(&rotom),
-            analyse(&[&rotom]).ability_immunities
+            ability_immunities(&rotom, LATEST),
+            analyse(&[&rotom], LATEST).ability_immunities
         );
     }
 
@@ -376,12 +410,12 @@ mod tests {
         // What the `T` card draws: the certain immunities, folded into the
         // rows, leave nothing claiming Ground still lands on Rotom.
         let rotom = with_abilities("rotom", &["electric", "ghost"], &["levitate"]);
-        let certain: Vec<&str> = ability_immunities(&rotom)
+        let certain: Vec<&str> = ability_immunities(&rotom, LATEST)
             .iter()
             .filter(|immunity| immunity.certain)
             .map(|immunity| immunity.immune_to)
             .collect();
-        let groups = typechart::defensive_groups(&rotom.types, &certain);
+        let groups = typechart::defensive_groups(Chart::Gen6On, &rotom.types, &certain);
 
         for group in &groups {
             assert_eq!(
@@ -397,7 +431,7 @@ mod tests {
         // Vaporeon might have Hydration instead, so the chart keeps its say:
         // Water stays where the typing puts it, and the card annotates it.
         let vaporeon = with_abilities("vaporeon", &["water"], &["water-absorb", "hydration"]);
-        let certain: Vec<&str> = ability_immunities(&vaporeon)
+        let certain: Vec<&str> = ability_immunities(&vaporeon, LATEST)
             .iter()
             .filter(|immunity| immunity.certain)
             .map(|immunity| immunity.immune_to)
@@ -405,11 +439,11 @@ mod tests {
 
         assert!(certain.is_empty());
         assert_eq!(
-            typechart::defensive_groups(&vaporeon.types, &certain)
+            typechart::defensive_groups(Chart::Gen6On, &vaporeon.types, &certain)
                 .iter()
                 .map(|g| (g.label, g.types.clone()))
                 .collect::<Vec<_>>(),
-            typechart::defensive_groups(&vaporeon.types, &[])
+            typechart::defensive_groups(Chart::Gen6On, &vaporeon.types, &[])
                 .iter()
                 .map(|g| (g.label, g.types.clone()))
                 .collect::<Vec<_>>()
@@ -427,7 +461,7 @@ mod tests {
             member("machamp", &["fighting"]),
         ];
         let refs: Vec<&PokemonDetail> = team.iter().collect();
-        let analysis = analyse(&refs);
+        let analysis = analyse(&refs, LATEST);
 
         assert_eq!(refs.len(), MAX_MEMBERS);
         // Six well-spread typings should leave few types untouched offensively.
@@ -436,5 +470,119 @@ mod tests {
             "unexpected gaps: {:?}",
             analysis.offense_gaps
         );
+    }
+
+    /// A member with its national dex number and the typings it used to have.
+    fn historical(name: &str, dex: u32, types: &[&str], past: &[(u8, &[&str])]) -> PokemonDetail {
+        PokemonDetail {
+            dex_number: dex,
+            past_types: past
+                .iter()
+                .map(|&(until, types)| PastTyping {
+                    until,
+                    types: types.iter().map(|t| t.to_string()).collect(),
+                })
+                .collect(),
+            ..member(name, types)
+        }
+    }
+
+    #[test]
+    fn a_generation_one_party_gets_the_generation_one_answer() {
+        // Two Poison types. Bug was super effective on Poison until Gold and
+        // Silver, and resisted by it since.
+        let arbok = historical("arbok", 24, &["poison"], &[]);
+        let muk = historical("muk", 89, &["poison"], &[]);
+
+        let then = analyse(&[&arbok, &muk], gen(1));
+        assert_eq!(weakness_count(&then, "bug"), 2);
+        assert!(then.unresisted.contains(&"bug"));
+
+        let now = analyse(&[&arbok, &muk], LATEST);
+        assert_eq!(weakness_count(&now, "bug"), 0);
+        assert!(!now.unresisted.contains(&"bug"));
+    }
+
+    #[test]
+    fn no_type_the_generation_lacks_appears_anywhere() {
+        let gengar = historical("gengar", 94, &["ghost", "poison"], &[]);
+        let analysis = analyse(&[&gengar], gen(1));
+        let listed = analysis
+            .unresisted
+            .iter()
+            .chain(&analysis.offense_gaps)
+            .chain(analysis.shared_weaknesses.iter().map(|row| &row.attacker));
+        for slug in listed {
+            assert!(Chart::Gen1.has(slug), "{slug} is not a Generation I type");
+        }
+    }
+
+    #[test]
+    fn past_typings_are_applied() {
+        let clefairy = historical("clefairy", 35, &["fairy"], &[(5, &["normal"])]);
+        let magnemite = historical(
+            "magnemite",
+            81,
+            &["electric", "steel"],
+            &[(1, &["electric"])],
+        );
+
+        // Normal until Generation V, so Fighting hit it and Dragon did not
+        // bounce off.
+        assert_eq!(clefairy.types_in(gen(5)), ["normal"]);
+        assert_eq!(clefairy.types_in(gen(6)), ["fairy"]);
+        let then = analyse(&[&clefairy, &clefairy], gen(5));
+        assert_eq!(weakness_count(&then, "fighting"), 2);
+
+        // Steel arrived with Generation II, and Magnemite with it.
+        assert_eq!(magnemite.types_in(gen(1)), ["electric"]);
+        assert_eq!(magnemite.types_in(gen(2)), ["electric", "steel"]);
+        let then = analyse(&[&magnemite, &magnemite], gen(1));
+        assert_eq!(weakness_count(&then, "ground"), 2);
+        assert!(then.unresisted.contains(&"poison"), "no Steel to stop it");
+    }
+
+    #[test]
+    fn the_earliest_past_typing_that_still_applies_wins() {
+        // A made-up history with two changes, to pin down the ordering.
+        let shifty = historical(
+            "shifty",
+            1,
+            &["dragon"],
+            &[(2, &["normal"]), (4, &["water"])],
+        );
+        assert_eq!(shifty.types_in(gen(1)), ["normal"]);
+        assert_eq!(shifty.types_in(gen(2)), ["normal"]);
+        assert_eq!(shifty.types_in(gen(3)), ["water"]);
+        assert_eq!(shifty.types_in(gen(5)), ["dragon"]);
+    }
+
+    #[test]
+    fn a_member_from_a_later_generation_is_left_out_and_named() {
+        let sylveon = historical("sylveon", 700, &["fairy"], &[]);
+        let arbok = historical("arbok", 24, &["poison"], &[]);
+
+        let analysis = analyse(&[&sylveon, &arbok], gen(1));
+        assert_eq!(analysis.absent, ["sylveon"]);
+        assert_eq!(analysis, {
+            let alone = analyse(&[&arbok], gen(1));
+            TeamAnalysis {
+                absent: vec!["sylveon".to_string()],
+                ..alone
+            }
+        });
+
+        let only_sylveon = analyse(&[&sylveon], gen(1));
+        assert_eq!(only_sylveon.absent, ["sylveon"]);
+        assert!(only_sylveon.unresisted.is_empty());
+
+        assert!(analyse(&[&sylveon, &arbok], gen(6)).absent.is_empty());
+    }
+
+    #[test]
+    fn there_are_no_ability_immunities_before_abilities_existed() {
+        let gengar = with_abilities("gengar", &["ghost", "poison"], &["levitate"]);
+        assert!(ability_immunities(&gengar, gen(2)).is_empty());
+        assert_eq!(ability_immunities(&gengar, gen(3)).len(), 1);
     }
 }

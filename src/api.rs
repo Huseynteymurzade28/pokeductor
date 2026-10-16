@@ -12,8 +12,8 @@ use tokio::sync::Semaphore;
 
 use crate::models::{
     Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, FieldData,
-    LearnMethod, LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterKind, RosterTerm,
-    Sprite, SpriteVariant, Stat, StatKind,
+    LearnMethod, LearnedMove, MoveInfo, PastTyping, PokemonDetail, PokemonEntry, RosterKind,
+    RosterTerm, Sprite, SpriteVariant, Stat, StatKind,
 };
 use crate::retry::{self, FailureKind};
 
@@ -347,6 +347,32 @@ fn id_from_url(url: &str) -> u32 {
         .unwrap_or(0)
 }
 
+/// The typings a Pokemon had before its current one, oldest first, each in
+/// slot order.
+///
+/// PokeAPI names the last generation each typing lasted through, by a
+/// resource whose URL carries the generation's number. An entry whose
+/// generation cannot be read is dropped: placed anywhere, it would answer for
+/// generations it may never have applied to.
+fn past_typings(raw: Vec<RawPastTypes>) -> Vec<PastTyping> {
+    let mut past: Vec<PastTyping> = raw
+        .into_iter()
+        .filter_map(|entry| {
+            let until = u8::try_from(id_from_url(&entry.generation.url))
+                .ok()
+                .filter(|&n| n > 0)?;
+            let mut types = entry.types;
+            types.sort_by_key(|t| t.slot);
+            Some(PastTyping {
+                until,
+                types: types.into_iter().map(|t| t.type_.name).collect(),
+            })
+        })
+        .collect();
+    past.sort_by_key(|entry| entry.until);
+    past
+}
+
 /// Fetches everything needed to display a Pokemon: its details and its parsed
 /// evolution tree. Performed as one logical unit so the UI receives a complete
 /// payload in a single message.
@@ -493,6 +519,8 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         .collect();
     types.sort_by_key(|(slot, _)| *slot);
 
+    let past_types = past_typings(raw.past_types);
+
     let mut abilities: Vec<(u8, Ability)> = raw
         .abilities
         .into_iter()
@@ -533,6 +561,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         is_mythical: false,
         is_baby: false,
         types: types.into_iter().map(|(_, name)| name).collect(),
+        past_types,
         abilities: abilities.into_iter().map(|(_, ability)| ability).collect(),
         stats,
         height: raw.height,
@@ -798,6 +827,8 @@ struct RawPokemon {
     weight: u32,
     types: Vec<RawTypeSlot>,
     #[serde(default)]
+    past_types: Vec<RawPastTypes>,
+    #[serde(default)]
     abilities: Vec<RawAbilitySlot>,
     stats: Vec<RawStatSlot>,
     sprites: RawSprites,
@@ -850,6 +881,12 @@ struct RawTypeSlot {
     slot: u8,
     #[serde(rename = "type")]
     type_: NamedResource,
+}
+
+#[derive(serde::Deserialize)]
+struct RawPastTypes {
+    generation: NamedResource,
+    types: Vec<RawTypeSlot>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1012,6 +1049,15 @@ mod tests {
             .iter()
             .any(|m| m.method == LearnMethod::LevelUp && m.level > 0));
 
+        // The type cards read older typings off the same record. Clefairy's is
+        // the one every reference cites.
+        let (clefairy, _, _) = fetch_pokemon_bundle(&client, "clefairy", SpriteVariant::Normal)
+            .await
+            .expect("bundle fetch");
+        let gen = |n| crate::typechart::Generation::new(n).unwrap();
+        assert_eq!(clefairy.types_in(gen(5)), ["normal"]);
+        assert_eq!(clefairy.types_in(gen(6)), ["fairy"]);
+
         let shadow_ball = fetch_move(&client, "shadow-ball")
             .await
             .expect("move fetch");
@@ -1171,6 +1217,46 @@ mod tests {
 
     /// Parses just the `varieties` list out of a `/pokemon-species` payload,
     /// which is all `default_variety_name` and `variety_names` read.
+    fn past(json: &str) -> Vec<PastTyping> {
+        past_typings(serde_json::from_str(json).expect("valid past_types"))
+    }
+
+    #[test]
+    fn past_typings_are_read_oldest_first_in_slot_order() {
+        // Shaped as PokeAPI sends them, and deliberately out of order.
+        let typings = past(
+            r#"[
+                {"generation": {"name": "generation-v", "url": "https://pokeapi.co/api/v2/generation/5/"},
+                 "types": [{"slot": 2, "type": {"name": "flying", "url": ""}},
+                           {"slot": 1, "type": {"name": "normal", "url": ""}}]},
+                {"generation": {"name": "generation-i", "url": "https://pokeapi.co/api/v2/generation/1/"},
+                 "types": [{"slot": 1, "type": {"name": "electric", "url": ""}}]}
+            ]"#,
+        );
+        assert_eq!(
+            typings,
+            [
+                PastTyping {
+                    until: 1,
+                    types: vec!["electric".to_string()],
+                },
+                PastTyping {
+                    until: 5,
+                    types: vec!["normal".to_string(), "flying".to_string()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_past_typing_whose_generation_cannot_be_read_is_dropped() {
+        let typings = past(
+            r#"[{"generation": {"name": "generation-v", "url": ""},
+                 "types": [{"slot": 1, "type": {"name": "normal", "url": ""}}]}]"#,
+        );
+        assert!(typings.is_empty());
+    }
+
     fn varieties(json: &str) -> Vec<RawVariety> {
         serde_json::from_str::<RawSpecies>(json)
             .expect("species payload parses")

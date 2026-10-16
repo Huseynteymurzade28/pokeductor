@@ -352,9 +352,37 @@ back to reverse video, so there is still always something showing where you are.
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-matchups.png" alt="Type matchup card for Charizard showing x4 Rock, x2 Water and Electric, and immunity to Ground" width="900">
 
-Computed offline from a built-in Generation VI+ chart, so it opens instantly and
-works with no connection. Neutral matchups are omitted — they are the default,
-and listing them would bury the rows worth reading.
+Computed offline from built-in type charts, so it opens instantly and works with
+no connection. Neutral matchups are omitted — they are the default, and listing
+them would bury the rows worth reading.
+
+#### Older games
+
+The answer depends on the game. In Red and Blue Ghost does nothing to Psychic
+and Bug hits Poison super-effectively; before X and Y there is no Fairy, and
+Steel resists Ghost and Dark. `g` steps the generation the matchup, party and
+head-to-head cards read forward and `G` steps it back, from the list or from
+inside any of the three cards, so the answer changes in front of you. `--gen N`
+starts on one. Each card names the generation in its title — ` Type Matchups ·
+Gen I ` — so an answer for an old game is never taken for the current one.
+
+The games have used three charts (Generation I, II–V and VI onwards), and a
+generation brings more than its chart:
+
+- **Types it does not have** are left out of every section. A Generation I card
+  has no Steel, Dark or Fairy row.
+- **Old typings** are used where PokeAPI records them: Clefairy is Normal until
+  Generation VI, Magnemite pure Electric in Generation I, and Rotom's forms
+  Electric/Ghost through Generation IV.
+- **Abilities** did not exist before Generation III, so the cards for I and II
+  have no ability immunities.
+- **A species the generation did not have** gets no answer: the card says it was
+  not in those games, and the party card leaves it out of the numbers.
+
+Abilities a species has since lost are not tracked — Gengar had Levitate until
+Generation VII, and the cards read its current Cursed Body throughout — and an
+alternate form counts as arriving with its species, so Alolan Raichu reads as a
+Generation I Pokémon.
 
 ### Head to head
 
@@ -461,6 +489,7 @@ no refetch:
 | | `P` | Party card |
 | | `S` | Cycle sort: Pokédex order ↔ A–Z |
 | | `L` | Language picker |
+| | `g` · `G` | Type rules of the next / previous generation |
 | | `?` | Help overlay |
 | | `Q` · `Esc` | Quit |
 | **Search box** | *type* | Filter the list |
@@ -489,6 +518,7 @@ no refetch:
 | **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
 | | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
 | | `M` · `Esc` | Close |
+| **Matchup, party and head-to-head cards** | `g` · `G` | Type rules of the next / previous generation |
 | **Any card** | `Esc` | Close |
 | **Anywhere** | `Ctrl-C` | Quit |
 
@@ -538,6 +568,7 @@ Options:
       --lang <LANG>          Start in this UI language [possible values: en, tr, de, fr, es, it]
       --color <WHEN>         How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
       --theme <PALETTE>      Draw the interface in this palette [possible values: pico8, dmg]
+      --gen <N>              Read type matchups by generation N's rules, 1 to 9
       --json                 Print NAME as JSON and exit, instead of opening the interface
       --json-list <QUERY>    Print every species QUERY matches as JSON Lines and exit
       --export-party         Print the saved party as a Pokemon Showdown team and exit
@@ -574,6 +605,11 @@ direction: `--color=truecolor` on a terminal that never advertised it, or
 `--theme` picks [the palette](#palettes), and behaves exactly as `--lang` does
 against the stored one: it outranks what the last run left, and is itself what
 this run stores on the way out.
+
+`--gen` picks the generation whose [type rules](#older-games) the cards read,
+and against the stored one behaves as `--lang` and `--theme` do. Leaving it at
+the newest stores no choice at all, so a run that never changed it follows the
+newest generation on to the next one.
 
 The two cache commands answer the question this README used to answer with a
 path and a `rm -rf`. Both print what they touched:
@@ -754,7 +790,7 @@ through to disk.
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
-| `typechart.rs` | Offline Generation VI+ type-effectiveness chart and matchup analysis. |
+| `typechart.rs` | Offline type-effectiveness charts for every generation, and matchup analysis. |
 | `team.rs` | Team-level type analysis built on top of the chart. |
 | `statcalc.rs` | Final stats from level, nature, IVs and EVs, and the calculator card's editing rules. |
 | `compare.rs` | Head-to-head arithmetic for two species: stat rows, winners, best same-type hit. |
@@ -820,7 +856,7 @@ kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
 `~/.local/state/pokeductor`):
 
 ```
-session.json              party, favourites, language, sort order, palette, shiny toggle
+session.json              party, favourites, language, sort order, palette, shiny toggle, generation
 ```
 
 Written once, as the app exits, and read once, before the first frame. A run
@@ -888,12 +924,19 @@ answers won.
 
 ### Type and team analysis
 
-`typechart.rs` holds the Generation VI+ chart as a pure function from
-(attacking type, defending type) to a multiplier, with the dual-type case
-derived by multiplying across the defender's types exactly as the games do. No
-round-trip is needed to answer "what is this weak to?".
+`typechart.rs` holds the type charts as a pure function from (chart, attacking
+type, defending type) to a multiplier, with the dual-type case derived by
+multiplying across the defender's types exactly as the games do. No round-trip
+is needed to answer "what is this weak to?". The two older charts are written as
+their differences from the current one — four cells for Generation I, two for
+II–V — and a table test pins exactly those cells, so a change to one chart that
+leaks into another fails by name.
 
-`team.rs` builds on it. For each of the 18 attacking types it counts how many
+A generation, not a chart, is what the cards are handed. Rotom-Wash changes type
+between Generations IV and V, both under the same chart, so the typing a card
+reads comes from `PokemonDetail::types_in`, which walks PokeAPI's `past_types`.
+
+`team.rs` builds on it. For each attacking type the generation has it counts how many
 members take super-effective damage and whether *anyone* resists, and it derives
 offensive gaps from the union of the members' same-type coverage. Ability
 immunities come from a small static table of abilities that grant an outright

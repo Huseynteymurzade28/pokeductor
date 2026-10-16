@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 
 use crate::models::{PokemonDetail, StatKind};
 use crate::team;
-use crate::typechart;
+use crate::typechart::{self, Generation};
 
 /// The stats every row of a comparison covers, in display order.
 ///
@@ -114,21 +114,33 @@ pub struct Hit<'a> {
 /// does on the matchup card: Levitate makes Ground 0× however the chart reads
 /// the body carrying it. An immunity the defender merely might have is left
 /// alone — a maybe is not a multiplier.
-pub fn best_hit<'a>(attacker: &'a PokemonDetail, defender: &PokemonDetail) -> Option<Hit<'a>> {
-    let immune: Vec<&str> = team::ability_immunities(defender)
+///
+/// Both are read as they were in `generation`'s games, under its chart. If
+/// either species was not in those games there is no hit to report, and the
+/// answer is `None` exactly as for a species with no typing.
+pub fn best_hit<'a>(
+    attacker: &'a PokemonDetail,
+    defender: &PokemonDetail,
+    generation: Generation,
+) -> Option<Hit<'a>> {
+    if !attacker.exists_in(generation) || !defender.exists_in(generation) {
+        return None;
+    }
+    let chart = generation.chart();
+    let immune: Vec<&str> = team::ability_immunities(defender, generation)
         .iter()
         .filter(|immunity| immunity.certain)
         .map(|immunity| immunity.immune_to)
         .collect();
 
     attacker
-        .types
+        .types_in(generation)
         .iter()
         .map(|attack_type| Hit {
             attack_type,
             multiplier: match immune.contains(&attack_type.as_str()) {
                 true => 0.0,
-                false => typechart::combined(attack_type, &defender.types),
+                false => typechart::combined(chart, attack_type, defender.types_in(generation)),
             },
         })
         // Ties go to the type listed first, which is the species' primary.
@@ -183,6 +195,7 @@ mod tests {
             flavors: HashMap::new(),
             moves: Vec::new(),
             learnset_games: None,
+            past_types: Vec::new(),
             field: FieldData::default(),
         }
     }
@@ -255,7 +268,7 @@ mod tests {
         let gengar = species("gengar", &["ghost", "poison"], &[]);
         let alakazam = species("alakazam", &["psychic"], &[]);
 
-        let hit = best_hit(&gengar, &alakazam).expect("a typing to hit with");
+        let hit = best_hit(&gengar, &alakazam, Generation::LATEST).expect("a typing to hit with");
         assert_eq!(hit.attack_type, "ghost");
         assert_eq!(hit.multiplier, 2.0);
     }
@@ -266,7 +279,12 @@ mod tests {
         let glaceon = species("glaceon", &["ice"], &[]);
         let dragonite = species("dragonite", &["dragon", "flying"], &[]);
 
-        assert_eq!(best_hit(&glaceon, &dragonite).unwrap().multiplier, 4.0);
+        assert_eq!(
+            best_hit(&glaceon, &dragonite, Generation::LATEST)
+                .unwrap()
+                .multiplier,
+            4.0
+        );
     }
 
     #[test]
@@ -274,19 +292,62 @@ mod tests {
         let sandslash = species("sandslash", &["ground"], &[]);
         // Ground is x2 on an Electric body, and 0x when it cannot not levitate.
         let eelektross = with_abilities("eelektross", &["electric"], &[], &["levitate"]);
-        assert_eq!(best_hit(&sandslash, &eelektross).unwrap().multiplier, 0.0);
+        assert_eq!(
+            best_hit(&sandslash, &eelektross, Generation::LATEST)
+                .unwrap()
+                .multiplier,
+            0.0
+        );
 
         // With a second possible ability it is a maybe, and a maybe is not a
         // multiplier: the chart's answer stands.
         let maybe = with_abilities("maybe", &["electric"], &[], &["levitate", "static"]);
-        assert_eq!(best_hit(&sandslash, &maybe).unwrap().multiplier, 2.0);
+        assert_eq!(
+            best_hit(&sandslash, &maybe, Generation::LATEST)
+                .unwrap()
+                .multiplier,
+            2.0
+        );
     }
 
     #[test]
     fn a_species_with_no_typing_has_no_hit_to_report() {
         assert_eq!(
-            best_hit(&species("a", &[], &[]), &species("b", &[], &[])),
+            best_hit(
+                &species("a", &[], &[]),
+                &species("b", &[], &[]),
+                Generation::LATEST
+            ),
             None
         );
+    }
+
+    #[test]
+    fn the_best_hit_follows_the_generation() {
+        // The famous one: Ghost did nothing to Psychic in Red and Blue, so
+        // Gengar's best answer to Alakazam was its Poison half, at x1.
+        let gengar = species("gengar", &["ghost", "poison"], &[]);
+        let alakazam = species("alakazam", &["psychic"], &[]);
+        let red_blue = Generation::new(1).unwrap();
+
+        let hit = best_hit(&gengar, &alakazam, red_blue).unwrap();
+        assert_eq!((hit.attack_type, hit.multiplier), ("poison", 1.0));
+    }
+
+    #[test]
+    fn a_species_not_in_the_generation_has_no_hit_either_way() {
+        let gengar = PokemonDetail {
+            dex_number: 94,
+            ..species("gengar", &["ghost", "poison"], &[])
+        };
+        let sylveon = PokemonDetail {
+            dex_number: 700,
+            ..species("sylveon", &["fairy"], &[])
+        };
+        let red_blue = Generation::new(1).unwrap();
+
+        assert_eq!(best_hit(&gengar, &sylveon, red_blue), None);
+        assert_eq!(best_hit(&sylveon, &gengar, red_blue), None);
+        assert!(best_hit(&sylveon, &gengar, Generation::LATEST).is_some());
     }
 }

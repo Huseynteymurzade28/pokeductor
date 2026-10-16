@@ -666,6 +666,7 @@ mod tests {
             flavors: HashMap::from([("en".into(), "It hides in shadows.".into())]),
             moves: Vec::new(),
             learnset_games: Some("scarlet-violet".into()),
+            past_types: Vec::new(),
             field: FieldData {
                 egg_groups: vec!["indeterminate".into()],
                 capture_rate: 45,

@@ -19,7 +19,7 @@ use crate::models::{
 use crate::statcalc::{self, Field};
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
-use crate::typechart;
+use crate::typechart::{self, Generation};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Column width reserved for stat labels (longest is "Verteid."/"Sp. Def").
@@ -1419,51 +1419,22 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
             .fg(theme::mauve())
             .add_modifier(Modifier::BOLD),
     )];
-    head.extend(type_chips(&detail.types, app.language));
+    // The typing the species had in those games, which is what every row
+    // below is worked out from: Clefairy is Normal until Generation VI.
+    let generation = app.generation;
+    let present = detail.exists_in(generation);
+    if present {
+        head.extend(type_chips(detail.types_in(generation), app.language));
+    }
     lines.push(Line::from(head));
     lines.push(Line::raw(""));
 
-    // Defensive view: incoming damage, worst multiplier first. Neutral matchups
-    // are omitted by `defensive_groups`, so every row here is worth reading.
-    //
-    // Abilities are read first because a certain one rewrites the rows: a
-    // species that cannot *not* have Levitate is simply not hit by Ground, and
-    // the chart on its own would say otherwise. One it merely might have is
-    // left out of the numbers and annotated below instead.
-    let immunities = team::ability_immunities(detail);
-    let certain: Vec<&str> = immunities
-        .iter()
-        .filter(|immunity| immunity.certain)
-        .map(|immunity| immunity.immune_to)
-        .collect();
-
-    lines.push(section_heading(s.matchups_defense));
-    for group in typechart::defensive_groups(&detail.types, &certain) {
-        lines.extend(chip_rows(group.label, &group.types, app.language, text_w));
-    }
-
-    // Directly under the numbers, because it is the numbers this explains:
-    // why a row moved, or what would move if the species turned out to carry
-    // the other ability.
-    if !immunities.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(section_heading(s.immune_by_ability));
-        for immunity in &immunities {
-            lines.push(ability_immunity_row(app, s, immunity, "  "));
-        }
-    }
-
-    // Offensive view: what its own same-type moves are strong against.
-    lines.push(Line::raw(""));
-    lines.push(section_heading(s.matchups_offense));
-    let coverage = typechart::offensive_coverage(&detail.types);
-    if coverage.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  {}", s.matchups_none),
-            Style::default().fg(theme::overlay()),
-        )));
-    } else {
-        lines.extend(chip_rows("", &coverage, app.language, text_w));
+    // A species that was not in those games gets no sections at all. There is
+    // no typing to work anything out from, and a card of empty sections
+    // would read as "takes neutral damage from everything".
+    match present {
+        true => lines.extend(matchup_sections(app, s, detail, text_w)),
+        false => lines.push(absent_line(s, "  ")),
     }
 
     // Two border rows plus the hint row at the foot.
@@ -1475,7 +1446,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
-            s.matchups_title,
+            generation_title(s.matchups_title, s, generation),
             Style::default()
                 .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
@@ -1493,6 +1464,80 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
+}
+
+/// The matchup card's sections, for a species that was in the games of the
+/// generation the app is reading.
+fn matchup_sections(
+    app: &App,
+    s: &Strings,
+    detail: &PokemonDetail,
+    text_w: usize,
+) -> Vec<Line<'static>> {
+    let generation = app.generation;
+    let chart = generation.chart();
+    let types = detail.types_in(generation);
+    let mut lines = Vec::new();
+
+    // Defensive view: incoming damage, worst multiplier first. Neutral matchups
+    // are omitted by `defensive_groups`, so every row here is worth reading.
+    //
+    // Abilities are read first because a certain one rewrites the rows: a
+    // species that cannot *not* have Levitate is simply not hit by Ground, and
+    // the chart on its own would say otherwise. One it merely might have is
+    // left out of the numbers and annotated below instead.
+    let immunities = team::ability_immunities(detail, generation);
+    let certain: Vec<&str> = immunities
+        .iter()
+        .filter(|immunity| immunity.certain)
+        .map(|immunity| immunity.immune_to)
+        .collect();
+
+    lines.push(section_heading(s.matchups_defense));
+    for group in typechart::defensive_groups(chart, types, &certain) {
+        lines.extend(chip_rows(group.label, &group.types, app.language, text_w));
+    }
+
+    // Directly under the numbers, because it is the numbers this explains:
+    // why a row moved, or what would move if the species turned out to carry
+    // the other ability.
+    if !immunities.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section_heading(s.immune_by_ability));
+        for immunity in &immunities {
+            lines.push(ability_immunity_row(app, s, immunity, "  "));
+        }
+    }
+
+    // Offensive view: what its own same-type moves are strong against.
+    lines.push(Line::raw(""));
+    lines.push(section_heading(s.matchups_offense));
+    let coverage = typechart::offensive_coverage(chart, types);
+    if coverage.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", s.matchups_none),
+            Style::default().fg(theme::overlay()),
+        )));
+    } else {
+        lines.extend(chip_rows("", &coverage, app.language, text_w));
+    }
+    lines
+}
+
+/// A card title naming the generation whose type rules the card reads:
+/// ` Type Matchups · Gen I `. Every such card says it, so an answer for Red
+/// and Blue is never taken for the current one.
+fn generation_title(title: &str, s: &Strings, generation: Generation) -> String {
+    format!("{}· {} {} ", title, s.generation_tag, generation.roman())
+}
+
+/// The dimmed line standing in for an answer about a species the generation
+/// the card reads did not have.
+fn absent_line(s: &Strings, indent: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{indent}{}", s.absent_from_generation),
+        Style::default().fg(theme::overlay()),
+    ))
 }
 
 /// Renders a list of types as coloured chips, separated by a space.
@@ -1594,6 +1639,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("P", h.act_party_card),
         ("S", h.act_sort),
         ("L", h.act_language),
+        ("g · G", h.act_generation),
         ("?", h.act_help),
         ("Q", h.act_quit),
     ];
@@ -2132,6 +2178,9 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     }
 
     let loaded = app.team_details();
+    // Worked out before the roster is drawn, because the roster shows which
+    // members it had to leave out.
+    let analysis = team::analyse(&loaded, app.generation);
     let mut lines: Vec<Line> = Vec::new();
 
     lines.push(Line::from(Span::styled(
@@ -2171,7 +2220,11 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
             Span::styled(format!(" {:<12} ", title_case(name)), name_style),
         ];
         match app.details.get(name) {
-            Some(detail) => row.extend(type_chips(&detail.types, app.language)),
+            Some(_) if analysis.absent.contains(name) => row.push(Span::styled(
+                s.absent_from_generation.to_string(),
+                Style::default().fg(theme::overlay()),
+            )),
+            Some(detail) => row.extend(type_chips(detail.types_in(app.generation), app.language)),
             None => row.push(Span::styled(
                 s.loading.to_string(),
                 Style::default().fg(theme::overlay()),
@@ -2180,9 +2233,9 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         lines.push(Line::from(row));
     }
 
-    if !loaded.is_empty() {
-        let analysis = team::analyse(&loaded);
-
+    // Only once someone in the party counts. A party the generation has none
+    // of would otherwise report all clear on every line.
+    if loaded.len() > analysis.absent.len() {
         // Shared weaknesses, grouped by how many members each type hits. The
         // `n/total` label counts members, not damage — an important distinction
         // next to the single-species card, where the label is a multiplier.
@@ -2234,7 +2287,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
-            s.team_title,
+            generation_title(s.team_title, s, app.generation),
             Style::default()
                 .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
@@ -2480,7 +2533,7 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme::mauve()))
         .title(Span::styled(
-            s.compare_title,
+            generation_title(s.compare_title, s, app.generation),
             Style::default()
                 .fg(theme::mauve())
                 .add_modifier(Modifier::BOLD),
@@ -2512,9 +2565,9 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     // columns rather than as one list of pairs.
     let head =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[0]);
-    frame.render_widget(Paragraph::new(side_heading(left, app.language)), head[0]);
+    frame.render_widget(Paragraph::new(side_heading(app, left)), head[0]);
     frame.render_widget(
-        Paragraph::new(side_heading(right, app.language)).alignment(Alignment::Right),
+        Paragraph::new(side_heading(app, right)).alignment(Alignment::Right),
         head[1],
     );
 
@@ -2548,12 +2601,9 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(Paragraph::new(section_heading(s.compare_best_hit)), body[4]);
     let hits =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(body[5]);
+    frame.render_widget(Paragraph::new(best_hit_line(app, s, left, right)), hits[0]);
     frame.render_widget(
-        Paragraph::new(best_hit_line(left, right, app.language)),
-        hits[0],
-    );
-    frame.render_widget(
-        Paragraph::new(best_hit_line(right, left, app.language)).alignment(Alignment::Right),
+        Paragraph::new(best_hit_line(app, s, right, left)).alignment(Alignment::Right),
         hits[1],
     );
 
@@ -2575,7 +2625,11 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 }
 
 /// One side's name, dex number and typing, for the top of the comparison card.
-fn side_heading(species: &PokemonDetail, language: Language) -> Vec<Line<'static>> {
+///
+/// The typing is the one the species had in the generation the card reads,
+/// since that is what the best-hit row under it was worked out from.
+fn side_heading(app: &App, species: &PokemonDetail) -> Vec<Line<'static>> {
+    let language = app.language;
     vec![
         Line::from(vec![
             Span::styled(
@@ -2589,7 +2643,7 @@ fn side_heading(species: &PokemonDetail, language: Language) -> Vec<Line<'static
                 Style::default().fg(theme::overlay()),
             ),
         ]),
-        Line::from(type_chips(&species.types, language)),
+        Line::from(type_chips(species.types_in(app.generation), language)),
     ]
 }
 
@@ -2677,12 +2731,19 @@ fn margin_label(left: u32, right: u32, s: &Strings) -> String {
 /// The hardest same-type hit `attacker` has on `defender`, as a chip and a
 /// multiplier.
 fn best_hit_line(
+    app: &App,
+    s: &Strings,
     attacker: &PokemonDetail,
     defender: &PokemonDetail,
-    language: Language,
 ) -> Line<'static> {
-    let Some(hit) = compare::best_hit(attacker, defender) else {
-        return Line::raw("");
+    let language = app.language;
+    let Some(hit) = compare::best_hit(attacker, defender, app.generation) else {
+        // The one reason worth saying out loud. A species with no typing at
+        // all is not something PokeAPI has ever sent.
+        return match attacker.exists_in(app.generation) && defender.exists_in(app.generation) {
+            true => Line::raw(""),
+            false => absent_line(s, " "),
+        };
     };
     let label = typechart::multiplier_label(hit.multiplier);
     Line::from(vec![

@@ -32,6 +32,7 @@ use crate::showdown;
 use crate::statcalc::{self, Calculator};
 use crate::team;
 use crate::theme::{self, Theme};
+use crate::typechart::Generation;
 
 /// How many learnset rows around the cursor the moves card fetches records for.
 /// Sized to cover the card on a tall terminal, so the visible table fills in
@@ -104,6 +105,10 @@ pub struct App {
     /// [`App::run`] once the flag and the restored session have settled it,
     /// since every rendering function reads it from there.
     pub theme: Theme,
+    /// The generation whose type rules the matchup, party and head-to-head
+    /// cards read. App-wide, like the palette: someone playing Red and Blue
+    /// wants every card answering for Red and Blue.
+    pub generation: Generation,
     /// The sidebar: the master list, the search box, the ordering and the
     /// cursor over the result. Everything about the visible list that needs
     /// no network lives there; what stays here is the half that does.
@@ -204,6 +209,8 @@ pub struct App {
     cli_language: Option<Language>,
     /// Palette named on the command line, for the same reason.
     cli_theme: Option<Theme>,
+    /// Generation named on the command line, for the same reason again.
+    cli_generation: Option<Generation>,
     /// Species named on the command line, opened once the list arrives — the
     /// first moment there is anything to resolve a name against.
     startup_species: Option<String>,
@@ -233,6 +240,7 @@ impl App {
         let app = App {
             language: startup.language.unwrap_or(Language::English),
             theme: startup.theme.unwrap_or_default(),
+            generation: startup.generation.unwrap_or_default(),
             browser: Browser::default(),
             roster_loading: HashSet::new(),
             focus: Focus::List,
@@ -272,6 +280,7 @@ impl App {
             color_depth,
             cli_language: startup.language,
             cli_theme: startup.theme,
+            cli_generation: startup.generation,
             startup_species: startup.species,
             loading_detail: None,
             list_loading: false,
@@ -399,6 +408,7 @@ impl App {
             theme: Some(self.theme.code().to_string()),
             shiny: self.sprite_variant.is_shiny(),
             favourites: self.browser.favourites.iter().cloned().collect(),
+            generation: (self.generation != Generation::LATEST).then_some(self.generation.number()),
         }
     }
 
@@ -426,6 +436,12 @@ impl App {
         if self.cli_theme.is_none() {
             if let Some(theme) = session.theme.as_deref().and_then(Theme::from_code) {
                 self.theme = theme;
+            }
+        }
+        // And the generation, for the reason the other two give.
+        if self.cli_generation.is_none() {
+            if let Some(generation) = session.generation.and_then(Generation::new) {
+                self.generation = generation;
             }
         }
         if session.shiny {
@@ -881,6 +897,7 @@ impl App {
             ) {
                 self.matchups = false;
             }
+            self.step_generation(key.code);
             return;
         }
         if self.compare_card {
@@ -890,6 +907,7 @@ impl App {
             ) {
                 self.compare_card = false;
             }
+            self.step_generation(key.code);
             return;
         }
         if self.evo_card {
@@ -977,6 +995,21 @@ impl App {
             }
             KeyCode::Char('c') | KeyCode::Char('C') => self.pin_or_compare_member(),
             KeyCode::Char('e') | KeyCode::Char('E') => self.copy_team(),
+            code => self.step_generation(code),
+        }
+    }
+
+    /// `g` moves the type rules on a generation and `G` back one, wrapping at
+    /// either end. Bound on the list and on each card that reads the rules,
+    /// so the answer can be watched changing in place; anything else is
+    /// ignored.
+    ///
+    /// The one place the case of a letter matters. Nine generations are too
+    /// many to cycle through in one direction to get back to the last one.
+    fn step_generation(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('g') => self.generation = self.generation.next(),
+            KeyCode::Char('G') => self.generation = self.generation.previous(),
             _ => {}
         }
     }
@@ -1331,7 +1364,7 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
             KeyCode::Char('i') | KeyCode::Char('I') => self.open_stat_card(),
             KeyCode::Char('?') => self.help_card = true,
-            _ => {}
+            code => self.step_generation(code),
         }
     }
 
@@ -1776,6 +1809,7 @@ pub(crate) fn loaded(name: &str) -> PokemonDetail {
         flavors: std::collections::HashMap::new(),
         moves: Vec::new(),
         learnset_games: None,
+        past_types: Vec::new(),
         field: crate::models::FieldData::default(),
     }
 }
@@ -2459,6 +2493,80 @@ mod tests {
             Some("dmg"),
             "and is what this run hands on"
         );
+    }
+
+    #[test]
+    fn a_gen_flag_outranks_the_generation_the_last_run_left_behind() {
+        let red_blue = Generation::new(1).unwrap();
+        let (mut app, _rx) = App::new(Startup {
+            generation: Some(red_blue),
+            ..Startup::default()
+        })
+        .expect("client builds");
+        app.restore(Session {
+            generation: Some(4),
+            ..Session::default()
+        });
+        assert_eq!(app.generation, red_blue);
+
+        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+        app.restore(Session {
+            generation: Some(4),
+            ..Session::default()
+        });
+        assert_eq!(app.generation.number(), 4);
+        assert_eq!(app.snapshot().generation, Some(4), "and is handed on");
+    }
+
+    #[test]
+    fn the_newest_generation_is_stored_as_no_choice_at_all() {
+        // So a run that never touched it follows the newest generation on to
+        // the next one, rather than staying pinned to this one's newest.
+        let (app, _rx) = App::new(Startup::default()).expect("client builds");
+        assert_eq!(app.generation, Generation::LATEST);
+        assert_eq!(app.snapshot().generation, None);
+    }
+
+    #[test]
+    fn a_stored_generation_the_games_never_had_keeps_the_default() {
+        let (mut app, _rx) = App::new(Startup::default()).expect("client builds");
+        app.restore(Session {
+            generation: Some(42),
+            ..Session::default()
+        });
+        assert_eq!(app.generation, Generation::LATEST);
+    }
+
+    #[test]
+    fn g_steps_the_generation_forward_and_shift_g_back() {
+        let mut app = app_listing(&[(1, "bulbasaur")]);
+        app.handle_event(Event::Key(press(KeyCode::Char('g'))));
+        assert_eq!(app.generation.number(), 1, "wraps from the newest");
+        app.handle_event(Event::Key(press(KeyCode::Char('g'))));
+        assert_eq!(app.generation.number(), 2);
+        app.handle_event(Event::Key(press(KeyCode::Char('G'))));
+        app.handle_event(Event::Key(press(KeyCode::Char('G'))));
+        assert_eq!(app.generation, Generation::LATEST, "and back again");
+    }
+
+    #[test]
+    fn the_generation_can_be_stepped_from_inside_each_card_that_reads_it() {
+        let mut app = app_listing(&[(1, "bulbasaur")]);
+        for open in [
+            |app: &mut App| app.matchups = true,
+            |app: &mut App| app.team_card = true,
+            |app: &mut App| app.compare_card = true,
+        ] {
+            open(&mut app);
+            let before = app.generation;
+            app.handle_event(Event::Key(press(KeyCode::Char('g'))));
+            assert_eq!(app.generation, before.next());
+            assert!(
+                app.matchups || app.team_card || app.compare_card,
+                "stepping is not closing"
+            );
+            app.handle_event(Event::Key(press(KeyCode::Esc)));
+        }
     }
 
     #[test]
