@@ -10,6 +10,24 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-21
+
+### Security
+
+- rustls 0.23.45 → 0.23.46 for
+  [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346),
+  [0347](https://rustsec.org/advisories/RUSTSEC-2026-0347),
+  [0348](https://rustsec.org/advisories/RUSTSEC-2026-0348) and
+  [0349](https://rustsec.org/advisories/RUSTSEC-2026-0349). Among them, an
+  attacker on the network could make later connections to a host fall back
+  from post-quantum to classical-only key exchange. No authentication bypass
+  or key compromise. 0.7.0 shipped with the affected version. (#61)
+- rustls-webpki 0.103.15 → 0.103.16 and webpki-roots 1.0.9 → 1.0.10 for
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) and
+  [RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381):
+  certificate paths through the distrusted emSign intermediates, whose private
+  keys are now public, could be accepted. (#61)
+
 ## [0.7.0] - 2026-10-16
 
 ### Added
@@ -291,7 +309,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   Unicode half-blocks, evolution chains as connected cards, a language menu, and
   the retro colour palette.
 
-[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.4.0...v0.5.0
