@@ -10,6 +10,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-27
+
 ### Added
 
 - A lookup card for abilities and items. `D` opens a search over every ability
@@ -328,7 +330,8 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   Unicode half-blocks, evolution chains as connected cards, a language menu, and
   the retro colour palette.
 
-[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Huseynteymurzade28/pokeductor/compare/v0.5.0...v0.6.0
