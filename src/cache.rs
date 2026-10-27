@@ -18,8 +18,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    AbilityInfo, EvolutionTree, ItemInfo, LookupKind, MoveInfo, PokemonDetail, PokemonEntry,
-    RosterKind, RosterTerm, Sprite, SpriteVariant,
+    AbilityInfo, EvolutionTree, GameEncounters, ItemInfo, LookupKind, MoveInfo, PokemonDetail,
+    PokemonEntry, RosterKind, RosterTerm, Sprite, SpriteVariant,
 };
 
 /// Bumped whenever the cached representation changes shape. Files written by
@@ -115,6 +115,21 @@ pub async fn store_item(name: &str, info: &ItemInfo) {
         return;
     };
     write_json(&path, info).await;
+}
+
+/// Where a Pokemon can be found, if cached. Encounter tables are as fixed as
+/// the games they describe, so this never expires. An empty list is a real
+/// answer — no wild encounters — and is kept like any other.
+pub async fn load_encounters(name: &str) -> Option<Vec<GameEncounters>> {
+    let path = encounters_path(name)?;
+    read_json(&path).await
+}
+
+pub async fn store_encounters(name: &str, games: &[GameEncounters]) {
+    let Some(path) = encounters_path(name) else {
+        return;
+    };
+    write_json(&path, &games.to_vec()).await;
 }
 
 /// A species' details and evolution chain, if they have ever been cached.
@@ -338,6 +353,14 @@ fn ability_path(name: &str) -> Option<PathBuf> {
 
 fn item_path(name: &str) -> Option<PathBuf> {
     Some(root()?.join("items").join(format!("{}.json", slug(name))))
+}
+
+fn encounters_path(name: &str) -> Option<PathBuf> {
+    Some(
+        root()?
+            .join("encounters")
+            .join(format!("{}.json", slug(name))),
+    )
 }
 
 fn index_path(kind: LookupKind) -> Option<PathBuf> {
