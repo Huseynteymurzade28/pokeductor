@@ -125,6 +125,7 @@ async fn roster(client: &reqwest::Client, term: &RosterTerm) -> anyhow::Result<H
                 RosterKind::Type => "type",
                 RosterKind::Ability => "ability",
                 RosterKind::EggGroup => "egg",
+                RosterKind::Item => "held",
             };
             Err(err).with_context(|| format!("could not resolve {kind}:{}", term.value))
         }

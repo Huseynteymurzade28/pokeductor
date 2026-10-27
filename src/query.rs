@@ -13,6 +13,7 @@
 //! type:water type:fly  Water *and* Flying — Gyarados, Mantine, ...
 //! ability:levitate     every Pokemon that can have Levitate
 //! egg:dragon           every species in the Dragon breeding group
+//! held:leftovers       every Pokemon found holding Leftovers in the wild
 //! gen:1 gen:2          introduced in either generation
 //! gen:1 type:ghost ga  all three, combined
 //! fav:                 the species marked as favourites
@@ -40,7 +41,7 @@ pub struct Query {
     /// instead of it: `2` should still find `porygon2`, and only the user
     /// knows which of the two they meant.
     pub text_dex: Option<u32>,
-    /// Membership terms — `type:`, `ability:`, `egg:` — each of which needs a
+    /// Membership terms — `type:`, `ability:`, `egg:`, `held:` — each of which needs a
     /// roster the caller fetches separately.
     ///
     /// Combined with AND, across kinds as well as within one: a Pokemon must
@@ -145,6 +146,9 @@ impl Query {
                 }
                 Some(("egg" | "e", value)) => {
                     query.push_roster(RosterKind::EggGroup, &egg_group_slug(value));
+                }
+                Some(("held" | "h", value)) => {
+                    query.push_roster(RosterKind::Item, value);
                 }
                 // `gen:` with nothing usable after it is still a filter the
                 // user is in the middle of typing, not a name to search for —
@@ -388,6 +392,18 @@ mod tests {
                 RosterTerm::new(RosterKind::EggGroup, "dragon"),
             ]
         );
+    }
+
+    #[test]
+    fn a_held_item_is_a_roster_term_with_a_short_form() {
+        for raw in ["held:Leftovers", "h:leftovers"] {
+            let query = Query::parse(raw);
+            assert_eq!(
+                query.rosters,
+                [RosterTerm::new(RosterKind::Item, "leftovers")]
+            );
+            assert!(query.text.is_empty());
+        }
     }
 
     #[test]

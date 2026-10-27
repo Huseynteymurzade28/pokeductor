@@ -10,6 +10,22 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+### Added
+
+- A lookup card for abilities and items. `D` opens a search over every ability
+  and every item, `Tab` switches between the two, and the entry under the
+  cursor shows its description and effect, and for an item its category, Fling
+  power and the Pokémon found holding it in the wild. `Enter` narrows the
+  species list to the Pokémon that go with it. (#62)
+- `held:` search term: `held:leftovers` is every Pokémon found holding
+  Leftovers in the wild, in any game. Combines with the other terms like
+  `ability:` does. (#62)
+
+### Changed
+
+- The cache format version is now 9, since ability records carry their effect
+  and generation. The first run after upgrading fetches again what it shows.
+
 ## [0.7.1] - 2026-10-21
 
 ### Security

@@ -128,12 +128,12 @@ line](#command-line) for the full set of flags.
 The sidebar lists every entry PokeAPI serves — 1351 of them today, species and
 alternate forms alike — with National Pokédex numbers. A bare number looks up
 that Pokédex number — `25` finds Pikachu — and beyond plain name matching the
-search box takes `dex:`, `type:`, `ability:`, `egg:` and `gen:` terms, and
+search box takes `dex:`, `type:`, `ability:`, `egg:`, `held:` and `gen:` terms, and
 comparisons on base stats:
 
 <img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-search.png" alt="Searching for type:ghost gen:1, narrowing the list to Gastly, Haunter and Gengar" width="900">
 
-`type:`, `ability:` and `egg:` terms combine with **AND**, within one kind and
+`type:`, `ability:`, `egg:` and `held:` terms combine with **AND**, within one kind and
 across kinds: `type:water type:flying` finds the dual-typed ones, and
 `type:dragon ability:levitate` finds the two conditions met at once. `gen:` and
 `dex:` terms combine with **OR**, since a species belongs to exactly one
@@ -204,6 +204,32 @@ Ability *names* arrive inside the payload every species fetch pulls down
 already, so listing them on the info card costs nothing. Their descriptions live
 behind one request each and are cached permanently. Hidden abilities are marked:
 they are only obtainable by special means, which is worth knowing at a glance.
+
+### Looking up abilities and items
+
+`D` opens a search over every ability and every item, for when the question is
+about one of those rather than about a species. `Tab` switches between the
+two, typing narrows the list, and the record under the cursor fills the right
+of the card: for an ability the generation that introduced it, the games'
+description and a line on what it does; for an item its category, Fling's
+power with it, the same two descriptions, and the Pokémon found holding it in
+the wild.
+
+`Enter` closes the card on the species list narrowed to the Pokémon that go
+with the entry — `ability:levitate` for an ability, `held:leftovers` for an
+item — written into the search box like anything typed there, so `gen:4` is
+one more word away.
+
+The list is matched and shown in English, the names PokeAPI files entries
+under, with the record itself in the interface language. Translated names only
+arrive one record at a time, and a search that could find an entry only after
+it had once been opened would be worse than one that is always English. Every
+word typed has to appear in the name, in any order, with hyphens, case,
+accents and apostrophes ignored: `kings rock` finds King's Rock. The two lists
+are fetched the first time each side is opened and kept for a month, as the
+species list is; each record is fetched when the cursor reaches it, and kept
+for good. Abilities from the spin-off games, which no main-series Pokémon has,
+are left out.
 
 ### Moves
 
@@ -482,6 +508,7 @@ no refetch:
 | | `M` | Moves card |
 | | `I` | Stat calculator |
 | | `V` | Alternate forms card |
+| | `D` | Look up abilities and items |
 | | `X` | Toggle shiny artwork |
 | | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
@@ -515,6 +542,11 @@ no refetch:
 | | `+` `-` | Step the value (EVs by 4) |
 | | `R` | Back to level 50, 31 IVs, no EVs |
 | | `I` · `Esc` | Close |
+| **Lookup card** | *type* | Narrow the list |
+| | `Tab` | Abilities ↔ items |
+| | `↑` `↓` · `PgUp` `PgDn` · `Home` `End` | Move the cursor |
+| | `Enter` | List the Pokémon with it |
+| | `Esc` | Close |
 | **Moves card** | `↑` `↓` · `j` `k` | Move between moves |
 | | `PgUp` `PgDn` · `Home` `End` | Jump ten · to either end |
 | | `M` · `Esc` | Close |
@@ -535,6 +567,7 @@ no refetch:
 | `type:water type:flying` | Water **and** Flying — Gyarados, Mantine, … |
 | `ability:levitate` | every Pokémon that can have Levitate (`a:` also works) |
 | `egg:dragon` | every species in the Dragon breeding group (`e:` also works) |
+| `held:leftovers` | every Pokémon found holding Leftovers in the wild, in any game (`h:` also works) |
 | `gen:1` | introduced in Generation I (`g:` also works) |
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
@@ -786,6 +819,7 @@ through to disk.
 | `showdown.rs` | The party in Pokémon Showdown's team format, both ways, and the name mapping between Showdown and PokeAPI. |
 | `clipboard.rs` | Copying text through the terminal with OSC 52. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`, `spe>=110`) parsing. |
+| `lookup.rs` | The ability and item lookup card's matching, ranking and cursor. |
 | `base_stats.rs` | Every entry's base stats, built in from a table `scripts/base-stats.py` generates. |
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |

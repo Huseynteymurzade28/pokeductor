@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 
 use crate::models::{
-    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, FieldData,
+    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, FieldData, ItemInfo,
     LearnMethod, LearnedMove, MoveInfo, PastTyping, PokemonDetail, PokemonEntry, RosterKind,
     RosterTerm, Sprite, SpriteVariant, Stat, StatKind,
 };
@@ -192,11 +192,12 @@ pub async fn fetch_pokemon_list(client: &reqwest::Client) -> Result<Vec<PokemonE
 }
 
 /// Every name PokeAPI files under one roster — every Water Pokemon, everything
-/// that can have Levitate, every species in the Dragon breeding group.
+/// that can have Levitate, every species in the Dragon breeding group, every
+/// Pokemon found holding Leftovers.
 ///
 /// One request answers a whole filter, which is why the sidebar can offer these
 /// at all: the alternative would be fetching all 1300 species just to read a
-/// field off each. The three endpoints differ only in where they bury the
+/// field off each. The four endpoints differ only in where they bury the
 /// names, which is the whole reason this is a match rather than one request.
 pub async fn fetch_roster(
     client: &reqwest::Client,
@@ -222,6 +223,15 @@ pub async fn fetch_roster(
             let url = format!("{BASE_URL}/egg-group/{value}");
             let raw: RawEggGroup = get_json(client, &url).await?;
             Ok(raw.pokemon_species.into_iter().map(|s| s.name).collect())
+        }
+        RosterKind::Item => {
+            let url = format!("{BASE_URL}/item/{value}");
+            let raw: RawItemHolders = get_json(client, &url).await?;
+            Ok(raw
+                .held_by_pokemon
+                .into_iter()
+                .map(|h| h.pokemon.name)
+                .collect())
         }
     }
 }
@@ -449,36 +459,116 @@ pub async fn translate_text(
 ///
 /// The description comes from the game flavor text rather than the effect
 /// entries: PokeAPI carries flavor in all five languages the info card uses,
-/// while effect text exists only in English, German and French.
+/// while effect text exists only in English, German and French. The effect is
+/// read too, for the lookup card, which has room for both.
 pub async fn fetch_ability(client: &reqwest::Client, name: &str) -> Result<AbilityInfo, ApiError> {
     let url = format!("{BASE_URL}/ability/{name}");
     let raw: RawAbility = get_json(client, &url).await?;
+    Ok(ability_info(raw))
+}
 
+fn ability_info(raw: RawAbility) -> AbilityInfo {
+    AbilityInfo {
+        names: localized_names(&raw.names),
+        // One entry per game version per language; the first is a fine
+        // representative, exactly as for species flavor text.
+        flavors: localized_flavors(
+            raw.flavor_text_entries
+                .iter()
+                .map(|e| (&e.language, &e.flavor_text)),
+        ),
+        effects: short_effects(&raw.effect_entries),
+        generation: u8::try_from(id_from_url(&raw.generation.url)).unwrap_or(0),
+        name: raw.name,
+    }
+}
+
+/// Fetches one item's record for the lookup card.
+pub async fn fetch_item(client: &reqwest::Client, name: &str) -> Result<ItemInfo, ApiError> {
+    let url = format!("{BASE_URL}/item/{name}");
+    let raw: RawItem = get_json(client, &url).await?;
+    Ok(item_info(raw))
+}
+
+fn item_info(raw: RawItem) -> ItemInfo {
+    ItemInfo {
+        names: localized_names(&raw.names),
+        flavors: localized_flavors(
+            raw.flavor_text_entries
+                .iter()
+                .map(|e| (&e.language, &e.text)),
+        ),
+        effects: short_effects(&raw.effect_entries),
+        category: raw.category.name,
+        fling_power: raw.fling_power,
+        holders: raw
+            .held_by_pokemon
+            .into_iter()
+            .map(|h| h.pokemon.name)
+            .collect(),
+        name: raw.name,
+    }
+}
+
+/// Every ability's slug, in PokeAPI's order — which is the order they were
+/// introduced in.
+///
+/// The ids from 10001 up are abilities from the spin-off games, which no
+/// main-series Pokemon has and the `ability:` term would only ever answer with
+/// an empty list, so the lookup card leaves them out.
+pub async fn fetch_ability_list(client: &reqwest::Client) -> Result<Vec<String>, ApiError> {
+    let url = format!("{BASE_URL}/ability?limit={LIST_LIMIT}&offset=0");
+    let raw: NamedList = get_json(client, &url).await?;
+    Ok(raw
+        .results
+        .into_iter()
+        .filter(|r| id_from_url(&r.url) < 10000)
+        .map(|r| r.name)
+        .collect())
+}
+
+/// Every item's slug, in PokeAPI's order.
+pub async fn fetch_item_list(client: &reqwest::Client) -> Result<Vec<String>, ApiError> {
+    let url = format!("{BASE_URL}/item?limit={LIST_LIMIT}&offset=0");
+    let raw: NamedList = get_json(client, &url).await?;
+    Ok(raw.results.into_iter().map(|r| r.name).collect())
+}
+
+/// Display names in the languages the cards use, first one per language.
+fn localized_names(raw: &[RawLocalizedName]) -> HashMap<String, String> {
     let mut names = HashMap::new();
-    for n in &raw.names {
+    for n in raw {
         if CARD_LANGS.contains(&n.language.name.as_str()) {
             names
                 .entry(n.language.name.clone())
                 .or_insert_with(|| n.name.clone());
         }
     }
+    names
+}
 
-    // One entry per game version per language; the first is a fine
-    // representative, exactly as for species flavor text.
+/// Flavor text in the languages the cards use, first one per language. Takes
+/// pairs because items name the text field differently from everything else.
+fn localized_flavors<'a>(
+    raw: impl Iterator<Item = (&'a NamedResource, &'a String)>,
+) -> HashMap<String, String> {
     let mut flavors = HashMap::new();
-    for e in &raw.flavor_text_entries {
-        if CARD_LANGS.contains(&e.language.name.as_str()) {
+    for (language, text) in raw {
+        if CARD_LANGS.contains(&language.name.as_str()) {
             flavors
-                .entry(e.language.name.clone())
-                .or_insert_with(|| clean_flavor(&e.flavor_text));
+                .entry(language.name.clone())
+                .or_insert_with(|| clean_flavor(text));
         }
     }
+    flavors
+}
 
-    Ok(AbilityInfo {
-        name: raw.name,
-        names,
-        flavors,
-    })
+/// The one-line effect summaries, keyed by language.
+fn short_effects(raw: &[RawEffect]) -> HashMap<String, String> {
+    raw.iter()
+        .filter(|e| CARD_LANGS.contains(&e.language.name.as_str()))
+        .map(|e| (e.language.name.clone(), clean_flavor(&e.short_effect)))
+        .collect()
 }
 
 /// Fetches and decodes just the sprite for a named Pokemon, in the requested
@@ -777,6 +867,44 @@ struct RawAbility {
     name: String,
     names: Vec<RawLocalizedName>,
     flavor_text_entries: Vec<RawLocalizedFlavor>,
+    #[serde(default)]
+    effect_entries: Vec<RawEffect>,
+    generation: NamedResource,
+}
+
+/// An effect description in one language. Abilities and items share it.
+#[derive(serde::Deserialize)]
+struct RawEffect {
+    short_effect: String,
+    language: NamedResource,
+}
+
+#[derive(serde::Deserialize)]
+struct RawItem {
+    name: String,
+    names: Vec<RawLocalizedName>,
+    flavor_text_entries: Vec<RawItemFlavor>,
+    #[serde(default)]
+    effect_entries: Vec<RawEffect>,
+    category: NamedResource,
+    fling_power: Option<u16>,
+    #[serde(default)]
+    held_by_pokemon: Vec<RawMember>,
+}
+
+/// Items carry their flavor in `text` where everything else says
+/// `flavor_text`.
+#[derive(serde::Deserialize)]
+struct RawItemFlavor {
+    text: String,
+    language: NamedResource,
+}
+
+/// The slice of `/item/{name}` the `held:` filter reads.
+#[derive(serde::Deserialize)]
+struct RawItemHolders {
+    #[serde(default)]
+    held_by_pokemon: Vec<RawMember>,
 }
 
 /// A display name in one language. Abilities and moves both answer with a list
@@ -800,8 +928,8 @@ struct RawType {
     pokemon: Vec<RawMember>,
 }
 
-/// One row of a roster that lists Pokemon rather than species — the shape both
-/// `/type/{name}` and `/ability/{name}` wrap their members in.
+/// One row of a roster that lists Pokemon rather than species — the shape
+/// `/type/{name}`, `/ability/{name}` and `/item/{name}` wrap their members in.
 #[derive(serde::Deserialize)]
 struct RawMember {
     pokemon: NamedResource,
@@ -1066,7 +1194,25 @@ mod tests {
         assert!(shadow_ball.power.is_some() && shadow_ball.pp.is_some());
         assert!(shadow_ball.flavor_for("en").is_some());
 
-        // One roster of each kind, since they read three differently shaped
+        // The lookup card's two lists and one record of each kind.
+        let abilities = fetch_ability_list(&client).await.expect("ability list");
+        assert!(abilities.iter().any(|a| a == "levitate"));
+        assert!(
+            !abilities.iter().any(|a| a == "mountaineer"),
+            "spin-off abilities are left out"
+        );
+        let items = fetch_item_list(&client).await.expect("item list");
+        assert!(items.len() > 1000, "got {} items", items.len());
+        let levitate = fetch_ability(&client, "levitate")
+            .await
+            .expect("ability fetch");
+        assert_eq!(levitate.generation, 3);
+        assert!(levitate.effect_for("en").is_some());
+        let leftovers = fetch_item(&client, "leftovers").await.expect("item fetch");
+        assert_eq!(leftovers.category, "held-items");
+        assert!(leftovers.effect_for("en").is_some() && leftovers.flavor_for("de").is_some());
+
+        // One roster of each kind, since they read four differently shaped
         // payloads for the same answer.
         for (kind, value, expected) in [
             (RosterKind::Type, "ghost", "gengar"),
@@ -1074,6 +1220,7 @@ mod tests {
             // VII, and PokeAPI lists what a species has now.
             (RosterKind::Ability, "levitate", "haunter"),
             (RosterKind::EggGroup, "plant", "bulbasaur"),
+            (RosterKind::Item, "leftovers", "snorlax"),
         ] {
             let term = RosterTerm::new(kind, value);
             let members = fetch_roster(&client, &term).await.expect("roster fetch");
@@ -1493,6 +1640,89 @@ mod tests {
         assert_eq!(
             pikachu.condition.as_ref().unwrap().trigger,
             Some(EvolutionTrigger::LevelUp)
+        );
+    }
+
+    #[test]
+    fn an_item_record_is_read_with_its_holders_and_its_own_flavor_field() {
+        // Trimmed from `/item/leftovers`. Items say `text` where every other
+        // flavor entry says `flavor_text`.
+        let json = r#"{
+          "name": "leftovers",
+          "names": [
+            { "name": "Überreste", "language": { "name": "de", "url": "" } },
+            { "name": "Leftovers", "language": { "name": "en", "url": "" } },
+            { "name": "たべのこし", "language": { "name": "ja", "url": "" } }
+          ],
+          "flavor_text_entries": [
+            { "text": "A hold item that\ngradually restores\nHP in battle.",
+              "language": { "name": "en", "url": "" } },
+            { "text": "Something newer.", "language": { "name": "en", "url": "" } }
+          ],
+          "effect_entries": [
+            { "effect": "Long.", "short_effect": "Held: Restores 1/16 max HP each turn.",
+              "language": { "name": "en", "url": "" } }
+          ],
+          "category": { "name": "held-items", "url": "" },
+          "fling_power": 10,
+          "held_by_pokemon": [
+            { "pokemon": { "name": "snorlax", "url": "" }, "version_details": [] },
+            { "pokemon": { "name": "munchlax", "url": "" }, "version_details": [] }
+          ]
+        }"#;
+        let item = item_info(serde_json::from_str(json).unwrap());
+        assert_eq!(item.name_for("de"), "Überreste");
+        assert_eq!(item.name_for("it"), "Leftovers");
+        assert!(!item.names.contains_key("ja"));
+        assert_eq!(
+            item.flavor_for("en"),
+            Some("A hold item that gradually restores HP in battle.")
+        );
+        assert_eq!(
+            item.effect_for("fr"),
+            Some("Held: Restores 1/16 max HP each turn.")
+        );
+        assert_eq!(item.category, "held-items");
+        assert_eq!(item.fling_power, Some(10));
+        assert_eq!(item.holders, ["snorlax", "munchlax"]);
+    }
+
+    #[test]
+    fn an_item_fling_cannot_throw_has_no_fling_power() {
+        let json = r#"{
+          "name": "town-map", "names": [], "flavor_text_entries": [],
+          "category": { "name": "plot-advancement", "url": "" },
+          "fling_power": null
+        }"#;
+        let item = item_info(serde_json::from_str(json).unwrap());
+        assert_eq!(item.fling_power, None);
+        assert!(item.holders.is_empty() && item.effect_for("en").is_none());
+    }
+
+    #[test]
+    fn an_ability_record_carries_its_generation_and_effect() {
+        let json = r#"{
+          "name": "levitate",
+          "names": [{ "name": "Schwebe", "language": { "name": "de", "url": "" } }],
+          "flavor_text_entries": [
+            { "flavor_text": "Gives full immunity\nto all Ground-type moves.",
+              "language": { "name": "en", "url": "" } }
+          ],
+          "effect_entries": [
+            { "effect": "Long.", "short_effect": "Verhindert Boden Attacken",
+              "language": { "name": "de", "url": "" } },
+            { "effect": "Long.", "short_effect": "Evades Ground moves.",
+              "language": { "name": "en", "url": "" } }
+          ],
+          "generation": { "name": "generation-iii", "url": "https://pokeapi.co/api/v2/generation/3/" }
+        }"#;
+        let ability = ability_info(serde_json::from_str(json).unwrap());
+        assert_eq!(ability.generation, 3);
+        assert_eq!(ability.effect_for("de"), Some("Verhindert Boden Attacken"));
+        assert_eq!(ability.effect_for("es"), Some("Evades Ground moves."));
+        assert_eq!(
+            ability.flavor_for("de"),
+            Some("Gives full immunity to all Ground-type moves.")
         );
     }
 }

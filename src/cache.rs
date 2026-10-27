@@ -18,14 +18,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    AbilityInfo, EvolutionTree, MoveInfo, PokemonDetail, PokemonEntry, RosterKind, RosterTerm,
-    Sprite, SpriteVariant,
+    AbilityInfo, EvolutionTree, ItemInfo, LookupKind, MoveInfo, PokemonDetail, PokemonEntry,
+    RosterKind, RosterTerm, Sprite, SpriteVariant,
 };
 
 /// Bumped whenever the cached representation changes shape. Files written by
 /// an older build are treated as misses and overwritten on the next fetch,
 /// which saves us from ever deserializing stale data into the wrong struct.
-const VERSION: u32 = 8;
+const VERSION: u32 = 9;
 
 /// How long the master species list stays fresh. Individual records never
 /// expire — PokeAPI does not rewrite history, it only appends new species, and
@@ -85,6 +85,36 @@ pub async fn store_list(entries: &[PokemonEntry]) {
         return;
     };
     write_json(&path, &entries.to_vec()).await;
+}
+
+/// Every ability's or item's slug, for the lookup card, and whether the copy is
+/// still within [`LIST_TTL`]. Like the species list, a stale copy is still
+/// worth showing while a fresh one is fetched, and both grow only with a new
+/// generation.
+pub async fn load_index(kind: LookupKind) -> Option<(Vec<String>, bool)> {
+    let path = index_path(kind)?;
+    let names = read_json(&path).await?;
+    Some((names, age(&path).await.is_some_and(|a| a < LIST_TTL)))
+}
+
+pub async fn store_index(kind: LookupKind, names: &[String]) {
+    let Some(path) = index_path(kind) else {
+        return;
+    };
+    write_json(&path, &names.to_vec()).await;
+}
+
+/// One item's record, if cached. Like an ability's, it never expires.
+pub async fn load_item(name: &str) -> Option<ItemInfo> {
+    let path = item_path(name)?;
+    read_json(&path).await
+}
+
+pub async fn store_item(name: &str, info: &ItemInfo) {
+    let Some(path) = item_path(name) else {
+        return;
+    };
+    write_json(&path, info).await;
 }
 
 /// A species' details and evolution chain, if they have ever been cached.
@@ -306,6 +336,18 @@ fn ability_path(name: &str) -> Option<PathBuf> {
     )
 }
 
+fn item_path(name: &str) -> Option<PathBuf> {
+    Some(root()?.join("items").join(format!("{}.json", slug(name))))
+}
+
+fn index_path(kind: LookupKind) -> Option<PathBuf> {
+    let file = match kind {
+        LookupKind::Ability => "ability-list.json",
+        LookupKind::Item => "item-list.json",
+    };
+    Some(root()?.join(file))
+}
+
 /// Where one roster is stored. Each kind gets its own directory, because the
 /// same word means different things to two of them — `poison` is a type and an
 /// ability both — and because `abilities/` already holds ability *descriptions*
@@ -319,6 +361,8 @@ fn roster_path(term: &RosterTerm) -> Option<PathBuf> {
         RosterKind::Type => "types",
         RosterKind::Ability => "ability-members",
         RosterKind::EggGroup => "egg-groups",
+        // `items/` holds the records themselves, as `abilities/` does.
+        RosterKind::Item => "item-holders",
     };
     Some(
         root()?
