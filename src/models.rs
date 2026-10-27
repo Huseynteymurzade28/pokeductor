@@ -64,6 +64,17 @@ pub enum RosterKind {
     Ability,
     /// `egg:dragon` — every species in that breeding group.
     EggGroup,
+    /// `held:leftovers` — every Pokemon found holding that item in the wild,
+    /// in any game.
+    Item,
+}
+
+/// The two kinds of thing the lookup card searches, alongside the species the
+/// sidebar does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LookupKind {
+    Ability,
+    Item,
 }
 
 /// One roster filter: a kind and the value asked of it.
@@ -160,6 +171,11 @@ pub struct AbilityInfo {
     pub names: HashMap<String, String>,
     /// Short description per language.
     pub flavors: HashMap<String, String>,
+    /// One-line mechanical summary per language. PokeAPI writes these in
+    /// English, German and French only, so the others fall back to English.
+    pub effects: HashMap<String, String>,
+    /// The generation that introduced it; 0 when PokeAPI does not say.
+    pub generation: u8,
 }
 
 impl AbilityInfo {
@@ -180,6 +196,54 @@ impl AbilityInfo {
             .or_else(|| self.flavors.get("en"))
             .map(String::as_str)
     }
+
+    /// Mechanical summary in the requested language, falling back to English.
+    pub fn effect_for(&self, code: &str) -> Option<&str> {
+        localized(&self.effects, code)
+    }
+}
+
+/// One item's record, fetched when the lookup card highlights it.
+///
+/// Shaped like [`AbilityInfo`], plus the few facts that only items have.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemInfo {
+    /// API slug, e.g. `"leftovers"`.
+    pub name: String,
+    pub names: HashMap<String, String>,
+    pub flavors: HashMap<String, String>,
+    /// One-line mechanical summary, in the languages PokeAPI writes one in.
+    pub effects: HashMap<String, String>,
+    /// PokeAPI's category slug, e.g. `"held-items"`, `"standard-balls"`.
+    pub category: String,
+    /// Base power of Fling with this item; absent for items Fling cannot throw.
+    pub fling_power: Option<u16>,
+    /// Pokemon found holding it in the wild, in any game, in PokeAPI's order.
+    pub holders: Vec<String>,
+}
+
+impl ItemInfo {
+    pub fn name_for(&self, code: &str) -> String {
+        localized(&self.names, code)
+            .map(str::to_string)
+            .unwrap_or_else(|| title_case(&self.name))
+    }
+
+    pub fn flavor_for(&self, code: &str) -> Option<&str> {
+        localized(&self.flavors, code)
+    }
+
+    pub fn effect_for(&self, code: &str) -> Option<&str> {
+        localized(&self.effects, code)
+    }
+}
+
+/// The text for `code`, falling back to English.
+fn localized<'a>(texts: &'a HashMap<String, String>, code: &str) -> Option<&'a str> {
+    texts
+        .get(code)
+        .or_else(|| texts.get("en"))
+        .map(String::as_str)
 }
 
 /// Which palette of a species' front artwork to show.

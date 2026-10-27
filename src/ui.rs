@@ -14,7 +14,7 @@ use crate::compare;
 use crate::i18n::{EvoStrings, Language, Strings};
 use crate::models::{
     egg_group_label, form_label, title_case, CatchEase, EvolutionTree, FieldData, LearnMethod,
-    LearnedMove, PokemonDetail, Sprite,
+    LearnedMove, LookupKind, PokemonDetail, Sprite,
 };
 use crate::statcalc::{self, Field};
 use crate::team::{self, AbilityImmunity};
@@ -75,6 +75,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.forms_card {
         render_forms(frame, app, &strings, area);
+    }
+    if app.lookup_card {
+        render_lookup(frame, app, &strings, area);
     }
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
@@ -1632,6 +1635,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("M", h.act_moves),
         ("I", h.act_stat_calc),
         ("V", h.act_forms),
+        ("D", h.act_lookup),
         ("X", h.act_shiny),
         ("R", h.act_random),
         ("Space", h.act_party_toggle),
@@ -1642,6 +1646,10 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("g · G", h.act_generation),
         ("?", h.act_help),
         ("Q", h.act_quit),
+        ("", ""),
+        ("", h.ctx_lookup),
+        ("Tab", h.act_lookup_switch),
+        ("Enter", h.act_lookup_apply),
     ];
     let right: Vec<(&str, &str)> = vec![
         ("", h.ctx_search),
@@ -1650,6 +1658,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("type:water", h.act_by_type),
         ("ability:levitate", h.act_by_ability),
         ("egg:dragon", h.act_by_egg),
+        ("held:leftovers", h.act_by_held),
         ("gen:1", h.act_by_generation),
         ("fav:", h.act_by_favourite),
         ("spe>=100", h.act_by_stat),
@@ -2872,6 +2881,270 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(hint, rows[1]);
 }
 
+const LOOKUP_CARD_W: u16 = 80;
+/// Width of the lookup card's list column, which fits every ability name and
+/// all but a handful of item names.
+const LOOKUP_LIST_W: u16 = 28;
+
+/// The ability and item lookup: a tab line, the card's own search line, the
+/// matching names down the left, and the record under the cursor on the right.
+///
+/// The list is in English — it is what the search line matches against, see
+/// [`crate::lookup::matches`] — while the record is in the interface language,
+/// since by then it has been fetched and its translations are here.
+fn render_lookup(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = LOOKUP_CARD_W.min(full.width);
+    let height = full.height.saturating_sub(4).min(32);
+    if width < 40 || height < 10 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            s.lookup_title,
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::surface()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // tabs
+        Constraint::Length(1), // search line
+        Constraint::Length(1), // gap
+        Constraint::Min(1),    // list and record
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    let tab = |label: &str, kind: LookupKind| {
+        let count = app
+            .indexes
+            .get(&kind)
+            .map(|names| format!(" {}", names.len()))
+            .unwrap_or_default();
+        let text = format!(" {label}{count} ");
+        if app.lookup.kind == kind {
+            Span::styled(
+                text,
+                color::highlight(theme::mauve()).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(text, Style::default().fg(theme::subtext()))
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            tab(s.lookup_abilities, LookupKind::Ability),
+            Span::raw(" "),
+            tab(s.lookup_items, LookupKind::Item),
+        ])),
+        rows[0],
+    );
+
+    let search = Line::from(vec![
+        Span::styled(" › ", Style::default().fg(theme::teal())),
+        Span::styled(app.lookup.query.clone(), Style::default().fg(theme::text())),
+        Span::styled("▏", Style::default().fg(theme::teal())),
+    ]);
+    frame.render_widget(Paragraph::new(search), rows[1]);
+
+    let cols = Layout::horizontal([
+        Constraint::Length(LOOKUP_LIST_W.min(rows[3].width / 2)),
+        Constraint::Length(2),
+        Constraint::Min(0),
+    ])
+    .split(rows[3]);
+
+    let Some(names) = app.indexes.get(&app.lookup.kind) else {
+        render_centered_loading(frame, rows[3], s.loading, app.spinner);
+        render_lookup_hint(frame, s, rows[4]);
+        return;
+    };
+    let matches = app.lookup_matches();
+    if matches.is_empty() {
+        render_centered_text(frame, cols[0], s.lookup_none, theme::overlay());
+        render_lookup_hint(frame, s, rows[4]);
+        return;
+    }
+
+    // Centred on the cursor where there is room, pinned to an end where there
+    // is not, as the forms card scrolls.
+    let window = cols[0].height as usize;
+    let first = app
+        .lookup
+        .cursor
+        .saturating_sub(window / 2)
+        .min(matches.len().saturating_sub(window));
+    let name_w = cols[0].width.saturating_sub(2) as usize;
+    let lines: Vec<Line> = matches
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(window)
+        .map(|(row, &index)| {
+            let label = format!(" {} ", truncate(&title_case(&names[index]), name_w));
+            let style = if row == app.lookup.cursor {
+                color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::text())
+            };
+            Line::from(Span::styled(label, style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), cols[0]);
+
+    if let Some(slug) = app.highlighted_lookup() {
+        let text_w = cols[2].width.saturating_sub(1) as usize;
+        let record = match app.lookup.kind {
+            LookupKind::Ability => ability_record(app, s, slug, text_w),
+            LookupKind::Item => item_record(app, s, slug, text_w),
+        };
+        frame.render_widget(Paragraph::new(record), cols[2]);
+    }
+    render_lookup_hint(frame, s, rows[4]);
+}
+
+fn render_lookup_hint(frame: &mut Frame, s: &Strings, area: Rect) {
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.lookup_hint,
+        Style::default().fg(theme::overlay()),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, area);
+}
+
+/// The heading every record opens with: the name in the interface language,
+/// and the English one beside it when that differs, since the English one is
+/// what the list beside it and the search line go by.
+fn record_heading(local: String, slug: &str) -> Line<'static> {
+    let english = title_case(slug);
+    let mut spans = vec![Span::styled(
+        local.clone(),
+        Style::default()
+            .fg(theme::peach())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if local != english {
+        spans.push(Span::styled(
+            format!("  {english}"),
+            Style::default().fg(theme::overlay()),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// A paragraph of the record, wrapped to the column, with a blank line above.
+fn push_paragraph(lines: &mut Vec<Line<'static>>, text: &str, width: usize, color: Color) {
+    lines.push(Line::raw(""));
+    for row in wrap_plain(text, width) {
+        lines.push(Line::from(Span::styled(row, Style::default().fg(color))));
+    }
+}
+
+/// What the lookup card shows for an ability: when it arrived, what the games
+/// say about it, and what it does in plain mechanics.
+fn ability_record(app: &App, s: &Strings, slug: &str, width: usize) -> Vec<Line<'static>> {
+    let code = app.language.flavor_code();
+    let Some(info) = app.abilities.get(slug) else {
+        return vec![
+            record_heading(title_case(slug), slug),
+            Line::raw(""),
+            loading_line(s),
+        ];
+    };
+    let mut lines = vec![record_heading(info.name_for(code), slug)];
+    if let Some(generation) = Generation::new(info.generation) {
+        lines.push(Line::from(Span::styled(
+            format!("{} {}", s.generation_tag, generation.roman()),
+            Style::default().fg(theme::overlay()),
+        )));
+    }
+    if let Some(flavor) = info.flavor_for(code) {
+        push_paragraph(&mut lines, flavor, width, theme::subtext());
+    }
+    if let Some(effect) = info.effect_for(code) {
+        push_paragraph(&mut lines, effect, width, theme::text());
+    }
+    lines
+}
+
+/// What the lookup card shows for an item, down to who carries it in the wild
+/// — which is what `Enter` narrows the species list to.
+fn item_record(app: &App, s: &Strings, slug: &str, width: usize) -> Vec<Line<'static>> {
+    let code = app.language.flavor_code();
+    let Some(info) = app.items.get(slug) else {
+        return vec![
+            record_heading(title_case(slug), slug),
+            Line::raw(""),
+            loading_line(s),
+        ];
+    };
+    let mut lines = vec![record_heading(info.name_for(code), slug)];
+    let mut facts = vec![
+        Span::styled(
+            format!("{} ", s.lookup_category),
+            Style::default().fg(theme::overlay()),
+        ),
+        Span::styled(
+            title_case(&info.category),
+            Style::default().fg(theme::subtext()),
+        ),
+    ];
+    if let Some(power) = info.fling_power {
+        facts.push(Span::styled(
+            format!("  ·  {} ", s.lookup_fling),
+            Style::default().fg(theme::overlay()),
+        ));
+        facts.push(Span::styled(
+            power.to_string(),
+            Style::default().fg(theme::subtext()),
+        ));
+    }
+    lines.push(Line::from(facts));
+    if let Some(flavor) = info.flavor_for(code) {
+        push_paragraph(&mut lines, flavor, width, theme::subtext());
+    }
+    if let Some(effect) = info.effect_for(code) {
+        push_paragraph(&mut lines, effect, width, theme::text());
+    }
+    lines.push(Line::raw(""));
+    if info.holders.is_empty() {
+        lines.push(Line::from(Span::styled(
+            s.lookup_no_holders,
+            Style::default().fg(theme::overlay()),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            s.lookup_holders,
+            Style::default().fg(theme::overlay()),
+        )));
+        let holders: Vec<String> = info.holders.iter().map(|h| title_case(h)).collect();
+        for row in wrap_plain(&holders.join(", "), width) {
+            lines.push(Line::from(Span::styled(
+                row,
+                Style::default().fg(theme::text()),
+            )));
+        }
+    }
+    lines
+}
+
+fn loading_line(s: &Strings) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{}…", s.loading),
+        Style::default().fg(theme::overlay()),
+    ))
+}
+
 fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let width = 26u16;
     let height = Language::ALL.len() as u16 + 4; // borders + title pad + hint
@@ -3013,6 +3286,64 @@ mod tests {
             weight: 405,
             ..loaded("gengar")
         }
+    }
+
+    #[test]
+    fn the_lookup_card_shows_the_record_under_the_cursor_in_the_interface_language() {
+        use crate::models::{AbilityInfo, LookupKind};
+        use std::collections::HashMap;
+
+        let mut app = app_listing(&[]);
+        app.language = Language::German;
+        app.lookup_card = true;
+        app.indexes.insert(
+            LookupKind::Ability,
+            vec!["stench".to_string(), "levitate".to_string()],
+        );
+        app.indexes
+            .insert(LookupKind::Item, vec!["leftovers".to_string()]);
+        app.lookup.query = "lev".to_string();
+        app.abilities.insert(
+            "levitate".to_string(),
+            AbilityInfo {
+                name: "levitate".to_string(),
+                names: HashMap::from([("de".to_string(), "Schwebe".to_string())]),
+                flavors: HashMap::new(),
+                effects: HashMap::from([(
+                    "de".to_string(),
+                    "Verhindert Boden Attacken".to_string(),
+                )]),
+                generation: 3,
+            },
+        );
+
+        let screen = frame_rows(&mut app, 120, 40).join("\n");
+        assert!(screen.contains("Fähigkeiten 2"), "the tab counts its list");
+        assert!(screen.contains("Items 1"));
+        assert!(screen.contains("› lev"));
+        assert!(
+            screen.contains("Schwebe  Levitate"),
+            "both names head the record"
+        );
+        assert!(screen.contains("III"));
+        assert!(screen.contains("Verhindert Boden Attacken"));
+        assert!(
+            !screen.contains("Stench"),
+            "the query hides what it does not match"
+        );
+    }
+
+    #[test]
+    fn the_lookup_card_says_so_when_nothing_matches() {
+        use crate::models::LookupKind;
+
+        let mut app = app_listing(&[]);
+        app.lookup_card = true;
+        app.indexes
+            .insert(LookupKind::Ability, vec!["levitate".to_string()]);
+        app.lookup.query = "zzz".to_string();
+        let screen = frame_rows(&mut app, 120, 40).join("\n");
+        assert!(screen.contains("Nothing matches"));
     }
 
     #[test]

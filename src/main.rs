@@ -31,6 +31,7 @@ mod color;
 mod compare;
 mod i18n;
 mod json;
+mod lookup;
 mod models;
 mod query;
 mod retry;

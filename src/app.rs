@@ -23,9 +23,10 @@ use crate::cli::Startup;
 use crate::clipboard;
 use crate::color::{self, Depth};
 use crate::i18n::Language;
+use crate::lookup::{self, Lookup};
 use crate::models::{
-    AbilityInfo, EvolutionTree, LearnedMove, MoveInfo, PokemonDetail, PokemonEntry, RosterTerm,
-    Sprite, SpriteVariant,
+    AbilityInfo, EvolutionTree, ItemInfo, LearnedMove, LookupKind, MoveInfo, PokemonDetail,
+    PokemonEntry, RosterTerm, Sprite, SpriteVariant,
 };
 use crate::session::{self, Session};
 use crate::showdown;
@@ -72,6 +73,14 @@ pub enum Message {
     AbilityLoaded(AbilityInfo),
     /// One move's record finished loading.
     MoveLoaded(MoveInfo),
+    /// One item's record finished loading.
+    ItemLoaded(ItemInfo),
+    /// Every ability's or item's name finished loading for the lookup card, or
+    /// could not be loaded.
+    IndexLoaded {
+        kind: LookupKind,
+        names: Result<Vec<String>, String>,
+    },
     /// The roster behind a `type:`, `ability:` or `egg:` filter finished
     /// loading.
     RosterLoaded {
@@ -191,6 +200,20 @@ pub struct App {
     /// over what is on display, not a property of the species.
     pub forms_card: bool,
     pub forms_cursor: usize,
+    /// Whether the lookup card is open, and where it is.
+    pub lookup_card: bool,
+    pub lookup: Lookup,
+    /// Every ability's and every item's slug, once fetched. Only asked for
+    /// when the card is first opened on that side: two thousand item names are
+    /// one request, but a request nobody who never presses `D` needs.
+    pub indexes: HashMap<LookupKind, Vec<String>>,
+    /// Lists in flight.
+    pub index_loading: HashSet<LookupKind>,
+    /// Item records, keyed by item slug, fetched as the lookup card's cursor
+    /// reaches each one.
+    pub items: HashMap<String, ItemInfo>,
+    /// Item lookups in flight, so each is requested only once.
+    pub item_loading: HashSet<String>,
     /// Whether the help overlay is open.
     pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
@@ -273,6 +296,12 @@ impl App {
             move_cursor: 0,
             forms_card: false,
             forms_cursor: 0,
+            lookup_card: false,
+            lookup: Lookup::default(),
+            indexes: HashMap::new(),
+            index_loading: HashSet::new(),
+            items: HashMap::new(),
+            item_loading: HashSet::new(),
             help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
@@ -324,6 +353,7 @@ impl App {
             self.ensure_translation();
             self.ensure_ability_info();
             self.ensure_move_info();
+            self.ensure_lookup_info();
             // Rendering always writes 24-bit colour; this is where the frame
             // is rewritten into what the terminal can actually show. Doing it
             // over the finished buffer keeps every widget — and every sprite
@@ -389,6 +419,8 @@ impl App {
             || !self.roster_loading.is_empty()
             || !self.ability_loading.is_empty()
             || !self.move_loading.is_empty()
+            || !self.index_loading.is_empty()
+            || !self.item_loading.is_empty()
             || !self.translating.is_empty()
             || !self.team_loading.is_empty()
             || self
@@ -815,6 +847,26 @@ impl App {
                 self.move_loading.remove(&info.name);
                 self.moves.insert(info.name.clone(), info);
             }
+            Message::ItemLoaded(info) => {
+                self.item_loading.remove(&info.name);
+                self.items.insert(info.name.clone(), info);
+            }
+            Message::IndexLoaded { kind, names } => {
+                self.index_loading.remove(&kind);
+                match names {
+                    // A refresh of a stale copy lands under a cursor that was
+                    // placed against the old list, so it is clamped to the
+                    // new one rather than left pointing past its end.
+                    Ok(names) => {
+                        self.indexes.insert(kind, names);
+                        let len = self.lookup_matches().len();
+                        self.lookup.move_cursor(0, len);
+                    }
+                    // Not recorded as an empty list: reopening the card is
+                    // then a retry, which is what someone back online wants.
+                    Err(err) => self.error = Some(err),
+                }
+            }
             Message::RosterLoaded { term, members } => {
                 self.roster_loading.remove(&term);
                 // Recorded even when empty — a mistyped term must settle on
@@ -876,6 +928,10 @@ impl App {
         }
         if self.moves_card {
             self.handle_moves_key(key);
+            return;
+        }
+        if self.lookup_card {
+            self.handle_lookup_key(key);
             return;
         }
         if self.team_card {
@@ -1276,6 +1332,159 @@ impl App {
         }
     }
 
+    /// Opens the lookup card where it was last left, and asks for the list on
+    /// the side it opens on.
+    ///
+    /// Unlike the other cards it needs no species on display: abilities and
+    /// items are looked up for their own sake.
+    fn open_lookup(&mut self) {
+        self.lookup_card = true;
+        self.request_index(self.lookup.kind);
+    }
+
+    /// Typing goes to the card's own search line, so letters are never keys
+    /// here — `D` cannot close the card it opened, and Esc is the way out.
+    fn handle_lookup_key(&mut self, key: KeyEvent) {
+        let len = self.lookup_matches().len();
+        match key.code {
+            KeyCode::Esc => self.lookup_card = false,
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.lookup.switch_kind();
+                self.request_index(self.lookup.kind);
+            }
+            KeyCode::Up => self.lookup.move_cursor(-1, len),
+            KeyCode::Down => self.lookup.move_cursor(1, len),
+            KeyCode::PageUp => self.lookup.move_cursor(-10, len),
+            KeyCode::PageDown => self.lookup.move_cursor(10, len),
+            KeyCode::Home => self.lookup.cursor = 0,
+            KeyCode::End => self.lookup.cursor = len.saturating_sub(1),
+            KeyCode::Enter => self.show_lookup_species(),
+            KeyCode::Backspace => self.lookup.pop(),
+            KeyCode::Char(c) => self.lookup.push(c),
+            _ => {}
+        }
+    }
+
+    /// Indices into the open side's list that its query matches, best first.
+    /// Empty while the list is still loading.
+    pub fn lookup_matches(&self) -> Vec<usize> {
+        self.indexes
+            .get(&self.lookup.kind)
+            .map(|names| lookup::matches(names, &self.lookup.query))
+            .unwrap_or_default()
+    }
+
+    /// The slug under the lookup card's cursor.
+    pub fn highlighted_lookup(&self) -> Option<&str> {
+        let names = self.indexes.get(&self.lookup.kind)?;
+        let index = *self.lookup_matches().get(self.lookup.cursor)?;
+        names.get(index).map(String::as_str)
+    }
+
+    /// Closes the card on the species list narrowed to the Pokemon that go
+    /// with the highlighted entry — the ones that can have the ability, or
+    /// that are found holding the item.
+    ///
+    /// The narrowing is an ordinary search term, written into the box where
+    /// it can be read, edited and combined: `ability:levitate` then `gen:1` is
+    /// one more word. An item known to be held by nobody is left alone rather
+    /// than turned into a filter that can only show an empty list.
+    fn show_lookup_species(&mut self) {
+        let Some(slug) = self.highlighted_lookup().map(str::to_string) else {
+            return;
+        };
+        if self.lookup.kind == LookupKind::Item
+            && self
+                .items
+                .get(&slug)
+                .is_some_and(|item| item.holders.is_empty())
+        {
+            return;
+        }
+        self.browser.query = self.lookup.species_query(&slug);
+        self.recompute_filter();
+        self.lookup_card = false;
+        self.focus = Focus::List;
+    }
+
+    /// Fetches one side's list unless it is already here or on its way. A
+    /// stale cached copy is shown first and refreshed behind it, as the
+    /// species list is.
+    fn request_index(&mut self, kind: LookupKind) {
+        if self.indexes.contains_key(&kind) || !self.index_loading.insert(kind) {
+            return;
+        }
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let cached = cache::load_index(kind).await;
+            if let Some((names, fresh)) = cached.as_ref() {
+                let names = Ok(names.clone());
+                let _ = tx.send(Message::IndexLoaded { kind, names }).await;
+                if *fresh {
+                    return;
+                }
+            }
+            let fetched = match kind {
+                LookupKind::Ability => api::fetch_ability_list(&client).await,
+                LookupKind::Item => api::fetch_item_list(&client).await,
+            };
+            let names = match fetched {
+                Ok(names) => {
+                    cache::store_index(kind, &names).await;
+                    Ok(names)
+                }
+                // Offline with a stale copy already on screen, that copy is
+                // the answer, and there is nothing worth a banner.
+                Err(_) if cached.is_some() => return,
+                Err(err) => Err(err.to_string()),
+            };
+            let _ = tx.send(Message::IndexLoaded { kind, names }).await;
+        });
+    }
+
+    /// Requests the record behind the lookup card's cursor, if it is not
+    /// already here. One at a time, as the cursor reaches each: unlike the
+    /// learnset, the list behind the card runs to two thousand rows, and the
+    /// card only shows the one record.
+    ///
+    /// Abilities go through the same store the ability card fills, so an
+    /// ability looked up here is already there when a species with it is
+    /// opened, and the other way round.
+    fn ensure_lookup_info(&mut self) {
+        if !self.lookup_card {
+            return;
+        }
+        let Some(slug) = self.highlighted_lookup().map(str::to_string) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        match self.lookup.kind {
+            LookupKind::Ability => {
+                if self.abilities.contains_key(&slug) || !self.ability_loading.insert(slug.clone())
+                {
+                    return;
+                }
+                tokio::spawn(async move {
+                    if let Some(info) = resolve_ability(&client, &slug).await {
+                        let _ = tx.send(Message::AbilityLoaded(info)).await;
+                    }
+                });
+            }
+            LookupKind::Item => {
+                if self.items.contains_key(&slug) || !self.item_loading.insert(slug.clone()) {
+                    return;
+                }
+                tokio::spawn(async move {
+                    if let Some(info) = resolve_item(&client, &slug).await {
+                        let _ = tx.send(Message::ItemLoaded(info)).await;
+                    }
+                });
+            }
+        }
+    }
+
     fn open_matchups(&mut self) {
         if self.selected_detail().is_some() {
             self.matchups = true;
@@ -1363,6 +1572,7 @@ impl App {
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
             KeyCode::Char('i') | KeyCode::Char('I') => self.open_stat_card(),
+            KeyCode::Char('d') | KeyCode::Char('D') => self.open_lookup(),
             KeyCode::Char('?') => self.help_card = true,
             code => self.step_generation(code),
         }
@@ -1706,6 +1916,16 @@ async fn resolve_ability(client: &reqwest::Client, name: &str) -> Option<Ability
     }
     let info = api::fetch_ability(client, name).await.ok()?;
     cache::store_ability(name, &info).await;
+    Some(info)
+}
+
+/// Resolves one item's record from the cache, falling back to the network.
+async fn resolve_item(client: &reqwest::Client, name: &str) -> Option<ItemInfo> {
+    if let Some(info) = cache::load_item(name).await {
+        return Some(info);
+    }
+    let info = api::fetch_item(client, name).await.ok()?;
+    cache::store_item(name, &info).await;
     Some(info)
 }
 
@@ -2301,6 +2521,139 @@ mod tests {
         app.browser.query = "type:poison egg:grass".to_string();
         app.recompute_filter();
         assert_eq!(visible(&app), ["bulbasaur", "oddish"]);
+    }
+
+    /// An app with both lookup lists in hand, so opening the card asks for
+    /// nothing, and the rosters its Enter writes into the box already
+    /// resolved, so applying one asks for nothing either.
+    fn app_with_lookup() -> App {
+        let mut app = app_listing(&[(92, "gastly"), (143, "snorlax"), (446, "munchlax")]);
+        app.indexes.insert(
+            LookupKind::Ability,
+            ["stench", "levitate", "thick-fat"]
+                .map(String::from)
+                .to_vec(),
+        );
+        app.indexes.insert(
+            LookupKind::Item,
+            ["master-ball", "leftovers", "town-map"]
+                .map(String::from)
+                .to_vec(),
+        );
+        for (kind, value, members) in [
+            (RosterKind::Ability, "levitate", &["gastly"][..]),
+            (RosterKind::Item, "leftovers", &["snorlax", "munchlax"][..]),
+        ] {
+            app.browser.rosters.insert(
+                RosterTerm::new(kind, value),
+                members.iter().map(|m| m.to_string()).collect(),
+            );
+        }
+        app.recompute_filter();
+        app
+    }
+
+    fn type_into(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.handle_event(Event::Key(press(KeyCode::Char(c))));
+        }
+    }
+
+    #[test]
+    fn the_lookup_card_narrows_the_species_list_to_an_ability() {
+        let mut app = app_with_lookup();
+        app.handle_event(Event::Key(press(KeyCode::Char('D'))));
+        assert!(app.lookup_card);
+
+        type_into(&mut app, "levi");
+        assert_eq!(app.highlighted_lookup(), Some("levitate"));
+
+        app.handle_event(Event::Key(press(KeyCode::Enter)));
+        assert!(!app.lookup_card);
+        assert_eq!(app.focus, Focus::List);
+        assert_eq!(app.browser.query, "ability:levitate");
+        assert_eq!(visible(&app), ["gastly"]);
+    }
+
+    #[test]
+    fn tab_switches_to_items_and_enter_lists_their_holders() {
+        let mut app = app_with_lookup();
+        app.handle_event(Event::Key(press(KeyCode::Char('d'))));
+        app.handle_event(Event::Key(press(KeyCode::Tab)));
+        assert_eq!(app.lookup.kind, LookupKind::Item);
+        app.handle_event(Event::Key(press(KeyCode::Down)));
+        assert_eq!(app.highlighted_lookup(), Some("leftovers"));
+
+        app.handle_event(Event::Key(press(KeyCode::Enter)));
+        assert_eq!(app.browser.query, "held:leftovers");
+        assert_eq!(visible(&app), ["snorlax", "munchlax"]);
+    }
+
+    #[test]
+    fn an_item_nobody_holds_is_not_turned_into_an_empty_list() {
+        let mut app = app_with_lookup();
+        app.lookup.kind = LookupKind::Item;
+        app.lookup_card = true;
+        app.items.insert(
+            "town-map".to_string(),
+            ItemInfo {
+                name: "town-map".to_string(),
+                names: HashMap::new(),
+                flavors: HashMap::new(),
+                effects: HashMap::new(),
+                category: "plot-advancement".to_string(),
+                fling_power: None,
+                holders: Vec::new(),
+            },
+        );
+        type_into(&mut app, "town");
+        app.handle_event(Event::Key(press(KeyCode::Enter)));
+        assert!(app.lookup_card, "the card stays open");
+        assert!(app.browser.query.is_empty());
+    }
+
+    #[test]
+    fn letters_in_the_lookup_card_are_typed_and_only_esc_closes_it() {
+        let mut app = app_with_lookup();
+        app.handle_event(Event::Key(press(KeyCode::Char('D'))));
+        // Every one of these is a binding on the list, and none of them may
+        // fire from inside the card.
+        type_into(&mut app, "dqx ");
+        assert!(app.lookup_card && !app.should_quit);
+        assert_eq!(app.lookup.query, "dqx ");
+        assert_eq!(app.highlighted_lookup(), None, "nothing is called that");
+
+        app.handle_event(Event::Key(press(KeyCode::Backspace)));
+        assert_eq!(app.lookup.query, "dqx");
+        app.handle_event(Event::Key(press(KeyCode::Esc)));
+        assert!(!app.lookup_card && !app.should_quit);
+        assert!(app.browser.query.is_empty(), "closing changes no filter");
+    }
+
+    #[test]
+    fn a_refreshed_list_pulls_the_cursor_back_inside_it() {
+        let mut app = app_with_lookup();
+        app.lookup.cursor = 2;
+        app.handle_message(Message::IndexLoaded {
+            kind: LookupKind::Ability,
+            names: Ok(vec!["stench".to_string()]),
+        });
+        assert_eq!(app.lookup.cursor, 0);
+        assert_eq!(app.highlighted_lookup(), Some("stench"));
+    }
+
+    #[test]
+    fn a_list_that_cannot_be_fetched_is_asked_for_again_next_time() {
+        let mut app = app_with_lookup();
+        app.indexes.remove(&LookupKind::Item);
+        app.index_loading.insert(LookupKind::Item);
+        app.handle_message(Message::IndexLoaded {
+            kind: LookupKind::Item,
+            names: Err("offline".to_string()),
+        });
+        assert!(app.error.is_some());
+        assert!(!app.indexes.contains_key(&LookupKind::Item));
+        assert!(!app.index_loading.contains(&LookupKind::Item));
     }
 
     #[test]
