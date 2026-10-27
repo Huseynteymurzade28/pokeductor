@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 
 use crate::models::{
-    Ability, AbilityInfo, EvolutionCondition, EvolutionTree, EvolutionTrigger, FieldData, ItemInfo,
-    LearnMethod, LearnedMove, MoveInfo, PastTyping, PokemonDetail, PokemonEntry, RosterKind,
-    RosterTerm, Sprite, SpriteVariant, Stat, StatKind,
+    Ability, AbilityInfo, Encounter, EvolutionCondition, EvolutionTree, EvolutionTrigger,
+    FieldData, GameEncounters, ItemInfo, LearnMethod, LearnedMove, MoveInfo, PastTyping,
+    PokemonDetail, PokemonEntry, RosterKind, RosterTerm, Sprite, SpriteVariant, Stat, StatKind,
 };
 use crate::retry::{self, FailureKind};
 
@@ -534,6 +534,141 @@ pub async fn fetch_item_list(client: &reqwest::Client) -> Result<Vec<String>, Ap
     Ok(raw.results.into_iter().map(|r| r.name).collect())
 }
 
+/// Where a Pokemon can be found, game by game, newest game first.
+///
+/// `name` is a `/pokemon` key, a variety, as for [`fetch_named_sprite`]. A
+/// Pokemon with no wild encounters answers with an empty list, which is a
+/// real answer rather than a failure.
+pub async fn fetch_encounters(
+    client: &reqwest::Client,
+    name: &str,
+) -> Result<Vec<GameEncounters>, ApiError> {
+    let url = format!("{BASE_URL}/pokemon/{name}/encounters");
+    let raw: Vec<RawLocationEncounters> = get_json(client, &url).await?;
+    Ok(encounters_by_game(raw))
+}
+
+/// Where a version sits in release order. PokeAPI's version ids are release
+/// order apart from the ones appended later: the Japanese Generation I
+/// releases, and the Shield and Violet halves of the two DLC pairs, which
+/// arrived long after their Sword and Scarlet halves had been numbered. Each is
+/// placed beside its pair, so "newest" never lands on a 1996 game, and the
+/// two halves of a DLC sit together when the card steps through them.
+fn release_order(slug: &str, id: u32) -> u32 {
+    match slug {
+        "red-japan" | "green-japan" | "blue-japan" => 0,
+        "the-isle-of-armor-shield" => 35,
+        "the-crown-tundra-shield" => 36,
+        "the-teal-mask-violet" => 42,
+        "the-indigo-disk-violet" => 43,
+        _ => id,
+    }
+}
+
+/// Turns PokeAPI's place-by-place answer into a game-by-game one, newest game
+/// first, with one row per place and method.
+///
+/// PokeAPI lists every slot of an encounter table separately, and a place can
+/// have several tables for one method — before and after the Hall of Fame, in
+/// rain and in sun. Slots under the same conditions are summed, which is what
+/// "the chance of meeting it here" means; tables under different conditions
+/// are alternatives rather than additions, so the best of them is the one
+/// shown, and the row is marked as conditional. Summing across them would add
+/// the chance before beating the game to the chance after, and Pikachu's Max
+/// Raid dens would come to 165%.
+fn encounters_by_game(raw: Vec<RawLocationEncounters>) -> Vec<GameEncounters> {
+    // Each game's rows, collected in the order places first appear, with the
+    // game's place in release order to sort by at the end.
+    let mut games: Vec<(u32, u32, GameEncounters)> = Vec::new();
+
+    for place in raw {
+        for game in place.version_details {
+            let mut methods: Vec<MethodTables> = Vec::new();
+            for detail in game.encounter_details {
+                let mut conditions: Vec<String> = detail
+                    .condition_values
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+                conditions.sort();
+                let index = match methods.iter().position(|m| m.method == detail.method.name) {
+                    Some(index) => index,
+                    None => {
+                        methods.push(MethodTables::new(detail.method.name.clone()));
+                        methods.len() - 1
+                    }
+                };
+                methods[index].add(conditions, &detail);
+            }
+            let rows = methods
+                .into_iter()
+                .map(|method| method.into_row(&place.location_area.name));
+
+            match games.iter_mut().find(|g| g.2.version == game.version.name) {
+                Some((_, _, entry)) => entry.encounters.extend(rows),
+                None => {
+                    let id = id_from_url(&game.version.url);
+                    games.push((
+                        release_order(&game.version.name, id),
+                        id,
+                        GameEncounters {
+                            version: game.version.name,
+                            encounters: rows.collect(),
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
+    games.sort_by_key(|&(order, id, _)| std::cmp::Reverse((order, id)));
+    games.into_iter().map(|(_, _, game)| game).collect()
+}
+
+/// One method's encounter tables at one place in one game, while they are
+/// being read: the summed chance under each set of conditions, and the level
+/// range across all of them.
+struct MethodTables {
+    method: String,
+    tables: Vec<(Vec<String>, u32)>,
+    min_level: u8,
+    max_level: u8,
+}
+
+impl MethodTables {
+    fn new(method: String) -> Self {
+        Self {
+            method,
+            tables: Vec::new(),
+            min_level: u8::MAX,
+            max_level: 0,
+        }
+    }
+
+    fn add(&mut self, conditions: Vec<String>, slot: &RawEncounterDetail) {
+        self.min_level = self.min_level.min(slot.min_level);
+        self.max_level = self.max_level.max(slot.max_level);
+        let chance = u32::from(slot.chance);
+        match self.tables.iter_mut().find(|(set, _)| *set == conditions) {
+            Some((_, sum)) => *sum += chance,
+            None => self.tables.push((conditions, chance)),
+        }
+    }
+
+    fn into_row(self, location: &str) -> Encounter {
+        let best = self.tables.iter().map(|(_, sum)| *sum).max().unwrap_or(0);
+        Encounter {
+            location: location.to_string(),
+            conditional: self.tables.len() > 1
+                || self.tables.iter().any(|(set, _)| !set.is_empty()),
+            chance: best.min(100) as u8,
+            method: self.method,
+            min_level: self.min_level,
+            max_level: self.max_level,
+        }
+    }
+}
+
 /// Display names in the languages the cards use, first one per language.
 fn localized_names(raw: &[RawLocalizedName]) -> HashMap<String, String> {
     let mut names = HashMap::new();
@@ -870,6 +1005,29 @@ struct RawAbility {
     #[serde(default)]
     effect_entries: Vec<RawEffect>,
     generation: NamedResource,
+}
+
+/// One place in `/pokemon/{name}/encounters`, with what each game has there.
+#[derive(serde::Deserialize)]
+struct RawLocationEncounters {
+    location_area: NamedResource,
+    version_details: Vec<RawVersionEncounters>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawVersionEncounters {
+    version: NamedResource,
+    encounter_details: Vec<RawEncounterDetail>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawEncounterDetail {
+    min_level: u8,
+    max_level: u8,
+    chance: u8,
+    method: NamedResource,
+    #[serde(default)]
+    condition_values: Vec<NamedResource>,
 }
 
 /// An effect description in one language. Abilities and items share it.
@@ -1211,6 +1369,20 @@ mod tests {
         let leftovers = fetch_item(&client, "leftovers").await.expect("item fetch");
         assert_eq!(leftovers.category, "held-items");
         assert!(leftovers.effect_for("en").is_some() && leftovers.flavor_for("de").is_some());
+
+        // Pikachu is in the wild in most games; a starter of the newest
+        // generation is in none PokeAPI records.
+        let pikachu = fetch_encounters(&client, "pikachu")
+            .await
+            .expect("encounters");
+        assert!(pikachu.iter().any(|g| g.version == "red"));
+        assert!(pikachu
+            .iter()
+            .all(|g| g.encounters.iter().all(|e| e.chance <= 100)));
+        let sprigatito = fetch_encounters(&client, "sprigatito")
+            .await
+            .expect("encounters");
+        assert!(sprigatito.is_empty());
 
         // One roster of each kind, since they read four differently shaped
         // payloads for the same answer.
@@ -1724,5 +1896,142 @@ mod tests {
             ability.flavor_for("de"),
             Some("Gives full immunity to all Ground-type moves.")
         );
+    }
+
+    fn place(json: &str) -> Vec<RawLocationEncounters> {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn slots_under_the_same_conditions_add_up() {
+        // Viridian Forest in Red: two slots, no conditions, 5% each.
+        let games = encounters_by_game(place(
+            r#"[{
+              "location_area": { "name": "viridian-forest-area", "url": "" },
+              "version_details": [{
+                "version": { "name": "red", "url": "https://pokeapi.co/api/v2/version/1/" },
+                "encounter_details": [
+                  { "min_level": 3, "max_level": 3, "chance": 5,
+                    "method": { "name": "walk", "url": "" }, "condition_values": [] },
+                  { "min_level": 5, "max_level": 5, "chance": 5,
+                    "method": { "name": "walk", "url": "" }, "condition_values": [] }
+                ]
+              }]
+            }]"#,
+        ));
+        assert_eq!(
+            games,
+            [GameEncounters {
+                version: "red".to_string(),
+                encounters: vec![Encounter {
+                    location: "viridian-forest-area".to_string(),
+                    method: "walk".to_string(),
+                    min_level: 3,
+                    max_level: 5,
+                    chance: 10,
+                    conditional: false,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn tables_under_different_conditions_are_alternatives_not_additions() {
+        let games = encounters_by_game(place(
+            r#"[{
+              "location_area": { "name": "stony-wilderness-main", "url": "" },
+              "version_details": [{
+                "version": { "name": "sword", "url": "https://pokeapi.co/api/v2/version/33/" },
+                "encounter_details": [
+                  { "min_level": 26, "max_level": 28, "chance": 10,
+                    "method": { "name": "walk", "url": "" },
+                    "condition_values": [{ "name": "story-progress-before-hall-of-fame", "url": "" }] },
+                  { "min_level": 60, "max_level": 60, "chance": 10,
+                    "method": { "name": "walk", "url": "" },
+                    "condition_values": [{ "name": "story-progress-hall-of-fame", "url": "" }] },
+                  { "min_level": 28, "max_level": 30, "chance": 5,
+                    "method": { "name": "overworld", "url": "" },
+                    "condition_values": [{ "name": "weather-thunderstorm", "url": "" }] }
+                ]
+              }]
+            }]"#,
+        ));
+        let rows = &games[0].encounters;
+        assert_eq!(rows.len(), 2, "one row per method");
+        assert_eq!((rows[0].method.as_str(), rows[0].chance), ("walk", 10));
+        assert_eq!((rows[0].min_level, rows[0].max_level), (26, 60));
+        assert!(rows[0].conditional && rows[1].conditional);
+    }
+
+    #[test]
+    fn a_chance_never_reads_past_a_hundred() {
+        let games = encounters_by_game(place(
+            r#"[{
+              "location_area": { "name": "somewhere", "url": "" },
+              "version_details": [{
+                "version": { "name": "x", "url": "https://pokeapi.co/api/v2/version/23/" },
+                "encounter_details": [
+                  { "min_level": 1, "max_level": 1, "chance": 100,
+                    "method": { "name": "gift", "url": "" } },
+                  { "min_level": 1, "max_level": 1, "chance": 100,
+                    "method": { "name": "gift", "url": "" } }
+                ]
+              }]
+            }]"#,
+        ));
+        assert_eq!(games[0].encounters[0].chance, 100);
+    }
+
+    #[test]
+    fn games_come_newest_first_with_late_numbered_versions_beside_their_pairs() {
+        let version = |name: &str, id: u32| {
+            format!(
+                r#"{{ "version": {{ "name": "{name}", "url": "https://pokeapi.co/api/v2/version/{id}/" }},
+                     "encounter_details": [] }}"#
+            )
+        };
+        let games = encounters_by_game(place(&format!(
+            r#"[{{ "location_area": {{ "name": "a", "url": "" }},
+                   "version_details": [{}, {}, {}, {}, {}] }}]"#,
+            version("red", 1),
+            version("red-japan", 44),
+            version("sword", 33),
+            version("the-isle-of-armor-sword", 35),
+            version("the-isle-of-armor-shield", 50),
+        )));
+        let order: Vec<&str> = games.iter().map(|g| g.version.as_str()).collect();
+        assert_eq!(
+            order,
+            [
+                "the-isle-of-armor-shield",
+                "the-isle-of-armor-sword",
+                "sword",
+                "red",
+                "red-japan"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_game_with_rows_in_several_places_collects_them_in_order() {
+        let games = encounters_by_game(place(
+            r#"[
+              { "location_area": { "name": "route-1", "url": "" },
+                "version_details": [{ "version": { "name": "red", "url": "/version/1/" },
+                  "encounter_details": [{ "min_level": 2, "max_level": 4, "chance": 30,
+                    "method": { "name": "walk", "url": "" } }] }] },
+              { "location_area": { "name": "route-2", "url": "" },
+                "version_details": [{ "version": { "name": "red", "url": "/version/1/" },
+                  "encounter_details": [{ "min_level": 3, "max_level": 5, "chance": 20,
+                    "method": { "name": "walk", "url": "" } }] }] }
+            ]"#,
+        ));
+        assert_eq!(games.len(), 1);
+        let places: Vec<&str> = games[0]
+            .encounters
+            .iter()
+            .map(|e| e.location.as_str())
+            .collect();
+        assert_eq!(places, ["route-1", "route-2"]);
     }
 }

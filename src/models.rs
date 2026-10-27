@@ -597,6 +597,49 @@ impl PokemonDetail {
     }
 }
 
+/// Where a Pokemon can be found in one game, from `/pokemon/{name}/encounters`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameEncounters {
+    /// PokeAPI's version slug, e.g. `"sword"`, `"lets-go-pikachu"`.
+    pub version: String,
+    /// One row per place and method, in PokeAPI's order.
+    pub encounters: Vec<Encounter>,
+}
+
+/// One way to meet a Pokemon in one place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Encounter {
+    /// Location-area slug, e.g. `"kanto-route-2-south-towards-viridian-city"`.
+    pub location: String,
+    /// Encounter-method slug: `"walk"`, `"surf"`, `"super-rod"`, `"gift"`, ...
+    pub method: String,
+    pub min_level: u8,
+    pub max_level: u8,
+    /// Percent chance per encounter, at most 100.
+    pub chance: u8,
+    /// Whether the encounter only happens under some condition — a time of
+    /// day, a weather, a point in the story, a swarm.
+    pub conditional: bool,
+}
+
+/// A location-area slug as a place name. The `-area` PokeAPI puts on a place
+/// with a single area is dropped, since there is no other area to tell it
+/// from: `"pallet-town-area"` reads "Pallet Town".
+pub fn location_label(slug: &str) -> String {
+    let slug = slug.strip_suffix("-area").unwrap_or(slug);
+    title_case(slug)
+}
+
+/// A game's version slug as its title. Most are their slug title-cased; the
+/// Let's Go pair are the ones that would read wrong.
+pub fn version_label(slug: &str) -> String {
+    match slug {
+        "lets-go-pikachu" => "Let's Go Pikachu".to_string(),
+        "lets-go-eevee" => "Let's Go Eevee".to_string(),
+        other => title_case(other),
+    }
+}
+
 /// A form's name with the species it belongs to taken off the front:
 /// `raichu-alola` under `raichu` reads as "Alola", which is the half of the
 /// name a row sitting beside Raichu is about.

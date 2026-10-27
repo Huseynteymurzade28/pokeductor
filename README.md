@@ -205,6 +205,25 @@ already, so listing them on the info card costs nothing. Their descriptions live
 behind one request each and are cached permanently. Hidden abilities are marked:
 they are only obtainable by special means, which is worth knowing at a glance.
 
+### Where to find it
+
+`W` opens where the species on display can be found in the wild: a row per
+place and method — walking, surfing, each fishing rod, gifts, trades, Max Raid
+dens — with the level range and the chance per encounter. PokeAPI answers game
+by game, so the card shows one game at a time, named at the top, starting on
+the newest one with any encounters; `←` `→` step through the others.
+
+Chances are summed over the slots of one encounter table, which is what "the
+chance of meeting it here" means. A place can have several tables for one
+method — in rain and in sun, before and after the Hall of Fame — and those are
+alternatives rather than additions, so the row shows the best of them and is
+marked `*`. Adding them up would put some of Pikachu's Max Raid dens at 165%.
+
+The data comes from `/pokemon/{name}/encounters`, one request per form the
+first time the card opens on it, cached for good. PokeAPI's encounter data is
+thin for the most recent games, so a species with nothing recorded gets a card
+saying that much, and that it does not mean the species cannot be caught.
+
 ### Looking up abilities and items
 
 `D` opens a search over every ability and every item, for when the question is
@@ -509,6 +528,7 @@ no refetch:
 | | `I` | Stat calculator |
 | | `V` | Alternate forms card |
 | | `D` | Look up abilities and items |
+| | `W` | Where to find it in the wild |
 | | `X` | Toggle shiny artwork |
 | | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
@@ -542,6 +562,9 @@ no refetch:
 | | `+` `-` | Step the value (EVs by 4) |
 | | `R` | Back to level 50, 31 IVs, no EVs |
 | | `I` · `Esc` | Close |
+| **Encounters card** | `←` `→` · `h` `l` | Previous / next game |
+| | `↑` `↓` · `j` `k` | Scroll |
+| | `W` · `Esc` | Close |
 | **Lookup card** | *type* | Narrow the list |
 | | `Tab` | Abilities ↔ items |
 | | `↑` `↓` · `PgUp` `PgDn` · `Home` `End` | Move the cursor |

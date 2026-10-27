@@ -25,8 +25,8 @@ use crate::color::{self, Depth};
 use crate::i18n::Language;
 use crate::lookup::{self, Lookup};
 use crate::models::{
-    AbilityInfo, EvolutionTree, ItemInfo, LearnedMove, LookupKind, MoveInfo, PokemonDetail,
-    PokemonEntry, RosterTerm, Sprite, SpriteVariant,
+    AbilityInfo, EvolutionTree, GameEncounters, ItemInfo, LearnedMove, LookupKind, MoveInfo,
+    PokemonDetail, PokemonEntry, RosterTerm, Sprite, SpriteVariant,
 };
 use crate::session::{self, Session};
 use crate::showdown;
@@ -75,6 +75,11 @@ pub enum Message {
     MoveLoaded(MoveInfo),
     /// One item's record finished loading.
     ItemLoaded(ItemInfo),
+    /// Where a Pokemon can be found finished loading, or could not be.
+    EncountersLoaded {
+        name: String,
+        games: Result<Vec<GameEncounters>, String>,
+    },
     /// Every ability's or item's name finished loading for the lookup card, or
     /// could not be loaded.
     IndexLoaded {
@@ -214,6 +219,15 @@ pub struct App {
     pub items: HashMap<String, ItemInfo>,
     /// Item lookups in flight, so each is requested only once.
     pub item_loading: HashSet<String>,
+    /// Where each Pokemon can be found, keyed by variety name, game by game.
+    pub encounters: HashMap<String, Vec<GameEncounters>>,
+    /// Encounter lookups in flight.
+    pub encounter_loading: HashSet<String>,
+    /// Whether the encounters card is open, which game it shows as an index
+    /// into the selection's list, newest first, and how far it is scrolled.
+    pub encounter_card: bool,
+    pub encounter_game: usize,
+    pub encounter_scroll: usize,
     /// Whether the help overlay is open.
     pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
@@ -302,6 +316,11 @@ impl App {
             index_loading: HashSet::new(),
             items: HashMap::new(),
             item_loading: HashSet::new(),
+            encounters: HashMap::new(),
+            encounter_loading: HashSet::new(),
+            encounter_card: false,
+            encounter_game: 0,
+            encounter_scroll: 0,
             help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
@@ -421,6 +440,7 @@ impl App {
             || !self.move_loading.is_empty()
             || !self.index_loading.is_empty()
             || !self.item_loading.is_empty()
+            || !self.encounter_loading.is_empty()
             || !self.translating.is_empty()
             || !self.team_loading.is_empty()
             || self
@@ -851,6 +871,23 @@ impl App {
                 self.item_loading.remove(&info.name);
                 self.items.insert(info.name.clone(), info);
             }
+            Message::EncountersLoaded { name, games } => {
+                self.encounter_loading.remove(&name);
+                match games {
+                    Ok(games) => {
+                        self.encounters.insert(name, games);
+                    }
+                    // The card was waiting on this and has nothing to show,
+                    // so it closes rather than spinning on; opening it again
+                    // is the retry.
+                    Err(err) => {
+                        if self.selected_name.as_deref() == Some(name.as_str()) {
+                            self.encounter_card = false;
+                        }
+                        self.error = Some(err);
+                    }
+                }
+            }
             Message::IndexLoaded { kind, names } => {
                 self.index_loading.remove(&kind);
                 match names {
@@ -932,6 +969,10 @@ impl App {
         }
         if self.lookup_card {
             self.handle_lookup_key(key);
+            return;
+        }
+        if self.encounter_card {
+            self.handle_encounter_key(key);
             return;
         }
         if self.team_card {
@@ -1332,6 +1373,67 @@ impl App {
         }
     }
 
+    /// Opens the encounters card on the newest game the species on display
+    /// can be found in, fetching where that is if this is the first time
+    /// anyone asked.
+    ///
+    /// Encounters belong to a variety, not a species, as the learnset does:
+    /// they are keyed by the name on display.
+    fn open_encounters(&mut self) {
+        let Some(name) = self.selected_detail().map(|detail| detail.name.clone()) else {
+            return;
+        };
+        self.encounter_card = true;
+        self.encounter_game = 0;
+        self.encounter_scroll = 0;
+        if self.encounters.contains_key(&name) || !self.encounter_loading.insert(name.clone()) {
+            return;
+        }
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let games = resolve_encounters(&client, &name).await;
+            let _ = tx.send(Message::EncountersLoaded { name, games }).await;
+        });
+    }
+
+    /// The games the species on display can be found in, newest first, once
+    /// they have arrived.
+    pub fn selected_encounters(&self) -> Option<&[GameEncounters]> {
+        let name = self.selected_detail()?.name.as_str();
+        self.encounters.get(name).map(Vec::as_slice)
+    }
+
+    fn handle_encounter_key(&mut self, key: KeyEvent) {
+        let games = self
+            .selected_encounters()
+            .map_or(0, <[GameEncounters]>::len);
+        let rows = self
+            .selected_encounters()
+            .and_then(|games| games.get(self.encounter_game))
+            .map_or(0, |game| game.encounters.len());
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('w' | 'W' | 'q' | 'Q') => self.encounter_card = false,
+            // Newest first, so right is further back in time, as reading on
+            // through the list is.
+            KeyCode::Right | KeyCode::Char('l') if games > 0 => {
+                self.encounter_game = (self.encounter_game + 1) % games;
+                self.encounter_scroll = 0;
+            }
+            KeyCode::Left | KeyCode::Char('h') if games > 0 => {
+                self.encounter_game = (self.encounter_game + games - 1) % games;
+                self.encounter_scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.encounter_scroll = (self.encounter_scroll + 1).min(rows.saturating_sub(1));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.encounter_scroll = self.encounter_scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
     /// Opens the lookup card where it was last left, and asks for the list on
     /// the side it opens on.
     ///
@@ -1573,6 +1675,7 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
             KeyCode::Char('i') | KeyCode::Char('I') => self.open_stat_card(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_lookup(),
+            KeyCode::Char('w') | KeyCode::Char('W') => self.open_encounters(),
             KeyCode::Char('?') => self.help_card = true,
             code => self.step_generation(code),
         }
@@ -1917,6 +2020,25 @@ async fn resolve_ability(client: &reqwest::Client, name: &str) -> Option<Ability
     let info = api::fetch_ability(client, name).await.ok()?;
     cache::store_ability(name, &info).await;
     Some(info)
+}
+
+/// Resolves where a Pokemon can be found, cache first. A 404 is an answer —
+/// a variety PokeAPI keeps no encounter data for — and is kept as an empty
+/// list; any other failure is reported, so the card can say it could not ask.
+async fn resolve_encounters(
+    client: &reqwest::Client,
+    name: &str,
+) -> Result<Vec<GameEncounters>, String> {
+    if let Some(games) = cache::load_encounters(name).await {
+        return Ok(games);
+    }
+    let games = match api::fetch_encounters(client, name).await {
+        Ok(games) => games,
+        Err(ApiError::NotFound(_)) => Vec::new(),
+        Err(err) => return Err(err.to_string()),
+    };
+    cache::store_encounters(name, &games).await;
+    Ok(games)
 }
 
 /// Resolves one item's record from the cache, falling back to the network.
@@ -2521,6 +2643,96 @@ mod tests {
         app.browser.query = "type:poison egg:grass".to_string();
         app.recompute_filter();
         assert_eq!(visible(&app), ["bulbasaur", "oddish"]);
+    }
+
+    fn wild(location: &str, method: &str, chance: u8) -> crate::models::Encounter {
+        crate::models::Encounter {
+            location: location.to_string(),
+            method: method.to_string(),
+            min_level: 3,
+            max_level: 5,
+            chance,
+            conditional: false,
+        }
+    }
+
+    /// Pikachu on display, with where it is found already in hand for two
+    /// games, so opening the card asks for nothing.
+    fn app_with_encounters() -> App {
+        let mut app = app_listing(&[(25, "pikachu")]);
+        // No colour, so putting it on display asks for no artwork either.
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        app.details.insert("pikachu".to_string(), loaded("pikachu"));
+        assert!(app.show_species("pikachu"));
+        app.encounters.insert(
+            "pikachu".to_string(),
+            vec![
+                GameEncounters {
+                    version: "yellow".to_string(),
+                    encounters: vec![wild("route-2", "walk", 10), wild("route-3", "walk", 5)],
+                },
+                GameEncounters {
+                    version: "red".to_string(),
+                    encounters: vec![wild("viridian-forest-area", "walk", 5)],
+                },
+            ],
+        );
+        app
+    }
+
+    #[test]
+    fn the_encounters_card_opens_on_the_newest_game_and_steps_through_the_rest() {
+        let mut app = app_with_encounters();
+        app.encounter_game = 1;
+        app.handle_event(Event::Key(press(KeyCode::Char('W'))));
+        assert!(app.encounter_card);
+        assert_eq!(app.encounter_game, 0, "every opening starts on the newest");
+
+        app.handle_event(Event::Key(press(KeyCode::Right)));
+        assert_eq!(app.encounter_game, 1);
+        app.handle_event(Event::Key(press(KeyCode::Right)));
+        assert_eq!(app.encounter_game, 0, "and wraps");
+        app.handle_event(Event::Key(press(KeyCode::Left)));
+        assert_eq!(app.encounter_game, 1);
+
+        app.handle_event(Event::Key(press(KeyCode::Char('w'))));
+        assert!(!app.encounter_card);
+    }
+
+    #[test]
+    fn the_encounters_card_scrolls_no_further_than_its_last_row() {
+        let mut app = app_with_encounters();
+        app.handle_event(Event::Key(press(KeyCode::Char('W'))));
+        for _ in 0..5 {
+            app.handle_event(Event::Key(press(KeyCode::Down)));
+        }
+        assert_eq!(app.encounter_scroll, 1);
+        // Another game is another table, read from its top.
+        app.handle_event(Event::Key(press(KeyCode::Right)));
+        assert_eq!(app.encounter_scroll, 0);
+    }
+
+    #[test]
+    fn no_species_on_display_means_no_encounters_card() {
+        let mut app = app_listing(&[]);
+        app.handle_event(Event::Key(press(KeyCode::Char('W'))));
+        assert!(!app.encounter_card);
+    }
+
+    #[test]
+    fn encounters_that_cannot_be_fetched_close_the_card_waiting_on_them() {
+        let mut app = app_with_encounters();
+        app.encounters.clear();
+        app.encounter_card = true;
+        app.encounter_loading.insert("pikachu".to_string());
+        app.handle_message(Message::EncountersLoaded {
+            name: "pikachu".to_string(),
+            games: Err("offline".to_string()),
+        });
+        assert!(!app.encounter_card);
+        assert!(app.error.is_some());
+        assert!(app.encounter_loading.is_empty(), "opening again asks again");
     }
 
     /// An app with both lookup lists in hand, so opening the card asks for

@@ -17,6 +17,9 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   cursor shows its description and effect, and for an item its category, Fling
   power and the Pokémon found holding it in the wild. `Enter` narrows the
   species list to the Pokémon that go with it. (#62)
+- Where to find a species. `W` opens its wild encounters game by game,
+  newest first: place, method, level range and chance, with `←` `→` to step
+  through the games. Fetched once per form and cached for good. (#55)
 - `held:` search term: `held:leftovers` is every Pokémon found holding
   Leftovers in the wild, in any game. Combines with the other terms like
   `ability:` does. (#62)

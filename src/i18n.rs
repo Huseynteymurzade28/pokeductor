@@ -203,6 +203,166 @@ const TYPE_NAMES: [(&str, [&str; 6]); 18] = [
     ("fairy", ["Fairy", "Peri", "Fee", "Fée", "Hada", "Folletto"]),
 ];
 
+/// The encounter methods most rows use, in each interface language, in the
+/// order of [`Language::ALL`]. PokeAPI has sixty-odd methods, most of them for
+/// one game's one gimmick; those are shown as their slug title-cased.
+const METHOD_NAMES: [(&str, [&str; 6]); 15] = [
+    (
+        "walk",
+        [
+            "Walking",
+            "Yürürken",
+            "Laufen",
+            "Marche",
+            "Caminando",
+            "Camminando",
+        ],
+    ),
+    (
+        "surf",
+        ["Surfing", "Sörf", "Surfer", "Surf", "Surf", "Surf"],
+    ),
+    (
+        "old-rod",
+        [
+            "Old Rod",
+            "Eski Olta",
+            "Angel",
+            "Canne",
+            "Caña Vieja",
+            "Amo Vecchio",
+        ],
+    ),
+    (
+        "good-rod",
+        [
+            "Good Rod",
+            "İyi Olta",
+            "Profiangel",
+            "Super Canne",
+            "Caña Buena",
+            "Amo Buono",
+        ],
+    ),
+    (
+        "super-rod",
+        [
+            "Super Rod",
+            "Süper Olta",
+            "Superangel",
+            "Méga Canne",
+            "Supercaña",
+            "Super Amo",
+        ],
+    ),
+    (
+        "rock-smash",
+        [
+            "Rock Smash",
+            "Kaya Kırma",
+            "Zertrümmerer",
+            "Éclate-Roc",
+            "Golpe Roca",
+            "Spaccaroccia",
+        ],
+    ),
+    (
+        "headbutt",
+        [
+            "Headbutt",
+            "Kafa Atma",
+            "Kopfnuss",
+            "Coup d'Boule",
+            "Cabezazo",
+            "Bottintesta",
+        ],
+    ),
+    (
+        "gift",
+        ["Gift", "Hediye", "Geschenk", "Cadeau", "Regalo", "Regalo"],
+    ),
+    (
+        "gift-egg",
+        [
+            "Gift egg",
+            "Hediye yumurta",
+            "Geschenktes Ei",
+            "Œuf offert",
+            "Huevo regalado",
+            "Uovo in regalo",
+        ],
+    ),
+    (
+        "npc-trade",
+        [
+            "Trade",
+            "Takas",
+            "Tausch",
+            "Échange",
+            "Intercambio",
+            "Scambio",
+        ],
+    ),
+    (
+        "static",
+        ["Static", "Sabit", "Statisch", "Fixe", "Fijo", "Fisso"],
+    ),
+    (
+        "overworld",
+        [
+            "Overworld",
+            "Açıkta",
+            "Sichtbar",
+            "Visible",
+            "Visible",
+            "Visibile",
+        ],
+    ),
+    (
+        "max-raid",
+        [
+            "Max Raid",
+            "Maks Baskın",
+            "Dyna-Raid",
+            "Raid Dynamax",
+            "Incursión Dinamax",
+            "Raid Dynamax",
+        ],
+    ),
+    (
+        "sos",
+        [
+            "SOS call",
+            "Yardım çağrısı",
+            "Notruf",
+            "Appel à l'aide",
+            "Llamada SOS",
+            "Richiamo SOS",
+        ],
+    ),
+    (
+        "wanderer",
+        [
+            "Wandering",
+            "Dolaşan",
+            "Umherstreifend",
+            "Errant",
+            "Errante",
+            "Errante",
+        ],
+    ),
+];
+
+/// An encounter method's name in `language`, or its slug title-cased where the
+/// table above has none.
+pub fn method_name(language: Language, slug: &str) -> String {
+    METHOD_NAMES
+        .iter()
+        .find(|(known, _)| *known == slug)
+        .map(|(_, names)| names[language.index()].to_string())
+        .unwrap_or_else(|| crate::models::title_case(slug))
+}
+
 /// The type slug a typed name stands for, in any of the six languages.
 ///
 /// Any language rather than only the current one: someone who has learned
@@ -369,6 +529,21 @@ pub struct Strings {
     /// stands in for it when there are none.
     pub lookup_holders: &'static str,
     pub lookup_no_holders: &'static str,
+    /// Title of the encounters card.
+    pub encounters_title: &'static str,
+    /// Shown when PokeAPI records no wild encounters at all, followed by the
+    /// note saying why that is not the same as "cannot be caught".
+    pub encounters_none: &'static str,
+    pub encounters_note: &'static str,
+    /// Legend for the `*` on a row that only happens under some condition.
+    pub encounters_conditional: &'static str,
+    /// Hint at the foot of the encounters card.
+    pub encounters_hint: &'static str,
+    /// Column headings on the encounters card.
+    pub col_location: &'static str,
+    pub col_method: &'static str,
+    pub col_level: &'static str,
+    pub col_chance: &'static str,
     /// Column headings on the moves card. Kept short: seven columns have to
     /// fit a card narrow enough to leave the list behind it visible.
     pub col_learn: &'static str,
@@ -485,6 +660,7 @@ pub struct HelpStrings {
     pub act_lookup_switch: &'static str,
     pub act_lookup_apply: &'static str,
     pub act_by_held: &'static str,
+    pub act_encounters: &'static str,
     pub act_chain_expand: &'static str,
     pub act_compare: &'static str,
     /// `E` on the party card: copy it as a Showdown team.
@@ -696,6 +872,15 @@ impl Strings {
             lookup_fling: "Fling power",
             lookup_holders: "Held in the wild by",
             lookup_no_holders: "Not found held in the wild",
+            encounters_title: " Where to Find ",
+            encounters_none: "No wild encounters recorded",
+            encounters_note: "PokeAPI's encounter data is incomplete for recent games, so this does not mean it cannot be caught there.",
+            encounters_conditional: "* only at some times, in some weather or at some point in the story",
+            encounters_hint: "← → Game · ↑ ↓ Scroll · Esc / W Close",
+            col_location: "Location",
+            col_method: "Method",
+            col_level: "Level",
+            col_chance: "Chance",
             col_learn: "Lv",
             col_move: "Move",
             col_type: "Type",
@@ -774,6 +959,7 @@ impl Strings {
                 act_lookup_switch: "Abilities ↔ items",
                 act_lookup_apply: "List the Pokémon with it",
                 act_by_held: "Filter by held item",
+                act_encounters: "Where to find it",
                 act_chain_expand: "Full-screen chain",
                 act_compare: "Pin / compare two species",
                 act_copy_team: "Copy for Showdown",
@@ -880,6 +1066,15 @@ impl Strings {
             lookup_fling: "Fırlatma gücü",
             lookup_holders: "Doğada taşıyanlar",
             lookup_no_holders: "Doğada taşıyan yok",
+            encounters_title: " Nerede Bulunur ",
+            encounters_none: "Kayıtlı yabani karşılaşma yok",
+            encounters_note: "PokeAPI'nin karşılaşma verisi yeni oyunlar için eksik; bu, orada yakalanamayacağı anlamına gelmez.",
+            encounters_conditional: "* yalnızca belirli saat, hava ya da hikâye aşamasında",
+            encounters_hint: "← → Oyun · ↑ ↓ Kaydır · Esc / W Kapat",
+            col_location: "Konum",
+            col_method: "Yöntem",
+            col_level: "Seviye",
+            col_chance: "Şans",
             col_learn: "Sv",
             col_move: "Hareket",
             col_type: "Tip",
@@ -958,6 +1153,7 @@ impl Strings {
                 act_lookup_switch: "Yetenek ↔ eşya",
                 act_lookup_apply: "Sahip Pokémonları listele",
                 act_by_held: "Taşınan eşyaya göre süz",
+                act_encounters: "Nerede bulunur",
                 act_chain_expand: "Zinciri tam ekran aç",
                 act_compare: "Sabitle / iki türü karşılaştır",
                 act_copy_team: "Showdown'a kopyala",
@@ -1065,6 +1261,15 @@ impl Strings {
             lookup_fling: "Schleuder-Stärke",
             lookup_holders: "In freier Wildbahn getragen von",
             lookup_no_holders: "In freier Wildbahn von keinem getragen",
+            encounters_title: " Fundorte ",
+            encounters_none: "Keine wilden Begegnungen erfasst",
+            encounters_note: "Die Begegnungsdaten von PokeAPI sind für neuere Spiele unvollständig; das heißt nicht, dass es dort nicht gefangen werden kann.",
+            encounters_conditional: "* nur zu bestimmten Zeiten, bei bestimmtem Wetter oder an bestimmten Punkten der Geschichte",
+            encounters_hint: "← → Spiel · ↑ ↓ Blättern · Esc / W Schließen",
+            col_location: "Ort",
+            col_method: "Methode",
+            col_level: "Level",
+            col_chance: "Chance",
             col_learn: "Lv",
             col_move: "Attacke",
             col_type: "Typ",
@@ -1143,6 +1348,7 @@ impl Strings {
                 act_lookup_switch: "Fähigkeiten ↔ Items",
                 act_lookup_apply: "Pokémon damit auflisten",
                 act_by_held: "Nach getragenem Item filtern",
+                act_encounters: "Fundorte",
                 act_chain_expand: "Reihe im Vollbild",
                 act_compare: "Anheften / zwei vergleichen",
                 act_copy_team: "Showdown-Kopie",
@@ -1250,6 +1456,15 @@ impl Strings {
             lookup_fling: "Puissance de Dégommage",
             lookup_holders: "Porté à l'état sauvage par",
             lookup_no_holders: "Porté par aucun Pokémon sauvage",
+            encounters_title: " Où le trouver ",
+            encounters_none: "Aucune rencontre sauvage enregistrée",
+            encounters_note: "Les données de rencontre de PokeAPI sont incomplètes pour les jeux récents ; cela ne veut pas dire qu'il ne peut pas y être capturé.",
+            encounters_conditional: "* seulement à certaines heures, météos ou étapes de l'histoire",
+            encounters_hint: "← → Jeu · ↑ ↓ Défiler · Esc / W Fermer",
+            col_location: "Lieu",
+            col_method: "Méthode",
+            col_level: "Niveau",
+            col_chance: "Chance",
             col_learn: "Niv",
             col_move: "Capacité",
             col_type: "Type",
@@ -1328,6 +1543,7 @@ impl Strings {
                 act_lookup_switch: "Talents ↔ objets",
                 act_lookup_apply: "Lister les Pokémon concernés",
                 act_by_held: "Filtrer par objet tenu",
+                act_encounters: "Où le trouver",
                 act_chain_expand: "Chaîne en plein écran",
                 act_compare: "Épingler / comparer deux espèces",
                 act_copy_team: "Copier pour Showdown",
@@ -1434,6 +1650,15 @@ impl Strings {
             lookup_fling: "Potencia de Lanzamiento",
             lookup_holders: "Llevado en estado salvaje por",
             lookup_no_holders: "Ningún Pokémon salvaje lo lleva",
+            encounters_title: " Dónde encontrarlo ",
+            encounters_none: "No hay encuentros salvajes registrados",
+            encounters_note: "Los datos de encuentros de PokeAPI están incompletos para los juegos recientes; eso no significa que no se pueda capturar en ellos.",
+            encounters_conditional: "* solo a ciertas horas, con cierto clima o en cierto punto de la historia",
+            encounters_hint: "← → Juego · ↑ ↓ Desplazar · Esc / W Cerrar",
+            col_location: "Lugar",
+            col_method: "Método",
+            col_level: "Nivel",
+            col_chance: "Prob.",
             col_learn: "Niv",
             col_move: "Movimiento",
             col_type: "Tipo",
@@ -1512,6 +1737,7 @@ impl Strings {
                 act_lookup_switch: "Habilidades ↔ objetos",
                 act_lookup_apply: "Listar los Pokémon con ello",
                 act_by_held: "Filtrar por objeto equipado",
+                act_encounters: "Dónde encontrarlo",
                 act_chain_expand: "Cadena a pantalla completa",
                 act_compare: "Fijar / comparar dos especies",
                 act_copy_team: "Copiar para Showdown",
@@ -1618,6 +1844,15 @@ impl Strings {
             lookup_fling: "Potenza di Lancio",
             lookup_holders: "Tenuto allo stato selvatico da",
             lookup_no_holders: "Nessun Pokémon selvatico lo tiene",
+            encounters_title: " Dove trovarlo ",
+            encounters_none: "Nessun incontro selvatico registrato",
+            encounters_note: "I dati sugli incontri di PokeAPI sono incompleti per i giochi recenti: non significa che non si possa catturare lì.",
+            encounters_conditional: "* solo in certi orari, con certo meteo o in certi punti della storia",
+            encounters_hint: "← → Gioco · ↑ ↓ Scorri · Esc / W Chiudi",
+            col_location: "Luogo",
+            col_method: "Metodo",
+            col_level: "Livello",
+            col_chance: "Prob.",
             col_learn: "Liv",
             col_move: "Mossa",
             col_type: "Tipo",
@@ -1696,6 +1931,7 @@ impl Strings {
                 act_lookup_switch: "Abilità ↔ strumenti",
                 act_lookup_apply: "Elenca i Pokémon che ce l'hanno",
                 act_by_held: "Filtra per strumento tenuto",
+                act_encounters: "Dove trovarlo",
                 act_chain_expand: "Catena a schermo intero",
                 act_compare: "Fissa / confronta due specie",
                 act_copy_team: "Copia per Showdown",

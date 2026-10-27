@@ -11,10 +11,10 @@ use crate::app::{App, Focus};
 use crate::browser::SortKey;
 use crate::color;
 use crate::compare;
-use crate::i18n::{EvoStrings, Language, Strings};
+use crate::i18n::{self, EvoStrings, Language, Strings};
 use crate::models::{
-    egg_group_label, form_label, title_case, CatchEase, EvolutionTree, FieldData, LearnMethod,
-    LearnedMove, LookupKind, PokemonDetail, Sprite,
+    egg_group_label, form_label, location_label, title_case, version_label, CatchEase,
+    EvolutionTree, FieldData, LearnMethod, LearnedMove, LookupKind, PokemonDetail, Sprite,
 };
 use crate::statcalc::{self, Field};
 use crate::team::{self, AbilityImmunity};
@@ -78,6 +78,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.lookup_card {
         render_lookup(frame, app, &strings, area);
+    }
+    if app.encounter_card {
+        render_encounters(frame, app, &strings, area);
     }
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
@@ -1636,6 +1639,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("I", h.act_stat_calc),
         ("V", h.act_forms),
         ("D", h.act_lookup),
+        ("W", h.act_encounters),
         ("X", h.act_shiny),
         ("R", h.act_random),
         ("Space", h.act_party_toggle),
@@ -2881,6 +2885,178 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(hint, rows[1]);
 }
 
+const ENCOUNTER_CARD_W: u16 = 80;
+/// Widths of the encounters card's fixed columns; the location takes the rest.
+const ENCOUNTER_METHOD_W: usize = 18;
+const ENCOUNTER_LEVEL_W: usize = 8;
+const ENCOUNTER_CHANCE_W: usize = 9;
+
+/// Where the species on display can be found, one game at a time: a line
+/// naming the game with arrows either side, then a row per place and method.
+///
+/// The game is named in the card rather than left to the hint, since a row
+/// saying Route 2 at 10% is only true of the game it was read from.
+fn render_encounters(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = ENCOUNTER_CARD_W.min(full.width);
+    let height = full.height.saturating_sub(4).min(30);
+    if width < 50 || height < 10 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+    let Some(detail) = app.selected_detail() else {
+        return;
+    };
+
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            s.encounters_title,
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::surface()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // species and game
+        Constraint::Length(1), // gap
+        Constraint::Min(1),    // table
+        Constraint::Length(1), // legend
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.encounters_hint,
+        Style::default().fg(theme::overlay()),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[4]);
+
+    let Some(games) = app.selected_encounters() else {
+        render_centered_loading(frame, rows[2], s.loading, app.spinner);
+        return;
+    };
+    let text_w = inner.width.saturating_sub(2) as usize;
+
+    let Some(game) = games.get(app.encounter_game) else {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                format!(" {}", title_case(&detail.name)),
+                Style::default()
+                    .fg(theme::mauve())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::raw(""),
+            Line::from(Span::styled(
+                format!(" {}", s.encounters_none),
+                Style::default().fg(theme::text()),
+            )),
+        ];
+        lines.push(Line::raw(""));
+        for row in wrap_plain(s.encounters_note, text_w) {
+            lines.push(Line::from(Span::styled(
+                format!(" {row}"),
+                Style::default().fg(theme::overlay()),
+            )));
+        }
+        frame.render_widget(Paragraph::new(lines), rows[0].union(rows[2]));
+        return;
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" {}", title_case(&detail.name)),
+                Style::default()
+                    .fg(theme::mauve())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   ◀ ", Style::default().fg(theme::overlay())),
+            Span::styled(
+                version_label(&game.version),
+                Style::default()
+                    .fg(theme::peach())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ▶", Style::default().fg(theme::overlay())),
+            Span::styled(
+                format!("   {}/{}", app.encounter_game + 1, games.len()),
+                Style::default().fg(theme::overlay()),
+            ),
+        ])),
+        rows[0],
+    );
+
+    let location_w = text_w
+        .saturating_sub(ENCOUNTER_METHOD_W + ENCOUNTER_LEVEL_W + ENCOUNTER_CHANCE_W)
+        .max(8);
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            " {:<location_w$}{:<ENCOUNTER_METHOD_W$}{:>ENCOUNTER_LEVEL_W$}{:>ENCOUNTER_CHANCE_W$}",
+            s.col_location,
+            s.col_method,
+            s.col_level,
+            // Padded like the values under it, whose last column is the
+            // conditional marker or a space standing in for it.
+            format!("{} ", s.col_chance)
+        ),
+        Style::default()
+            .fg(theme::overlay())
+            .add_modifier(Modifier::BOLD),
+    ))];
+    let window = (rows[2].height as usize).saturating_sub(1);
+    let first = app
+        .encounter_scroll
+        .min(game.encounters.len().saturating_sub(window));
+    for row in game.encounters.iter().skip(first).take(window) {
+        let levels = if row.min_level == row.max_level {
+            row.min_level.to_string()
+        } else {
+            format!("{}–{}", row.min_level, row.max_level)
+        };
+        let chance = format!("{}%{}", row.chance, if row.conditional { "*" } else { " " });
+        let location = truncate(&location_label(&row.location), location_w.saturating_sub(1));
+        let method = truncate(
+            &i18n::method_name(app.language, &row.method),
+            ENCOUNTER_METHOD_W - 1,
+        );
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {location:<location_w$}"),
+                Style::default().fg(theme::text()),
+            ),
+            Span::styled(
+                format!("{method:<ENCOUNTER_METHOD_W$}"),
+                Style::default().fg(theme::subtext()),
+            ),
+            Span::styled(
+                format!("{levels:>ENCOUNTER_LEVEL_W$}"),
+                Style::default().fg(theme::subtext()),
+            ),
+            Span::styled(
+                format!("{chance:>ENCOUNTER_CHANCE_W$}"),
+                Style::default().fg(theme::teal()),
+            ),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), rows[2]);
+
+    if game.encounters.iter().any(|row| row.conditional) {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {}", truncate(s.encounters_conditional, text_w)),
+                Style::default().fg(theme::overlay()),
+            ))),
+            rows[3],
+        );
+    }
+}
+
 const LOOKUP_CARD_W: u16 = 80;
 /// Width of the lookup card's list column, which fits every ability name and
 /// all but a handful of item names.
@@ -3331,6 +3507,54 @@ mod tests {
             !screen.contains("Stench"),
             "the query hides what it does not match"
         );
+    }
+
+    #[test]
+    fn the_encounters_card_names_the_game_and_reads_each_row() {
+        use crate::models::{Encounter, GameEncounters};
+
+        let mut app = app_listing(&[(25, "pikachu")]);
+        app.details.insert("pikachu".to_string(), loaded("pikachu"));
+        app.selected_name = Some("pikachu".to_string());
+        app.encounter_card = true;
+        app.encounters.insert(
+            "pikachu".to_string(),
+            vec![GameEncounters {
+                version: "lets-go-pikachu".to_string(),
+                encounters: vec![Encounter {
+                    location: "viridian-forest-area".to_string(),
+                    method: "walk".to_string(),
+                    min_level: 3,
+                    max_level: 5,
+                    chance: 10,
+                    conditional: true,
+                }],
+            }],
+        );
+
+        let screen = frame_rows(&mut app, 120, 40).join("\n");
+        assert!(screen.contains("◀ Let's Go Pikachu ▶   1/1"));
+        let row = screen
+            .lines()
+            .find(|line| line.contains("Viridian Forest"))
+            .expect("a row for the place");
+        assert!(!row.contains("Area"), "the -area suffix is dropped");
+        assert!(row.contains("Walking") && row.contains("3–5") && row.contains("10%*"));
+        assert!(screen.contains("* only at some times"));
+    }
+
+    #[test]
+    fn a_species_with_no_recorded_encounters_says_why_that_is_not_the_last_word() {
+        let mut app = app_listing(&[(906, "sprigatito")]);
+        app.details
+            .insert("sprigatito".to_string(), loaded("sprigatito"));
+        app.selected_name = Some("sprigatito".to_string());
+        app.encounter_card = true;
+        app.encounters.insert("sprigatito".to_string(), Vec::new());
+
+        let screen = frame_rows(&mut app, 120, 40).join("\n");
+        assert!(screen.contains("No wild encounters recorded"));
+        assert!(screen.contains("incomplete for recent games"));
     }
 
     #[test]
