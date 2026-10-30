@@ -660,6 +660,7 @@ mod tests {
             weight: 405,
             sprite_url: Some("https://example.invalid/94.png".into()),
             shiny_sprite_url: None,
+            names: HashMap::new(),
             genera: HashMap::from([
                 ("en".into(), "Shadow Pokémon".into()),
                 ("de".into(), "Schatten-Pokémon".into()),

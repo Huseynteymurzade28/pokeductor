@@ -423,6 +423,7 @@ pub async fn fetch_record(
     detail.is_legendary = species.is_legendary;
     detail.is_mythical = species.is_mythical;
     detail.is_baby = species.is_baby;
+    detail.names = species.names;
     detail.genera = species.genera;
     detail.flavors = species.flavors;
     detail.field = species.field;
@@ -793,6 +794,7 @@ async fn fetch_detail(client: &reqwest::Client, name: &str) -> Result<PokemonDet
         weight: raw.weight,
         sprite_url: raw.sprites.front_default,
         shiny_sprite_url: raw.sprites.front_shiny,
+        names: HashMap::new(),
         genera: HashMap::new(),
         flavors: HashMap::new(),
         learnset_games: newest_version_group(&raw.moves).map(|(_, name)| name),
@@ -815,6 +817,7 @@ struct SpeciesInfo {
     is_legendary: bool,
     is_mythical: bool,
     is_baby: bool,
+    names: HashMap<String, String>,
     genera: HashMap<String, String>,
     flavors: HashMap<String, String>,
     field: FieldData,
@@ -894,6 +897,7 @@ async fn fetch_species(client: &reqwest::Client, name: &str) -> Result<SpeciesIn
         is_legendary: species.is_legendary,
         is_mythical: species.is_mythical,
         is_baby: species.is_baby,
+        names: localized_names(&species.names),
         genera,
         flavors,
         field,
@@ -1192,6 +1196,8 @@ struct RawSpecies {
     is_baby: bool,
     evolution_chain: Option<RawChainRef>,
     #[serde(default)]
+    names: Vec<RawLocalizedName>,
+    #[serde(default)]
     genera: Vec<RawGenus>,
     #[serde(default)]
     flavor_text_entries: Vec<RawFlavorText>,
@@ -1328,6 +1334,8 @@ mod tests {
 
         // The learnset rides along on the species record, and the version group
         // it was read from has to be one that teaches by levelling.
+        // The quiz holds a German answer to the species' German name.
+        assert_eq!(detail.names.get("de").map(String::as_str), Some("Evoli"));
         assert!(!detail.moves.is_empty(), "eevee learns moves");
         assert!(detail.learnset_games.is_some());
         assert!(detail

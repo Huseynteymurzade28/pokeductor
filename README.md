@@ -224,6 +224,27 @@ first time the card opens on it, cached for good. PokeAPI's encounter data is
 thin for the most recent games, so a species with nothing recorded gets a card
 saying that much, and that it does not mean the species cannot be caught.
 
+### Who's that Pokémon?
+
+`N` starts a quiz: a random species from the list as currently filtered —
+`gen:1` makes it a Kanto quiz, `type:ghost` a ghost one — drawn as a solid
+silhouette in the interface's foreground colour. Type its name and press
+`Enter`; a right answer reveals the artwork in colour and adds one to the
+streak, `?` gives up and reveals it, and either way `Enter` asks the next one.
+
+Case, accents, spaces and punctuation do not matter, so `mr mime` is Mr. Mime
+and `flabebe` is Flabébé, and the species' name in the interface language
+counts too where PokeAPI has one: `Bisasam` with the interface in German. A
+form is answered by its species, since Alolan Raichu's silhouette is a
+Raichu's, and either Nidoran answers to plain `nidoran`, gender sign or not.
+There is no tab completion — it would be the answer key.
+
+A wrong answer costs the try and nothing else; giving up ends the streak.
+Closing the card keeps the question, so `Esc` then `N` is not a way around one.
+The streak and the best streak are kept between runs. The silhouette works in
+both palettes and at 256 colours; with no colour there is nothing to draw, so
+the quiz is unavailable.
+
 ### Looking up abilities and items
 
 `D` opens a search over every ability and every item, for when the question is
@@ -529,6 +550,7 @@ no refetch:
 | | `V` | Alternate forms card |
 | | `D` | Look up abilities and items |
 | | `W` | Where to find it in the wild |
+| | `N` | Who's that Pokémon? quiz from the current filter |
 | | `X` | Toggle shiny artwork |
 | | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
@@ -565,6 +587,10 @@ no refetch:
 | **Encounters card** | `←` `→` · `h` `l` | Previous / next game |
 | | `↑` `↓` · `j` `k` | Scroll |
 | | `W` · `Esc` | Close |
+| **Quiz** | *type* · `Backspace` | The answer |
+| | `Enter` | Answer; once answered, the next question |
+| | `?` | Give up and reveal |
+| | `Esc` | Close, keeping the question |
 | **Lookup card** | *type* | Narrow the list |
 | | `Tab` | Abilities ↔ items |
 | | `↑` `↓` · `PgUp` `PgDn` · `Home` `End` | Move the cursor |
@@ -843,6 +869,7 @@ through to disk.
 | `clipboard.rs` | Copying text through the terminal with OSC 52. |
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`, `spe>=110`) parsing. |
 | `lookup.rs` | The ability and item lookup card's matching, ranking and cursor. |
+| `quiz.rs` | The quiz's rules: which names an answer is held to, and the streak. |
 | `base_stats.rs` | Every entry's base stats, built in from a table `scripts/base-stats.py` generates. |
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
@@ -913,7 +940,7 @@ kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
 `~/.local/state/pokeductor`):
 
 ```
-session.json              party, favourites, language, sort order, palette, shiny toggle, generation
+session.json              party, favourites, language, sort order, palette, shiny toggle, generation, quiz streaks
 ```
 
 Written once, as the app exits, and read once, before the first frame. A run

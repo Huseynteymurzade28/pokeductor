@@ -251,6 +251,11 @@ pub fn overlay() -> Color {
 pub fn text() -> Color {
     color(palette().text)
 }
+/// Raw components of [`text`], for painting the quiz's silhouette in the
+/// interface's own foreground.
+pub fn text_rgb() -> Rgb {
+    palette().text
+}
 pub fn subtext() -> Color {
     color(palette().subtext)
 }

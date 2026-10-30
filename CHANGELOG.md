@@ -10,6 +10,19 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
 
 ## [Unreleased]
 
+### Added
+
+- A "Who's that Pokémon?" quiz. `N` draws a random species from the current
+  filter as a silhouette; type its name to reveal it in colour and extend the
+  streak, or `?` to give up. Answers ignore case, accents and punctuation, and
+  are accepted in the interface language where PokeAPI has the name. The
+  streak and best streak are kept between runs. (#54)
+
+### Changed
+
+- Cached species records now carry the species' localized names, so the
+  cache format moved on and every record is fetched once more.
+
 ## [0.8.0] - 2026-10-27
 
 ### Added
