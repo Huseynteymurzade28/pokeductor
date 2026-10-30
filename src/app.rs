@@ -28,6 +28,7 @@ use crate::models::{
     AbilityInfo, EvolutionTree, GameEncounters, ItemInfo, LearnedMove, LookupKind, MoveInfo,
     PokemonDetail, PokemonEntry, RosterTerm, Sprite, SpriteVariant,
 };
+use crate::quiz::{self, Quiz};
 use crate::session::{self, Session};
 use crate::showdown;
 use crate::statcalc::{self, Calculator};
@@ -228,6 +229,17 @@ pub struct App {
     pub encounter_card: bool,
     pub encounter_game: usize,
     pub encounter_scroll: usize,
+    /// The "Who's that Pokemon?" quiz: the question on the table and the
+    /// streak. The question outlives the card, so closing it and opening it
+    /// again comes back to the same silhouette rather than to a fresh roll —
+    /// otherwise `Esc` then `N` would be a free pass.
+    pub quiz: Quiz,
+    pub quiz_card: bool,
+    /// The quiz's Pokemon, while its record is in flight.
+    pub quiz_loading: Option<String>,
+    /// Pokemon the quiz found to have no artwork, so it does not ask about
+    /// them again this run: without a silhouette there is no question.
+    pub quiz_artless: HashSet<String>,
     /// Whether the help overlay is open.
     pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
@@ -321,6 +333,10 @@ impl App {
             encounter_card: false,
             encounter_game: 0,
             encounter_scroll: 0,
+            quiz: Quiz::default(),
+            quiz_card: false,
+            quiz_loading: None,
+            quiz_artless: HashSet::new(),
             help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
@@ -441,6 +457,7 @@ impl App {
             || !self.index_loading.is_empty()
             || !self.item_loading.is_empty()
             || !self.encounter_loading.is_empty()
+            || self.quiz_loading.is_some()
             || !self.translating.is_empty()
             || !self.team_loading.is_empty()
             || self
@@ -461,6 +478,8 @@ impl App {
             shiny: self.sprite_variant.is_shiny(),
             favourites: self.browser.favourites.iter().cloned().collect(),
             generation: (self.generation != Generation::LATEST).then_some(self.generation.number()),
+            quiz_streak: self.quiz.streak,
+            quiz_best: self.quiz.best,
         }
     }
 
@@ -500,6 +519,10 @@ impl App {
             self.sprite_variant = SpriteVariant::Shiny;
         }
         self.team = session.team;
+        self.quiz.streak = session.quiz_streak;
+        // A best below the streak it came with is a hand-edited file; the
+        // streak is the evidence, so the best rises to meet it.
+        self.quiz.best = session.quiz_best.max(session.quiz_streak);
         // Before the list arrives, so a `fav:` query from the command line
         // narrows against the restored set rather than an empty one.
         self.browser.favourites = session.favourites.into_iter().collect();
@@ -686,7 +709,6 @@ impl App {
         if self.color_depth == Depth::None {
             return;
         }
-        let variant = self.sprite_variant;
         let names: Vec<String> = self
             .selected_name
             .iter()
@@ -695,39 +717,46 @@ impl App {
             .collect();
 
         for name in names {
-            if self.sprite_for(&name).is_some() || self.sprite_is_loading(&name) {
-                continue;
-            }
-            // A species whose record is already loaded carries both artwork
-            // URLs, which saves the resolver a `/pokemon` request. `Some(None)`
-            // means we know it has no art at all.
-            let known_url = self
-                .details
-                .get(&name)
-                .map(|detail| detail.sprite_url_for(variant).map(str::to_string));
-
-            self.sprite_loading
-                .entry(variant)
-                .or_default()
-                .insert(name.clone());
-            let tx = self.tx.clone();
-            let client = self.client.clone();
-            tokio::spawn(async move {
-                // A failed sprite is non-fatal: the resolvers report no art, so
-                // the panel shows a placeholder instead of an error banner.
-                let sprite = match known_url {
-                    Some(url) => resolve_sprite(&client, &name, url.as_deref(), variant).await,
-                    None => resolve_named_sprite(&client, &name, variant).await,
-                };
-                let _ = tx
-                    .send(Message::SpriteLoaded {
-                        name,
-                        variant,
-                        sprite,
-                    })
-                    .await;
-            });
+            self.request_sprite(name);
         }
+    }
+
+    /// Asks for `name`'s artwork in the palette on display, unless it is
+    /// already here or on its way.
+    fn request_sprite(&mut self, name: String) {
+        if self.sprite_for(&name).is_some() || self.sprite_is_loading(&name) {
+            return;
+        }
+        let variant = self.sprite_variant;
+        // A species whose record is already loaded carries both artwork
+        // URLs, which saves the resolver a `/pokemon` request. `Some(None)`
+        // means we know it has no art at all.
+        let known_url = self
+            .details
+            .get(&name)
+            .map(|detail| detail.sprite_url_for(variant).map(str::to_string));
+
+        self.sprite_loading
+            .entry(variant)
+            .or_default()
+            .insert(name.clone());
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            // A failed sprite is non-fatal: the resolvers report no art, so
+            // the panel shows a placeholder instead of an error banner.
+            let sprite = match known_url {
+                Some(url) => resolve_sprite(&client, &name, url.as_deref(), variant).await,
+                None => resolve_named_sprite(&client, &name, variant).await,
+            };
+            let _ = tx
+                .send(Message::SpriteLoaded {
+                    name,
+                    variant,
+                    sprite,
+                })
+                .await;
+        });
     }
 
     /// Flips between the normal and shiny palettes, then pulls in whatever
@@ -838,7 +867,15 @@ impl App {
                 }
                 let is_selected = self.selected_name.as_deref() == Some(name.as_str());
                 self.team_loading.remove(&name);
-                self.details.insert(name, detail);
+                let for_quiz = self.quiz_loading.as_deref() == Some(name.as_str());
+                self.details.insert(name.clone(), detail);
+                if for_quiz {
+                    self.quiz_loading = None;
+                    // Usually a no-op, the bundle having brought the artwork
+                    // with it; otherwise this asks, and a species with none
+                    // comes back as such and is swapped for another.
+                    self.request_quiz_artwork(name);
+                }
                 // Now that the chain is known, fetch its members' sprites for
                 // the evolution panel. This also covers a toggle that happened
                 // while the bundle was in flight: the palette it arrived in may
@@ -855,8 +892,9 @@ impl App {
                 if let Some(pending) = self.sprite_loading.get_mut(&variant) {
                     pending.remove(&name);
                 }
-                if let Some(sprite) = sprite {
-                    self.remember_sprite(name, variant, sprite);
+                match sprite {
+                    Some(sprite) => self.remember_sprite(name, variant, sprite),
+                    None => self.quiz_found_no_artwork(name),
                 }
             }
             Message::AbilityLoaded(info) => {
@@ -922,6 +960,12 @@ impl App {
                 self.error = Some(err);
                 self.loading_detail = None;
                 self.list_loading = false;
+                // The quiz was waiting on a record that is not coming, and has
+                // shown nothing yet, so the question goes with the card.
+                if self.quiz_loading.take().is_some() {
+                    self.quiz.round = None;
+                    self.quiz_card = false;
+                }
             }
         }
     }
@@ -943,6 +987,10 @@ impl App {
         // The overlay cards are modal: whichever is open grabs all input.
         if self.language_picker {
             self.handle_language_key(key);
+            return;
+        }
+        if self.quiz_card {
+            self.handle_quiz_key(key);
             return;
         }
         if self.help_card {
@@ -1434,6 +1482,133 @@ impl App {
         }
     }
 
+    /// Opens the quiz on the question still waiting for an answer, or on a
+    /// new one from the list as currently filtered, so `gen:1` makes it a
+    /// Kanto quiz.
+    ///
+    /// Without colour there is no silhouette to draw — `sprite_for` answers
+    /// nothing at all — so the quiz says it is unavailable instead of opening
+    /// on a blank card.
+    fn open_quiz(&mut self) {
+        if self.color_depth == Depth::None {
+            self.error = Some(self.language.strings().quiz_needs_colour.to_string());
+            return;
+        }
+        if self.quiz.open_round().is_none() && !self.next_quiz_round() {
+            return; // an empty list asks nothing
+        }
+        self.quiz_card = true;
+    }
+
+    /// Puts a new Pokemon on the table, reporting whether there was one to
+    /// put. Never the one just asked about while there is any other, since a
+    /// repeat reads as the quiz being stuck.
+    fn next_quiz_round(&mut self) -> bool {
+        let previous = self.quiz.round.as_ref().map(|round| round.target.as_str());
+        let candidates: Vec<&str> = self
+            .browser
+            .filtered
+            .iter()
+            .filter_map(|&idx| self.browser.all.get(idx))
+            .map(|entry| entry.name.as_str())
+            .filter(|name| !self.quiz_artless.contains(*name))
+            .collect();
+        let fresh: Vec<&str> = candidates
+            .iter()
+            .copied()
+            .filter(|name| Some(*name) != previous)
+            .collect();
+        let pool = if fresh.is_empty() { candidates } else { fresh };
+        let Some(target) = random_index(pool.len()).map(|pos| pool[pos].to_string()) else {
+            self.quiz.round = None;
+            self.quiz_card = false;
+            return false;
+        };
+        self.quiz.ask(target.clone());
+        self.request_quiz_artwork(target);
+        true
+    }
+
+    /// Pulls in what the quiz needs to ask about `name`: its record, for the
+    /// names an answer is held to, and its artwork, for the silhouette.
+    fn request_quiz_artwork(&mut self, name: String) {
+        if self.details.contains_key(&name) {
+            self.request_sprite(name);
+            return;
+        }
+        if self.quiz_loading.as_deref() == Some(name.as_str()) {
+            return;
+        }
+        self.quiz_loading = Some(name.clone());
+        let tx = self.tx.clone();
+        let client = self.client.clone();
+        let variant = self.sprite_variant;
+        tokio::spawn(async move {
+            let _ = tx.send(resolve_bundle(&client, &name, variant).await).await;
+        });
+    }
+
+    /// Swaps the question for another when its Pokemon turns out to have no
+    /// artwork. Only an open question: one already answered was drawn.
+    fn quiz_found_no_artwork(&mut self, name: String) {
+        if self
+            .quiz
+            .open_round()
+            .is_none_or(|round| round.target != name)
+        {
+            return;
+        }
+        self.quiz_artless.insert(name);
+        if self.quiz_card {
+            self.next_quiz_round();
+        } else {
+            self.quiz.round = None;
+        }
+    }
+
+    /// The names that count as right for the question on the table.
+    fn quiz_accepted_names(&self, target: &str) -> Vec<String> {
+        self.details
+            .get(target)
+            .map(|detail| quiz::accepted_names(detail, self.language.flavor_code()))
+            .unwrap_or_default()
+    }
+
+    /// While a question is open every key but `Esc` is part of the answer,
+    /// `?` aside, since no Pokemon has one in its name. There is no `Tab`
+    /// completion: it would be the answer key.
+    fn handle_quiz_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Esc {
+            self.quiz_card = false;
+            return;
+        }
+        let Some(round) = self.quiz.open_round() else {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('n' | 'N' | ' ') => {
+                    self.next_quiz_round();
+                }
+                KeyCode::Char('q' | 'Q') => self.quiz_card = false,
+                _ => {}
+            }
+            return;
+        };
+        let target = round.target.clone();
+        match key.code {
+            // Not before the silhouette is up: an answer to a card still
+            // loading is a guess at nothing.
+            KeyCode::Enter if self.sprite_for(&target).is_some() => {
+                let accepted = self.quiz_accepted_names(&target);
+                self.quiz.submit(&accepted);
+            }
+            KeyCode::Backspace => self.quiz.backspace(),
+            KeyCode::Char('?') => self.quiz.give_up(),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.quiz.type_char(c);
+            }
+            _ => {}
+        }
+    }
+
     /// Opens the lookup card where it was last left, and asks for the list on
     /// the side it opens on.
     ///
@@ -1676,6 +1851,7 @@ impl App {
             KeyCode::Char('i') | KeyCode::Char('I') => self.open_stat_card(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_lookup(),
             KeyCode::Char('w') | KeyCode::Char('W') => self.open_encounters(),
+            KeyCode::Char('n') | KeyCode::Char('N') => self.open_quiz(),
             KeyCode::Char('?') => self.help_card = true,
             code => self.step_generation(code),
         }
@@ -2147,6 +2323,7 @@ pub(crate) fn loaded(name: &str) -> PokemonDetail {
         weight: 0,
         sprite_url: None,
         shiny_sprite_url: None,
+        names: std::collections::HashMap::new(),
         genera: std::collections::HashMap::new(),
         flavors: std::collections::HashMap::new(),
         moves: Vec::new(),
@@ -2711,6 +2888,133 @@ mod tests {
         // Another game is another table, read from its top.
         app.handle_event(Event::Key(press(KeyCode::Right)));
         assert_eq!(app.encounter_scroll, 0);
+    }
+
+    /// An app listing `names` with every record and every sprite already in
+    /// hand, so the quiz can ask about any of them without a fetch.
+    fn app_for_quiz(names: &[(u32, &str)]) -> App {
+        let mut app = app_listing(names);
+        app.color_depth = Depth::Truecolor;
+        app.recompute_filter();
+        for &(_, name) in names {
+            let mut detail = loaded(name);
+            detail.names = HashMap::from([("en".to_string(), crate::models::title_case(name))]);
+            app.details.insert(name.to_string(), detail);
+            app.remember_sprite(
+                name.to_string(),
+                SpriteVariant::Normal,
+                Sprite::new(1, 1, vec![[255, 0, 0, 255]]),
+            );
+        }
+        app
+    }
+
+    fn type_answer(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.handle_event(Event::Key(press(KeyCode::Char(c))));
+        }
+        app.handle_event(Event::Key(press(KeyCode::Enter)));
+    }
+
+    fn quiz_target(app: &App) -> String {
+        app.quiz.round.as_ref().expect("a question").target.clone()
+    }
+
+    #[test]
+    fn the_quiz_asks_about_the_list_as_filtered() {
+        let mut app = app_for_quiz(&[(1, "bulbasaur"), (4, "charmander"), (7, "squirtle")]);
+        app.browser.query = "char".to_string();
+        app.recompute_filter();
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        assert!(app.quiz_card);
+        assert_eq!(quiz_target(&app), "charmander");
+    }
+
+    #[test]
+    fn closing_the_quiz_keeps_the_question_for_when_it_opens_again() {
+        let mut app = app_for_quiz(&[(1, "bulbasaur"), (4, "charmander"), (7, "squirtle")]);
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        let asked = quiz_target(&app);
+        app.handle_event(Event::Key(press(KeyCode::Esc)));
+        assert!(!app.quiz_card);
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        assert_eq!(quiz_target(&app), asked, "no free reroll");
+    }
+
+    #[test]
+    fn a_right_answer_reveals_and_the_next_question_is_another_pokemon() {
+        let mut app = app_for_quiz(&[(1, "bulbasaur"), (4, "charmander")]);
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        let asked = quiz_target(&app);
+        type_answer(&mut app, &asked.to_uppercase());
+        assert_eq!(
+            app.quiz.round.as_ref().unwrap().outcome,
+            quiz::Outcome::Right
+        );
+        assert_eq!((app.quiz.streak, app.quiz.best), (1, 1));
+
+        app.handle_event(Event::Key(press(KeyCode::Char('n'))));
+        assert!(app.quiz.open_round().is_some());
+        assert_ne!(quiz_target(&app), asked);
+    }
+
+    #[test]
+    fn a_question_mark_gives_up_rather_than_being_typed() {
+        let mut app = app_for_quiz(&[(151, "mew")]);
+        app.quiz.streak = 5;
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        app.handle_event(Event::Key(press(KeyCode::Char('?'))));
+        let round = app.quiz.round.as_ref().unwrap();
+        assert_eq!(round.outcome, quiz::Outcome::GaveUp);
+        assert!(round.guess.is_empty());
+        assert_eq!(app.quiz.streak, 0);
+        assert!(app.quiz_card, "the reveal stays up to be read");
+    }
+
+    #[test]
+    fn the_quiz_takes_no_answer_before_its_silhouette_is_up() {
+        let mut app = app_for_quiz(&[(151, "mew")]);
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        app.sprites.clear();
+        type_answer(&mut app, "mew");
+        assert!(app.quiz.open_round().is_some());
+        assert_eq!(app.quiz.streak, 0);
+    }
+
+    #[test]
+    fn a_pokemon_with_no_artwork_is_swapped_for_one_with_some() {
+        let mut app = app_for_quiz(&[(1, "bulbasaur"), (4, "charmander")]);
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        let artless = quiz_target(&app);
+        app.handle_message(Message::SpriteLoaded {
+            name: artless.clone(),
+            variant: SpriteVariant::Normal,
+            sprite: None,
+        });
+        assert_ne!(quiz_target(&app), artless);
+        assert!(app.quiz_artless.contains(&artless));
+    }
+
+    #[test]
+    fn without_colour_the_quiz_says_it_is_unavailable() {
+        let mut app = app_for_quiz(&[(151, "mew")]);
+        app.color_depth = Depth::None;
+        app.handle_event(Event::Key(press(KeyCode::Char('N'))));
+        assert!(!app.quiz_card);
+        assert!(app.error.is_some());
+    }
+
+    #[test]
+    fn the_quiz_streak_is_carried_to_the_next_run() {
+        let mut app = app_for_quiz(&[(151, "mew")]);
+        app.quiz.streak = 3;
+        app.quiz.best = 8;
+        let session = app.snapshot();
+        assert_eq!((session.quiz_streak, session.quiz_best), (3, 8));
+
+        let mut next = app_listing(&[]);
+        next.restore(session);
+        assert_eq!((next.quiz.streak, next.quiz.best), (3, 8));
     }
 
     #[test]

@@ -191,6 +191,7 @@ mod tests {
             weight: 0,
             sprite_url: None,
             shiny_sprite_url: None,
+            names: HashMap::new(),
             genera: HashMap::new(),
             flavors: HashMap::new(),
             moves: Vec::new(),

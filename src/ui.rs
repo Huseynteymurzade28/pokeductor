@@ -16,6 +16,7 @@ use crate::models::{
     egg_group_label, form_label, location_label, title_case, version_label, CatchEase,
     EvolutionTree, FieldData, LearnMethod, LearnedMove, LookupKind, PokemonDetail, Sprite,
 };
+use crate::quiz::Outcome;
 use crate::statcalc::{self, Field};
 use crate::team::{self, AbilityImmunity};
 use crate::theme;
@@ -81,6 +82,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.encounter_card {
         render_encounters(frame, app, &strings, area);
+    }
+    if app.quiz_card {
+        render_quiz(frame, app, &strings, area);
     }
     if app.language_picker {
         render_language_picker(frame, app, &strings, area);
@@ -1640,6 +1644,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("V", h.act_forms),
         ("D", h.act_lookup),
         ("W", h.act_encounters),
+        ("N", h.act_quiz),
         ("X", h.act_shiny),
         ("R", h.act_random),
         ("Space", h.act_party_toggle),
@@ -3057,6 +3062,157 @@ fn render_encounters(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     }
 }
 
+/// Wide enough for the longest hint, Spanish's, whole.
+const QUIZ_CARD_W: u16 = 66;
+
+/// "Who's that Pokemon?": the question's artwork as a solid shape in the
+/// interface's foreground while it is open, and in colour once it is answered,
+/// with the answer being typed, the streak and the keys beneath.
+///
+/// The silhouette is painted afresh on every draw rather than kept beside the
+/// sprite. It is one pass over pixels that are already in memory, a draw
+/// happens per keystroke at most, and it means a palette that changes the
+/// foreground never leaves a silhouette behind in the old one.
+fn render_quiz(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = QUIZ_CARD_W.min(full.width);
+    let height = full.height.saturating_sub(2).min(30);
+    if width < 30 || height < 12 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+    let Some(round) = app.quiz.round.as_ref() else {
+        return;
+    };
+
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            s.quiz_title,
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        // The background the artwork is composited over, as in the
+        // full-screen chain; on the cards' usual surface the silhouette would
+        // sit in a darker box.
+        .style(Style::default().bg(theme::base()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([
+        Constraint::Min(4),    // artwork
+        Constraint::Length(1), // gap
+        Constraint::Length(1), // answer, or the name once revealed
+        Constraint::Length(1), // feedback
+        Constraint::Length(1), // streak
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    match app.sprite_for(&round.target) {
+        Some(sprite) if round.is_open() => {
+            render_sprite(frame, rows[0], &sprite.silhouette(theme::text_rgb()));
+        }
+        Some(sprite) => render_sprite(frame, rows[0], sprite),
+        None => render_centered_loading(frame, rows[0], s.loading, app.spinner),
+    }
+
+    let answer = match round.outcome {
+        Outcome::Asking { .. } => Line::from(vec![
+            Span::styled(
+                format!("{} ", s.quiz_prompt),
+                Style::default().fg(theme::overlay()),
+            ),
+            Span::styled(
+                format!("{}▏", round.guess),
+                Style::default()
+                    .fg(theme::text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Outcome::Right => Line::from(Span::styled(
+            format!("{} {}!", s.quiz_right, quiz_reveal_name(app, &round.target)),
+            Style::default()
+                .fg(theme::green())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Outcome::GaveUp => Line::from(Span::styled(
+            format!(
+                "{} {}.",
+                s.quiz_gave_up,
+                quiz_reveal_name(app, &round.target)
+            ),
+            Style::default()
+                .fg(theme::peach())
+                .add_modifier(Modifier::BOLD),
+        )),
+    };
+    frame.render_widget(Paragraph::new(answer).alignment(Alignment::Center), rows[2]);
+
+    if round.outcome == (Outcome::Asking { missed: true }) {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                s.quiz_missed,
+                Style::default().fg(theme::red()),
+            )))
+            .alignment(Alignment::Center),
+            rows[3],
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!("{} {}", s.quiz_streak, app.quiz.streak),
+                Style::default().fg(theme::yellow()),
+            ),
+            Span::styled(
+                format!("   {} {}", s.quiz_best, app.quiz.best),
+                Style::default().fg(theme::subtext()),
+            ),
+        ]))
+        .alignment(Alignment::Center),
+        rows[4],
+    );
+
+    let hint = if round.is_open() {
+        s.quiz_hint_asking
+    } else {
+        s.quiz_hint_answered
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(hint, inner.width as usize),
+            Style::default().fg(theme::overlay()),
+        )))
+        .alignment(Alignment::Center),
+        rows[5],
+    );
+}
+
+/// The quiz's Pokemon by name, in the interface language where PokeAPI has
+/// it — one of the names an answer was held to.
+fn quiz_reveal_name(app: &App, name: &str) -> String {
+    let Some(detail) = app.details.get(name) else {
+        return title_case(name);
+    };
+    let own = detail
+        .names
+        .get(app.language.flavor_code())
+        .or_else(|| detail.names.get("en"))
+        .cloned()
+        .unwrap_or_else(|| title_case(&detail.species));
+    // A form reads as the species with the form beside it, since "Raichu"
+    // under an Alolan Raichu would look like a different answer.
+    if detail.name == detail.species {
+        own
+    } else {
+        format!("{own} ({})", form_label(&detail.name, &detail.species))
+    }
+}
+
 const LOOKUP_CARD_W: u16 = 80;
 /// Width of the lookup card's list column, which fits every ability name and
 /// all but a handful of item names.
@@ -3509,6 +3665,46 @@ mod tests {
         );
     }
 
+    /// The quiz card on Alolan Raichu, its record and artwork in hand. The
+    /// rest of the screen has nothing on display, so any "Raichu" on it is
+    /// the card's.
+    fn app_quizzing_on_raichu() -> App {
+        use crate::models::{Sprite, SpriteVariant};
+
+        let mut app = app_listing(&[(10100, "raichu-alola")]);
+        app.color_depth = Depth::Truecolor;
+        let mut detail = loaded("raichu-alola");
+        detail.species = "raichu".to_string();
+        detail.names = std::collections::HashMap::from([("en".to_string(), "Raichu".to_string())]);
+        app.details.insert("raichu-alola".to_string(), detail);
+        app.sprites
+            .entry(SpriteVariant::Normal)
+            .or_default()
+            .insert(
+                "raichu-alola".to_string(),
+                Sprite::new(1, 1, vec![[255, 0, 0, 255]]),
+            );
+        app.quiz.ask("raichu-alola".to_string());
+        app.quiz.streak = 2;
+        app.quiz.best = 5;
+        app.quiz_card = true;
+        app
+    }
+
+    #[test]
+    fn the_quiz_keeps_the_name_off_the_card_until_it_is_answered() {
+        let mut app = app_quizzing_on_raichu();
+        "rai".chars().for_each(|c| app.quiz.type_char(c));
+        let screen = frame_rows(&mut app, 120, 40).join("\n");
+        assert!(screen.contains("Name: rai"));
+        assert!(screen.contains("Streak 2   Best 5"));
+        assert!(!screen.contains("Raichu") && !screen.contains("Alola"));
+
+        app.quiz.give_up();
+        let screen = frame_rows(&mut app, 120, 40).join("\n");
+        assert!(screen.contains("It's Raichu (Alola)."));
+    }
+
     #[test]
     fn the_encounters_card_names_the_game_and_reads_each_row() {
         use crate::models::{Encounter, GameEncounters};
@@ -3646,6 +3842,36 @@ mod tests {
                 );
             }
             assert!(frame.contains("fav:"));
+        }
+    }
+
+    #[test]
+    fn the_quiz_hints_and_its_help_row_fit_in_every_language() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = app_quizzing_on_raichu();
+            app.language = language;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(s.quiz_hint_asking),
+                "{language:?} cuts the hint:\n{frame}"
+            );
+            app.quiz.give_up();
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(s.quiz_hint_answered),
+                "{language:?} cuts the hint:\n{frame}"
+            );
+
+            let mut app = showing_gengar();
+            app.language = language;
+            app.help_card = true;
+            let label = s.help_card.act_quiz;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(label),
+                "{language:?} lacks {label:?}:\n{frame}"
+            );
         }
     }
 

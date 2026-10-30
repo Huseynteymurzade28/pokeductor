@@ -34,6 +34,7 @@ mod json;
 mod lookup;
 mod models;
 mod query;
+mod quiz;
 mod retry;
 mod session;
 mod showdown;

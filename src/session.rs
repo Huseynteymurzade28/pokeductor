@@ -65,6 +65,12 @@ pub struct Session {
     /// Added without a version bump, like favourites.
     #[serde(default)]
     pub generation: Option<u8>,
+    /// The quiz's current and best streaks. Added without a version bump,
+    /// like favourites: a file from before the quiz reads as never played.
+    #[serde(default)]
+    pub quiz_streak: u32,
+    #[serde(default)]
+    pub quiz_best: u32,
 }
 
 impl Session {
@@ -192,6 +198,8 @@ mod tests {
             shiny: true,
             favourites: vec!["gengar".into(), "mew".into()],
             generation: Some(1),
+            quiz_streak: 3,
+            quiz_best: 12,
         };
         let bytes = encode(&session).expect("encode");
         assert_eq!(decode(&bytes), session);

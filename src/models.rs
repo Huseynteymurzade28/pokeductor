@@ -417,6 +417,11 @@ pub struct PokemonDetail {
     /// URL of the same artwork in the shiny palette. Absent for the handful of
     /// species PokeAPI ships no shiny sprite for.
     pub shiny_sprite_url: Option<String>,
+    /// The species' own name keyed by PokeAPI language code, e.g.
+    /// `de -> "Bisasam"`. Shared by every form, since it is the species
+    /// record's. Read by the quiz, which accepts an answer in the interface
+    /// language.
+    pub names: HashMap<String, String>,
     /// Pokedex genus (e.g. `"Seed Pokémon"`) keyed by PokeAPI language code.
     pub genera: HashMap<String, String>,
     /// Pokedex flavor-text blurbs, cleaned of control characters, keyed by
@@ -855,6 +860,27 @@ impl Sprite {
     pub fn content_bounds(&self) -> (u32, u32, u32, u32) {
         self.bounds
     }
+
+    /// The same sprite with every pixel painted `rgb`, keeping its alpha: the
+    /// shape and nothing else, for the quiz.
+    ///
+    /// Alpha is kept rather than thresholded so the silhouette goes through
+    /// the renderer's box averaging and compositing exactly as the colour
+    /// sprite does — its edges soften the same way, and in the Game Boy
+    /// palette they land on the same shades.
+    pub fn silhouette(&self, rgb: (u8, u8, u8)) -> Sprite {
+        let pixels = self
+            .pixels
+            .iter()
+            .map(|&[_, _, _, a]| [rgb.0, rgb.1, rgb.2, a])
+            .collect();
+        Sprite {
+            width: self.width,
+            height: self.height,
+            pixels,
+            bounds: self.bounds,
+        }
+    }
 }
 
 /// The scan behind [`Sprite::content_bounds`], as a free function so it can run
@@ -900,6 +926,26 @@ pub fn title_case(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_silhouette_flattens_colour_and_keeps_alpha() {
+        let sprite = Sprite::new(
+            2,
+            2,
+            vec![
+                [200, 10, 10, 255],
+                [0, 0, 0, 0],
+                [10, 200, 10, 128],
+                [9, 9, 9, 40],
+            ],
+        );
+        let shadow = sprite.silhouette((1, 2, 3));
+        assert_eq!(
+            shadow.pixels(),
+            [[1, 2, 3, 255], [1, 2, 3, 0], [1, 2, 3, 128], [1, 2, 3, 40]]
+        );
+        assert_eq!(shadow.content_bounds(), sprite.content_bounds());
+    }
 
     /// A sprite with one opaque rectangle inside a transparent margin, which is
     /// the shape every PokeAPI sprite has.
@@ -999,6 +1045,7 @@ mod tests {
             weight: 0,
             sprite_url: normal.map(str::to_string),
             shiny_sprite_url: shiny.map(str::to_string),
+            names: HashMap::new(),
             genera: HashMap::new(),
             flavors: HashMap::new(),
             moves: Vec::new(),
