@@ -539,6 +539,28 @@ goes through the terminal (OSC 52) rather than a clipboard library, so it works
 over SSH; under tmux it needs `set -g set-clipboard on`. Where a terminal
 ignores it, `pokeductor --export-party` prints the same text.
 
+### Mouse
+
+Everything the keyboard does stays on the keyboard; the mouse is a second way
+to a few of the same things, in a terminal that reports it.
+
+- A click on a list row moves the cursor there, and a click on the row the
+  cursor is already on loads it, as `Enter` does.
+- The wheel over the list moves the cursor three rows a notch and stops at
+  either end. Over the other panels it does nothing, so the list does not move
+  under someone reading them.
+- A click on the search box puts the keyboard in it.
+- A click on a stage of the evolution chain moves the chain cursor there, and
+  a second click jumps to it, in the panel and in the full-screen view alike.
+  This needs the chain drawn as sprite cards; the text tree a cramped panel
+  falls back to has nothing to aim at.
+- With a card open, a click outside it closes it, as `Esc` does, and the wheel
+  is `↑` and `↓`, so every card scrolls the way its keys already scroll it.
+
+Taking the mouse stops the terminal selecting text with it. Most terminals
+select anyway while `Shift` is held; `--no-mouse` gives the mouse back
+entirely, and is remembered until a run is started with `--mouse`.
+
 ### Help
 
 Every binding in one place, grouped by where it applies:
@@ -628,6 +650,11 @@ no refetch:
 | | `M` · `Esc` | Close |
 | **Matchup, party and head-to-head cards** | `g` · `G` | Type rules of the next / previous generation |
 | **Any card** | `Esc` | Close |
+| **Mouse** | click a row · click it again | Move the cursor · load |
+| | wheel over the list | Move the cursor three rows |
+| | click a chain stage · click it again | Move the chain cursor · jump |
+| | click outside a card | Close it |
+| | wheel over a card | `↑` `↓` |
 | **Anywhere** | `Ctrl-C` | Quit |
 
 ### Search syntax
@@ -681,6 +708,8 @@ Options:
       --color <WHEN>         How much colour the terminal can show [default: auto] [possible values: auto, truecolor, 256, never]
       --theme <PALETTE>      Draw the interface in this palette [possible values: pico8, dmg]
       --gen <N>              Read type matchups by generation N's rules, 1 to 9
+      --no-mouse             Leave the mouse to the terminal
+      --mouse                Take the mouse again after a `--no-mouse`
       --json                 Print NAME as JSON and exit, instead of opening the interface
       --json-list <QUERY>    Print every species QUERY matches as JSON Lines and exit
       --export-party         Print the saved party as a Pokemon Showdown team and exit
@@ -722,6 +751,11 @@ this run stores on the way out.
 and against the stored one behaves as `--lang` and `--theme` do. Leaving it at
 the newest stores no choice at all, so a run that never changed it follows the
 newest generation on to the next one.
+
+`--no-mouse` leaves clicks and the wheel to the terminal, for [selecting
+text](#mouse) without holding `Shift`. Unlike the flags above it is stored
+even though it was only said once, since it describes how someone works rather
+than what they wanted to look at today; `--mouse` undoes it.
 
 The two cache commands answer the question this README used to answer with a
 path and a `rm -rf`. Both print what they touched:
@@ -901,6 +935,7 @@ through to disk.
 | `lookup.rs` | The ability and item lookup card's matching, ranking and cursor. |
 | `quiz.rs` | The quiz's rules: which names an answer is held to, and the streak. |
 | `base_stats.rs` | Every entry's base stats, built in from a table `scripts/base-stats.py` generates. |
+| `mouse.rs` | What the last frame drew where, so a click can be told what it landed on. |
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |
 | `ui.rs` | All `ratatui` rendering, including the sprite and evolution-graph drawing. |
@@ -970,7 +1005,7 @@ kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
 `~/.local/state/pokeductor`):
 
 ```
-session.json              party, favourites, collection, language, sort order, palette, shiny toggle, generation, quiz streaks
+session.json              party, favourites, collection, language, sort order, palette, shiny toggle, generation, quiz streaks, mouse
 ```
 
 Written as the app exits, and read once, before the first frame. A run that is

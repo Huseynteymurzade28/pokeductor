@@ -69,11 +69,23 @@ pub struct Cli {
     #[arg(long = "gen", value_name = "N", value_parser = parse_generation)]
     generation: Option<Generation>,
 
+    /// Leave the mouse to the terminal
+    ///
+    /// Clicks and the wheel then do what they do in any other program, which
+    /// is what selecting text to copy needs. Remembered: the next run starts
+    /// the same way until `--mouse` says otherwise.
+    #[arg(long, conflicts_with = "mouse")]
+    no_mouse: bool,
+
+    /// Take the mouse again after a `--no-mouse`
+    #[arg(long)]
+    mouse: bool,
+
     /// Print NAME as JSON and exit, instead of opening the interface
     ///
     /// NAME must come down to one species: an exact name, a Pokedex number,
     /// or a fragment only one name contains. Anything else exits non-zero.
-    #[arg(long, requires = "name", conflicts_with_all = ["lang", "color", "theme", "generation"])]
+    #[arg(long, requires = "name", conflicts_with_all = ["lang", "color", "theme", "generation", "mouse", "no_mouse"])]
     json: bool,
 
     /// Print every species QUERY matches as JSON Lines and exit
@@ -85,7 +97,7 @@ pub struct Cli {
     #[arg(
         long,
         value_name = "QUERY",
-        conflicts_with_all = ["name", "json", "lang", "color", "theme", "generation"]
+        conflicts_with_all = ["name", "json", "lang", "color", "theme", "generation", "mouse", "no_mouse"]
     )]
     json_list: Option<String>,
 
@@ -106,7 +118,8 @@ pub struct Cli {
     #[arg(
         long,
         conflicts_with_all = [
-            "name", "lang", "color", "theme", "generation", "cache_dir", "json", "json_list"
+            "name", "lang", "color", "theme", "generation", "mouse", "no_mouse", "cache_dir", "json",
+            "json_list"
         ]
     )]
     clear_cache: bool,
@@ -114,7 +127,9 @@ pub struct Cli {
     /// Print the cache directory and exit
     #[arg(
         long,
-        conflicts_with_all = ["name", "lang", "color", "theme", "generation", "json", "json_list"]
+        conflicts_with_all = [
+            "name", "lang", "color", "theme", "generation", "mouse", "no_mouse", "json", "json_list"
+        ]
     )]
     cache_dir: bool,
 
@@ -146,6 +161,9 @@ pub struct Startup {
     /// environment. Unlike the other two this is never `None`: "detect it"
     /// is itself one of the answers rather than the absence of one.
     pub color: Choice,
+    /// Whether to take the mouse, or `None` for whatever the previous session
+    /// left, which is to take it unless a run was told not to.
+    pub mouse: Option<bool>,
 }
 
 /// What the arguments amounted to.
@@ -219,6 +237,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<Outcome> {
         theme: cli.theme,
         generation: cli.generation,
         color: cli.color,
+        mouse: match (cli.mouse, cli.no_mouse) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
+        },
     }))
 }
 
@@ -402,6 +425,15 @@ mod tests {
         let cli = parse(&[]).expect("no arguments is valid");
         assert_eq!(cli.name, None);
         assert_eq!(cli.lang, None);
+    }
+
+    #[test]
+    fn the_mouse_can_be_left_alone_or_taken_back_but_not_both() {
+        assert!(parse(&["--no-mouse"]).unwrap().no_mouse);
+        assert!(parse(&["--mouse"]).unwrap().mouse);
+        assert!(parse(&["--mouse", "--no-mouse"]).is_err());
+        // It shapes the interface, so it has no business beside --json.
+        assert!(parse(&["--json", "gengar", "--no-mouse"]).is_err());
     }
 
     #[test]

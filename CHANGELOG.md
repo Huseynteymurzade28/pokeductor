@@ -23,6 +23,12 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   owes you. `Z` opens a card with a progress bar per generation and for the
   whole Pokédex, and `Enter` on a row lists what is missing from it. Marks are
   written to the session file as they are made.
+- Mouse support. A click on a list row moves the cursor and a second click
+  loads it; the wheel scrolls the list; a click on a stage of the evolution
+  chain moves the chain cursor and a second jumps to it; a click outside an
+  open card closes it, and the wheel over a card is `↑` and `↓`. `--no-mouse`
+  leaves the mouse to the terminal for selecting text and is remembered until
+  `--mouse`. (#56)
 
 ### Changed
 

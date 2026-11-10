@@ -78,6 +78,11 @@ pub struct Session {
     /// having caught nothing.
     #[serde(default)]
     pub caught: Vec<String>,
+    /// Whether a run was told to leave the mouse to the terminal. Stored as
+    /// the exception rather than the rule, so a file from before mouse
+    /// support, which says nothing, reads as taking it.
+    #[serde(default)]
+    pub no_mouse: bool,
 }
 
 impl Session {
@@ -210,6 +215,7 @@ mod tests {
             quiz_streak: 3,
             quiz_best: 12,
             caught: vec!["bulbasaur".into(), "mew".into()],
+            no_mouse: true,
         };
         let bytes = encode(&session).expect("encode");
         assert_eq!(decode(&bytes), session);
@@ -241,6 +247,7 @@ mod tests {
             "a file from before favourites"
         );
         assert_eq!(session.generation, None, "a file from before generations");
+        assert!(!session.no_mouse, "a file from before the mouse");
         assert!(
             session.caught.is_empty(),
             "a file from before the collection"

@@ -30,6 +30,8 @@ const STAT_LABEL_WIDTH: usize = 9;
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let strings = app.language.strings();
+    // From empty, so nothing can be clicked where it was a frame ago.
+    *app.hits.get_mut() = crate::mouse::Hits::default();
 
     // Paint the whole background first so gaps share the pastel base color.
     frame.render_widget(
@@ -100,7 +102,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     // Drawn last: help must land on top of whatever it is explaining.
     if app.help_card {
-        render_help(frame, &strings, area);
+        render_help(frame, app, &strings, area);
     }
 }
 
@@ -142,6 +144,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
     let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(area);
 
     // --- Search box ---
+    app.hits.get_mut().search = rows[0];
     let search_focused = app.focus == Focus::Search;
     let search_block = panel_block(s.search_title, search_focused);
     let cursor = if search_focused { "▏" } else { "" };
@@ -254,6 +257,11 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
         .highlight_symbol("▶ ")
         .highlight_style(color::highlight(theme::mauve()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, inner, &mut app.browser.list_state);
+    // Read back after the draw, which is what settles how far the list had
+    // to scroll to keep the cursor on screen.
+    let hits = app.hits.get_mut();
+    hits.list = inner;
+    hits.list_offset = app.browser.list_state.offset();
 }
 
 fn render_details(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
@@ -723,6 +731,7 @@ fn pixel_color(rgba: [u8; 4]) -> Color {
 }
 
 fn render_evolution(frame: &mut Frame, app: &App, s: &Strings, area: Rect) {
+    app.hits.borrow_mut().evolution = area;
     let focused = app.focus == Focus::Evolution;
     let block = if app.sprite_variant.is_shiny() {
         panel_block_owned(
@@ -794,6 +803,13 @@ fn render_evolution_card(frame: &mut Frame, app: &App, s: &Strings, full: Rect) 
     }
 
     frame.render_widget(Clear, full);
+    // The panel behind was drawn first and recorded its own cards. They are
+    // covered now, and the ones about to be drawn are the ones on screen.
+    {
+        let mut hits = app.hits.borrow_mut();
+        hits.stages.clear();
+        hits.card = Some(full);
+    }
 
     // The sprite pixels are composited over `theme::base()`, so the card behind
     // them has to be that same colour or every sprite picks up a halo.
@@ -1240,6 +1256,18 @@ fn draw_card(
     if w == 0 || h == 0 {
         return;
     }
+    // The whole card is the target, sprite and name alike. Indexed the way
+    // the evolution cursor counts, so a click and an arrow key land on the
+    // same member.
+    if let Some(index) = app.chain_names().iter().position(|n| *n == node.name) {
+        let area = Rect {
+            x,
+            y: top,
+            width: w,
+            height: h,
+        };
+        app.hits.borrow_mut().stages.push((area, index));
+    }
 
     // How this stage is reached. A card one row taller than the minimum gets a
     // dedicated row for it; a shorter one tucks it in beside the name instead,
@@ -1461,7 +1489,7 @@ fn render_matchups(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
 
     // Two border rows plus the hint row at the foot.
     let height = (lines.len() as u16 + 3).min(full.height);
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -1637,7 +1665,7 @@ const HELP_CARD_W: u16 = 86;
 ///
 /// The key names are language-neutral and live here; only the action labels
 /// come from the translation table.
-fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
+fn render_help(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let h = &s.help_card;
 
     let left: Vec<(&str, &str)> = vec![
@@ -1716,7 +1744,7 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         return; // too cramped to be readable; leave the main view alone
     }
 
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -1820,7 +1848,7 @@ fn render_moves(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         .height
         .saturating_sub(4)
         .min(learnset.len() as u16 + 10);
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2110,7 +2138,7 @@ fn render_abilities(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     }
 
     let height = (lines.len() as u16 + 3).min(full.height);
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -2314,7 +2342,7 @@ fn render_team(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     }
 
     let height = (lines.len() as u16 + 3).min(full.height);
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -2365,7 +2393,7 @@ fn render_stat_calc(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let field = calc.field();
     let language = app.language;
 
-    let area = centered_fixed(STAT_CARD_W, 19, full);
+    let area = card_area(app, STAT_CARD_W, 19, full);
     if area.width < 44 || area.height < 19 {
         return; // too cramped to line the columns up; leave the main view alone
     }
@@ -2560,7 +2588,7 @@ fn render_compare(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let peak = compare::peak(&rows);
 
     let height = (rows.len() as u16 + 15).min(full.height);
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -2855,7 +2883,7 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         return; // too cramped to be readable; leave the main view alone
     }
 
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -2925,7 +2953,7 @@ fn render_collection(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         return; // too cramped to be readable; leave the main view alone
     }
 
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -3046,7 +3074,7 @@ fn render_encounters(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         return;
     };
 
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Double)
@@ -3218,7 +3246,7 @@ fn render_quiz(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         return;
     };
 
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Double)
@@ -3366,7 +3394,7 @@ fn render_lookup(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         return; // too cramped to be readable; leave the main view alone
     }
 
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -3615,7 +3643,7 @@ fn loading_line(s: &Strings) -> Line<'static> {
 fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     let width = 26u16;
     let height = Language::ALL.len() as u16 + 4; // borders + title pad + hint
-    let area = centered_fixed(width, height, full);
+    let area = card_area(app, width, height, full);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
@@ -3656,6 +3684,15 @@ fn render_language_picker(frame: &mut Frame, app: &App, s: &Strings, full: Rect)
     )))
     .alignment(Alignment::Center);
     frame.render_widget(hint, rows[1]);
+}
+
+/// Where an overlay card goes: centred, and recorded as the card on top so a
+/// click can be told whether it landed on it. Every card takes its area from
+/// here, and help is drawn last, so what is recorded is always the topmost.
+fn card_area(app: &App, width: u16, height: u16, full: Rect) -> Rect {
+    let area = centered_fixed(width, height, full);
+    app.hits.borrow_mut().card = Some(area);
+    area
 }
 
 /// A fixed-size `Rect` centred within `area` (clamped to fit).

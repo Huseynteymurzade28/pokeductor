@@ -317,6 +317,19 @@ impl Browser {
         self.list_state.select(Some(next as usize));
     }
 
+    /// Moves the cursor by `delta` rows, stopping at either end. What the
+    /// wheel does: an arrow key held at the last row is asking to go round,
+    /// and a wheel spun past it is not.
+    pub fn scroll(&mut self, delta: i32) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let last = self.filtered.len() as i32 - 1;
+        let current = self.list_state.selected().unwrap_or(0) as i32;
+        self.list_state
+            .select(Some((current + delta).clamp(0, last) as usize));
+    }
+
     /// Raw API name of the highlighted entry, if any.
     pub fn current_name(&self) -> Option<String> {
         let selected = self.list_state.selected()?;
@@ -460,6 +473,20 @@ mod tests {
         };
         assert_eq!(empty.percent(), 0, "an empty generation divides nothing");
         assert!(!empty.complete());
+    }
+
+    #[test]
+    fn the_wheel_stops_at_either_end_where_the_arrows_go_round() {
+        let mut browser = kanto_ghosts();
+        browser.scroll(-3);
+        assert_eq!(browser.list_state.selected(), Some(0));
+        browser.scroll(3);
+        assert_eq!(browser.list_state.selected(), Some(3));
+        browser.scroll(3);
+        assert_eq!(browser.list_state.selected(), Some(3));
+
+        browser.move_selection(1);
+        assert_eq!(browser.list_state.selected(), Some(0), "an arrow wraps");
     }
 
     #[test]

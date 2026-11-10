@@ -5,12 +5,17 @@
 //! the main loop in [`App::run`] is the single *consumer*, draining the channel
 //! alongside terminal input and a steady animation tick via `tokio::select!`.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use futures::StreamExt;
+use ratatui::layout::Position;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
@@ -28,6 +33,7 @@ use crate::models::{
     AbilityInfo, EvolutionTree, GameEncounters, ItemInfo, LearnedMove, LookupKind, MoveInfo,
     PokemonDetail, PokemonEntry, RosterTerm, Sprite, SpriteVariant,
 };
+use crate::mouse::{self, Hits, Target};
 use crate::quiz::{self, Quiz};
 use crate::session::{self, Session};
 use crate::showdown;
@@ -244,6 +250,13 @@ pub struct App {
     /// highlights, as an index into [`Browser::progress`].
     pub collection_card: bool,
     pub collection_cursor: usize,
+    /// Whether the terminal was asked to report the mouse. Off leaves clicks
+    /// and the wheel to the terminal, which is what copying text out needs.
+    pub mouse: bool,
+    /// What the last frame drew where, for telling a click what it landed
+    /// on. Written by the draw pass through a shared reference, since the
+    /// card renderers take the app immutably, and read by the mouse handler.
+    pub hits: RefCell<Hits>,
     /// Set when something worth more than a few keystrokes changed, so the
     /// event loop writes the session now rather than on the way out. See
     /// [`App::toggle_caught`].
@@ -268,6 +281,8 @@ pub struct App {
     cli_theme: Option<Theme>,
     /// Generation named on the command line, for the same reason again.
     cli_generation: Option<Generation>,
+    /// Whether the command line said to take the mouse or leave it.
+    cli_mouse: Option<bool>,
     /// Species named on the command line, opened once the list arrives — the
     /// first moment there is anything to resolve a name against.
     startup_species: Option<String>,
@@ -347,6 +362,8 @@ impl App {
             quiz_artless: HashSet::new(),
             collection_card: false,
             collection_cursor: 0,
+            mouse: startup.mouse.unwrap_or(true),
+            hits: RefCell::new(Hits::default()),
             session_dirty: false,
             help_card: false,
             translations: HashMap::new(),
@@ -356,6 +373,7 @@ impl App {
             cli_language: startup.language,
             cli_theme: startup.theme,
             cli_generation: startup.generation,
+            cli_mouse: startup.mouse,
             startup_species: startup.species,
             loading_detail: None,
             list_loading: false,
@@ -380,6 +398,29 @@ impl App {
         // Installed here rather than in `restore`, which tests call: the
         // palette is process-wide, and the first frame is drawn below.
         theme::use_theme(self.theme);
+        // After the restore, which is what settles whether to. Released on
+        // the way out whatever the loop returned: a terminal left reporting
+        // the mouse prints escape codes into the shell at every movement.
+        if self.mouse {
+            mouse::capture(true);
+        }
+        let result = self.event_loop(&mut terminal, &mut rx).await;
+        if self.mouse {
+            mouse::capture(false);
+        }
+        result?;
+
+        session::store(&self.snapshot()).await;
+        Ok(())
+    }
+
+    /// Draws, waits for whichever of input, a finished fetch or the spinner's
+    /// tick comes first, and goes round again until something asks to quit.
+    async fn event_loop(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        rx: &mut mpsc::Receiver<Message>,
+    ) -> anyhow::Result<()> {
         self.fetch_list();
 
         let mut events = EventStream::new();
@@ -407,7 +448,7 @@ impl App {
             // itself.
             let depth = self.color_depth;
             terminal.draw(|frame| {
-                crate::ui::render(frame, &mut self);
+                crate::ui::render(frame, self);
                 color::degrade(frame.buffer_mut(), depth);
             })?;
 
@@ -454,8 +495,6 @@ impl App {
                     .and_then(|()| out.flush());
             }
         }
-
-        session::store(&self.snapshot()).await;
         Ok(())
     }
 
@@ -499,6 +538,7 @@ impl App {
             quiz_streak: self.quiz.streak,
             quiz_best: self.quiz.best,
             caught: self.browser.caught.iter().cloned().collect(),
+            no_mouse: !self.mouse,
         }
     }
 
@@ -533,6 +573,11 @@ impl App {
             if let Some(generation) = session.generation.and_then(Generation::new) {
                 self.generation = generation;
             }
+        }
+        // `--mouse` and `--no-mouse` against the stored choice, as the flags
+        // above against theirs.
+        if self.cli_mouse.is_none() {
+            self.mouse = !session.no_mouse;
         }
         if session.shiny {
             self.sprite_variant = SpriteVariant::Shiny;
@@ -993,9 +1038,142 @@ impl App {
     // --- Input handling --------------------------------------------------
 
     fn handle_event(&mut self, event: Event) {
-        let Event::Key(key) = event else {
-            return; // resize/mouse: the next draw already adapts
+        match event {
+            Event::Key(key) => self.handle_key(key),
+            Event::Mouse(mouse) => self.handle_mouse(mouse),
+            _ => {} // resize: the next draw already adapts
+        }
+    }
+
+    /// Whether an overlay card is open and so owns the keyboard.
+    ///
+    /// The same flags [`App::handle_key`] tests one by one to find which. A
+    /// card added there and not here would take keys while clicks went to
+    /// the view behind it.
+    pub fn card_open(&self) -> bool {
+        self.language_picker
+            || self.quiz_card
+            || self.help_card
+            || self.ability_card
+            || self.moves_card
+            || self.lookup_card
+            || self.encounter_card
+            || self.team_card
+            || self.collection_card
+            || self.stat_card
+            || self.forms_card
+            || self.matchups
+            || self.compare_card
+            || self.evo_card
+    }
+
+    /// Clicks and the wheel, in terms of the keys that already do the same.
+    ///
+    /// The mouse adds no behaviour of its own: a click on a row is the
+    /// cursor moving there, a second click is `Enter`, a click outside a card
+    /// is `Esc`, and the wheel is the arrows. Going through the key handlers
+    /// rather than beside them is what keeps the two from disagreeing about
+    /// what a card does.
+    fn handle_mouse(&mut self, event: MouseEvent) {
+        let position = Position {
+            x: event.column,
+            y: event.row,
         };
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.click(position),
+            MouseEventKind::ScrollUp => self.wheel(-1, position),
+            MouseEventKind::ScrollDown => self.wheel(1, position),
+            _ => {} // movement, drags and the other buttons mean nothing here
+        }
+    }
+
+    fn click(&mut self, position: Position) {
+        let hits = self.hits.borrow().clone();
+        if self.card_open() {
+            if !hits.on_card(position) {
+                self.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                return;
+            }
+            // The full-screen chain is the one card whose contents are
+            // targets. Not with help open over it: that is the card on top.
+            if self.evo_card && !self.help_card {
+                if let Some(stage) = hits.stage_at(position) {
+                    self.click_stage(stage);
+                }
+            }
+            return;
+        }
+        match hits.target(position) {
+            Target::Search => self.focus = Focus::Search,
+            Target::ListRow(row) => self.click_list_row(row),
+            Target::Stage(stage) => {
+                // Focus first, so the cursor the click moves is one the panel
+                // is showing.
+                let focused = self.focus == Focus::Evolution;
+                self.focus = Focus::Evolution;
+                if focused {
+                    self.click_stage(stage);
+                } else {
+                    self.evo_cursor = stage;
+                }
+            }
+            Target::Evolution => self.focus_evolution(),
+            Target::Nothing => {}
+        }
+    }
+
+    /// A click on a list row: the cursor goes there, and a click on the row
+    /// it is already on loads it, as `Enter` would. The rows under a short
+    /// list are inside the panel and belong to nothing.
+    fn click_list_row(&mut self, row: usize) {
+        self.focus = Focus::List;
+        if row >= self.browser.filtered.len() {
+            return;
+        }
+        if self.browser.list_state.selected() == Some(row) {
+            self.request_selected();
+        } else {
+            self.browser.list_state.select(Some(row));
+        }
+    }
+
+    /// A click on a chain member: the cursor goes there, and a click on the
+    /// member it is already on takes it, as `Enter` would in whichever view
+    /// the chain is open in.
+    fn click_stage(&mut self, stage: usize) {
+        if stage >= self.chain_names().len() {
+            return;
+        }
+        if self.evo_cursor == stage {
+            self.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        } else {
+            self.evo_cursor = stage;
+        }
+    }
+
+    /// The wheel. Over a card it is the arrow keys, so every card scrolls
+    /// the way it already does. On the main view it moves the list, and only
+    /// with the pointer over the list: a wheel that scrolled the sidebar
+    /// from anywhere would move it under someone reading the other panels.
+    fn wheel(&mut self, direction: i32, position: Position) {
+        if self.card_open() {
+            let code = if direction < 0 {
+                KeyCode::Up
+            } else {
+                KeyCode::Down
+            };
+            self.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+            return;
+        }
+        let hits = self.hits.borrow();
+        let over_list = matches!(hits.target(position), Target::ListRow(_));
+        drop(hits);
+        if over_list {
+            self.browser.scroll(direction * mouse::WHEEL_ROWS);
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -2494,6 +2672,223 @@ mod tests {
         // Ivysaur is loaded, and the chain is out of the way of it.
         assert_eq!(app.selected_name.as_deref(), Some("ivysaur"));
         assert!(!app.evo_card);
+    }
+
+    /// Draws a frame, which is what tells the mouse where everything is.
+    fn draw(app: &mut App, width: u16, height: u16) {
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("test backend");
+        terminal
+            .draw(|frame| crate::ui::render(frame, app))
+            .expect("a frame draws");
+    }
+
+    fn mouse_at(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn click_at(app: &mut App, x: u16, y: u16) {
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), x, y));
+    }
+
+    /// The Kanto ghosts, all loaded so a click that loads one fetches
+    /// nothing, drawn once at a size every panel fits in.
+    fn ghosts_on_screen() -> App {
+        let mut app = app_listing(&[(92, "gastly"), (93, "haunter"), (94, "gengar")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        for name in ["gastly", "haunter", "gengar"] {
+            app.details.insert(name.to_string(), loaded(name));
+            app.evolutions
+                .insert(name.to_string(), line(&["gastly", "haunter", "gengar"]));
+        }
+        app.selected_name = Some("gastly".to_string());
+        draw(&mut app, 120, 40);
+        app
+    }
+
+    #[test]
+    fn a_click_on_a_row_moves_the_cursor_and_a_second_click_loads_it() {
+        let mut app = ghosts_on_screen();
+        let list = app.hits.borrow().list;
+
+        click_at(&mut app, list.x + 3, list.y + 2);
+        assert_eq!(app.current_name().as_deref(), Some("gengar"));
+        assert_eq!(app.selected_name.as_deref(), Some("gastly"), "not yet");
+
+        click_at(&mut app, list.x + 3, list.y + 2);
+        assert_eq!(app.selected_name.as_deref(), Some("gengar"));
+    }
+
+    #[test]
+    fn a_click_under_a_short_list_moves_nothing() {
+        let mut app = ghosts_on_screen();
+        let list = app.hits.borrow().list;
+        click_at(&mut app, list.x + 3, list.y + 10);
+        assert_eq!(app.current_name().as_deref(), Some("gastly"));
+    }
+
+    #[test]
+    fn a_click_on_a_scrolled_list_counts_from_the_row_it_is_scrolled_to() {
+        let entries: Vec<(u32, String)> = (1..=200).map(|id| (id, format!("mon{id}"))).collect();
+        let entries: Vec<(u32, &str)> = entries.iter().map(|(id, n)| (*id, n.as_str())).collect();
+        let mut app = app_listing(&entries);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        app.browser.list_state.select(Some(150));
+        draw(&mut app, 120, 40);
+
+        let hits = app.hits.borrow().clone();
+        assert!(hits.list_offset > 0, "the list had to scroll");
+        click_at(&mut app, hits.list.x + 3, hits.list.y);
+        assert_eq!(app.browser.list_state.selected(), Some(hits.list_offset));
+    }
+
+    #[test]
+    fn a_click_on_the_search_box_puts_the_keyboard_in_it() {
+        let mut app = ghosts_on_screen();
+        let search = app.hits.borrow().search;
+        click_at(&mut app, search.x + 4, search.y + 1);
+        assert_eq!(app.focus, Focus::Search);
+    }
+
+    #[test]
+    fn the_wheel_moves_the_list_only_from_over_the_list() {
+        let mut app = ghosts_on_screen();
+        let list = app.hits.borrow().list;
+
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollDown, list.x + 3, list.y + 1));
+        assert_eq!(app.current_name().as_deref(), Some("gengar"));
+        // Over the detail panel it is somebody reading, not somebody scrolling.
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 100, 5));
+        assert_eq!(app.current_name().as_deref(), Some("gengar"));
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, list.x + 3, list.y + 1));
+        assert_eq!(app.current_name().as_deref(), Some("gastly"));
+    }
+
+    #[test]
+    fn a_click_outside_a_card_closes_it_and_one_inside_does_not() {
+        let mut app = ghosts_on_screen();
+        app.collection_card = true;
+        draw(&mut app, 120, 40);
+        let card = app.hits.borrow().card.expect("the card drew");
+
+        click_at(&mut app, card.x + 2, card.y + 1);
+        assert!(app.collection_card, "a click on the card is not a way out");
+        click_at(&mut app, 0, 0);
+        assert!(!app.collection_card);
+        // And it went to the card, not through it to the list underneath.
+        assert_eq!(app.current_name().as_deref(), Some("gastly"));
+    }
+
+    #[test]
+    fn the_wheel_over_a_card_is_the_arrow_keys() {
+        let mut app = ghosts_on_screen();
+        app.language_picker = true;
+        draw(&mut app, 120, 40);
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollDown, 60, 20));
+        assert_eq!(app.lang_cursor, 1);
+        assert_eq!(app.current_name().as_deref(), Some("gastly"));
+    }
+
+    #[test]
+    fn a_click_on_a_stage_moves_the_chain_cursor_and_a_second_takes_it() {
+        let mut app = ghosts_on_screen();
+        let stages = app.hits.borrow().stages.clone();
+        assert_eq!(stages.len(), 3, "the chain drew as cards");
+        // Recorded in draw order, which is leaves first; found by index.
+        let (area, _) = *stages
+            .iter()
+            .find(|(_, index)| *index == 2)
+            .expect("gengar's card");
+
+        click_at(&mut app, area.x + 1, area.y + 1);
+        assert_eq!(app.focus, Focus::Evolution);
+        assert_eq!(app.evo_cursor, 2);
+        assert_eq!(app.selected_name.as_deref(), Some("gastly"));
+
+        click_at(&mut app, area.x + 1, area.y + 1);
+        assert_eq!(app.selected_name.as_deref(), Some("gengar"));
+    }
+
+    #[test]
+    fn a_click_on_a_stage_of_the_full_screen_chain_takes_it_and_closes_the_view() {
+        let mut app = ghosts_on_screen();
+        app.open_evolution_card();
+        draw(&mut app, 120, 40);
+        let stages = app.hits.borrow().stages.clone();
+        let (area, _) = *stages
+            .iter()
+            .find(|(_, index)| *index == 1)
+            .expect("haunter's card");
+
+        click_at(&mut app, area.x + 1, area.y + 1);
+        assert!(app.evo_card);
+        assert_eq!(app.evo_cursor, 1);
+        click_at(&mut app, area.x + 1, area.y + 1);
+        assert!(!app.evo_card);
+        assert_eq!(app.selected_name.as_deref(), Some("haunter"));
+    }
+
+    #[test]
+    fn every_card_that_takes_the_keyboard_counts_as_open_to_the_mouse() {
+        // The two lists are kept by hand, and a card missing from
+        // `card_open` would take keys while clicks went to the list behind.
+        type Flag = fn(&mut App) -> &mut bool;
+        let flags: [Flag; 14] = [
+            |app| &mut app.language_picker,
+            |app| &mut app.quiz_card,
+            |app| &mut app.help_card,
+            |app| &mut app.ability_card,
+            |app| &mut app.moves_card,
+            |app| &mut app.lookup_card,
+            |app| &mut app.encounter_card,
+            |app| &mut app.team_card,
+            |app| &mut app.collection_card,
+            |app| &mut app.stat_card,
+            |app| &mut app.forms_card,
+            |app| &mut app.matchups,
+            |app| &mut app.compare_card,
+            |app| &mut app.evo_card,
+        ];
+        let mut app = app_listing(&[(94, "gengar")]);
+        assert!(!app.card_open());
+        for flag in flags {
+            *flag(&mut app) = true;
+            assert!(app.card_open());
+            *flag(&mut app) = false;
+        }
+    }
+
+    #[test]
+    fn a_run_told_to_leave_the_mouse_alone_is_remembered() {
+        let (mut app, _rx) = App::new(Startup {
+            mouse: Some(false),
+            ..Startup::default()
+        })
+        .expect("client builds");
+        app.restore(Session::default());
+        assert!(!app.mouse);
+        let stored = app.snapshot();
+        assert!(stored.no_mouse);
+
+        let (mut next, _rx) = App::new(Startup::default()).expect("client builds");
+        next.restore(stored.clone());
+        assert!(!next.mouse, "the next run starts the same way");
+
+        let (mut back, _rx) = App::new(Startup {
+            mouse: Some(true),
+            ..Startup::default()
+        })
+        .expect("client builds");
+        back.restore(stored);
+        assert!(back.mouse, "until --mouse says otherwise");
+        assert!(!back.snapshot().no_mouse);
     }
 
     #[test]

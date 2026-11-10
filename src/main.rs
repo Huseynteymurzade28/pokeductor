@@ -2,6 +2,7 @@
 //!
 //! Module layout:
 //! - `models`  : API-agnostic domain types (the data domain layer).
+//! - `mouse`   : what the last frame drew where, for hit-testing clicks.
 //! - `cache`   : on-disk cache of everything fetched, for instant/offline starts.
 //! - `cli`     : argument parsing and the commands that need no terminal.
 //! - `clipboard`: copying text through the terminal with OSC 52.
@@ -33,6 +34,7 @@ mod i18n;
 mod json;
 mod lookup;
 mod models;
+mod mouse;
 mod query;
 mod quiz;
 mod retry;
@@ -61,6 +63,16 @@ async fn main() -> anyhow::Result<()> {
     // `ratatui::init` enters the alternate screen, enables raw mode, and
     // installs a panic hook that restores the terminal on the way out.
     let terminal = ratatui::init();
+    // `ratatui::init` restores the screen on a panic but knows nothing about
+    // the mouse, which `App::run` may have asked the terminal to report. Left
+    // on, every movement after the crash would print escape codes into the
+    // shell. Releasing a mouse that was never taken is harmless, so the hook
+    // does not need to know which it was.
+    let restore = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        mouse::capture(false);
+        restore(info);
+    }));
     let result = app.run(terminal, rx).await;
     ratatui::restore();
 
