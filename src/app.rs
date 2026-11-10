@@ -27,6 +27,7 @@ use crate::cache;
 use crate::cli::Startup;
 use crate::clipboard;
 use crate::color::{self, Depth};
+use crate::damage::{self, Outcome, Setup};
 use crate::i18n::Language;
 use crate::lookup::{self, Lookup};
 use crate::models::{
@@ -56,6 +57,15 @@ const SUGGESTION_LIMIT: usize = 8;
 
 /// How often the loading spinner advances, while there is one to advance.
 const SPINNER_TICK: Duration = Duration::from_millis(120);
+
+/// One row of the damage card: a move the attacker learns and, once its
+/// record is in, what it does to the defender.
+#[derive(Debug, Clone, Copy)]
+pub struct DamageRow<'a> {
+    pub learned: &'a LearnedMove,
+    pub info: Option<&'a MoveInfo>,
+    pub outcome: Option<Outcome>,
+}
 
 /// Messages sent from background fetch tasks to the UI loop. The payloads are
 /// large but short-lived and low-frequency, so the size difference between
@@ -216,6 +226,13 @@ pub struct App {
     /// Row the moves card highlights, as an index into the selection's
     /// learnset.
     pub move_cursor: usize,
+    /// Whether the damage card is open, and which row it highlights, as an
+    /// index into [`App::damage_rows`].
+    pub damage_card: bool,
+    pub damage_cursor: usize,
+    /// The conditions the damage card works under. Outlives the card and the
+    /// two species, as the calculator's spread does.
+    pub damage: Setup,
     /// Whether the forms card is open, and which of the species' varieties it
     /// highlights. Held here rather than on the record because it is a cursor
     /// over what is on display, not a property of the species.
@@ -354,6 +371,9 @@ impl App {
             move_loading: HashSet::new(),
             moves_card: false,
             move_cursor: 0,
+            damage_card: false,
+            damage_cursor: 0,
+            damage: Setup::default(),
             forms_card: false,
             forms_cursor: 0,
             lookup_card: false,
@@ -451,6 +471,7 @@ impl App {
             self.ensure_translation();
             self.ensure_ability_info();
             self.ensure_move_info();
+            self.ensure_damage_moves();
             self.ensure_lookup_info();
             // Rendering always writes 24-bit colour; this is where the frame
             // is rewritten into what the terminal can actually show. Doing it
@@ -1067,6 +1088,7 @@ impl App {
             || self.help_card
             || self.ability_card
             || self.moves_card
+            || self.damage_card
             || self.lookup_card
             || self.encounter_card
             || self.team_card
@@ -1223,6 +1245,10 @@ impl App {
         }
         if self.moves_card {
             self.handle_moves_key(key);
+            return;
+        }
+        if self.damage_card {
+            self.handle_damage_key(key);
             return;
         }
         if self.lookup_card {
@@ -1659,11 +1685,17 @@ impl App {
             .skip(start)
             .take(MOVE_BAND)
             .map(|learned| learned.name.clone())
-            .filter(|name| !self.moves.contains_key(name) && !self.move_loading.contains(name))
             .collect();
+        self.request_moves(missing);
+    }
 
-        for name in missing {
-            self.move_loading.insert(name.clone());
+    /// Asks for each of `names`' move records, unless it is already here or
+    /// on its way.
+    fn request_moves(&mut self, names: Vec<String>) {
+        for name in names {
+            if self.moves.contains_key(&name) || !self.move_loading.insert(name.clone()) {
+                continue;
+            }
             let tx = self.tx.clone();
             let client = self.client.clone();
             tokio::spawn(async move {
@@ -1674,6 +1706,142 @@ impl App {
                     let _ = tx.send(Message::MoveLoaded(info)).await;
                 }
             });
+        }
+    }
+
+    /// Opens the damage card over the species on display, which is the one
+    /// attacking. The one pinned with `C` takes the hit.
+    ///
+    /// It opens without a pin too, and says what it is waiting for: a key
+    /// that does nothing until another key has been pressed first teaches
+    /// nobody the order.
+    fn open_damage(&mut self) {
+        if self.selected_detail().is_some() {
+            self.damage_card = true;
+            self.damage_cursor = 0;
+        }
+    }
+
+    /// The attacker and the defender the damage card reads: the species on
+    /// display and the pinned one, once both records are in.
+    pub fn damage_sides(&self) -> Option<(&PokemonDetail, &PokemonDetail)> {
+        let attacker = self.selected_detail()?;
+        let defender = self.details.get(self.pin.as_ref()?)?;
+        Some((attacker, defender))
+    }
+
+    /// The attacker's learnset against the defender, hardest hit first.
+    ///
+    /// Ordered by what each move does rather than by how it is learned,
+    /// since the question the card is opened with is which move to use. A
+    /// move whose record has not landed goes last and moves up when it does;
+    /// the sort is stable, so everything level on damage keeps the learnset's
+    /// own order.
+    pub fn damage_rows(&self) -> Vec<DamageRow<'_>> {
+        let Some((attacker, defender)) = self.damage_sides() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<DamageRow> = attacker
+            .moves
+            .iter()
+            .map(|learned| {
+                let info = self.moves.get(&learned.name);
+                let outcome = info.map(|info| {
+                    damage::calculate(attacker, defender, info, &self.damage, self.generation)
+                });
+                DamageRow {
+                    learned,
+                    info,
+                    outcome,
+                }
+            })
+            .collect();
+        rows.sort_by_key(|row| {
+            row.outcome
+                .map_or((u8::MAX, std::cmp::Reverse(0)), Outcome::rank)
+        });
+        rows
+    }
+
+    /// Requests every move record the damage card needs, which is the whole
+    /// learnset.
+    ///
+    /// The moves card fetches a band around its cursor, because it lists a
+    /// learnset in a fixed order and most of it is never scrolled to. This
+    /// card orders the list by damage, and the hardest hit cannot be put
+    /// first without knowing what every move does. The cost is the learnset's
+    /// length in requests the first time a species attacks, and nothing after:
+    /// move records are cached for good and shared between species.
+    fn ensure_damage_moves(&mut self) {
+        if !self.damage_card {
+            return;
+        }
+        let Some((attacker, _)) = self.damage_sides() else {
+            return;
+        };
+        let names = attacker
+            .moves
+            .iter()
+            .map(|learned| learned.name.clone())
+            .collect();
+        self.request_moves(names);
+    }
+
+    /// The damage card's keys. Each setting has a letter of its own, shown
+    /// beside it on the card, rather than a cursor to walk between them: the
+    /// arrows are already the move list's.
+    fn handle_damage_key(&mut self, key: KeyEvent) {
+        let len = self.damage_rows().len();
+        let before = (self.damage, self.generation);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('h' | 'H' | 'q' | 'Q') => self.damage_card = false,
+            KeyCode::Up | KeyCode::Char('k') => self.move_damage_cursor(-1, len),
+            KeyCode::Down | KeyCode::Char('j') => self.move_damage_cursor(1, len),
+            KeyCode::PageUp => self.move_damage_cursor(-10, len),
+            KeyCode::PageDown => self.move_damage_cursor(10, len),
+            KeyCode::Home => self.damage_cursor = 0,
+            KeyCode::End => self.damage_cursor = len.saturating_sub(1),
+            KeyCode::Char('a' | 'A') => self.damage.cycle_offence(),
+            KeyCode::Char('d' | 'D') => self.damage.cycle_bulk(),
+            KeyCode::Char('i' | 'I') => self.damage.cycle_item(),
+            KeyCode::Char('w' | 'W') => self.damage.cycle_weather(),
+            KeyCode::Char('c' | 'C') => self.damage.toggle_critical(),
+            KeyCode::Char('l' | 'L') => self.damage.toggle_level(),
+            KeyCode::Char('+' | '=') => self.damage.step_stage(1),
+            KeyCode::Char('-' | '_') => self.damage.step_stage(-1),
+            KeyCode::Char('r' | 'R') => self.damage = Setup::default(),
+            KeyCode::Char('x' | 'X') => self.swap_damage_sides(),
+            code => self.step_generation(code),
+        }
+        // Anything that changes the numbers changes the order, and the cursor
+        // is a position in it. Back to the top, where the hardest hit under
+        // the new conditions now is.
+        if before != (self.damage, self.generation) {
+            self.damage_cursor = 0;
+        }
+    }
+
+    fn move_damage_cursor(&mut self, delta: i32, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let next = self.damage_cursor as i32 + delta;
+        self.damage_cursor = next.clamp(0, len as i32 - 1) as usize;
+    }
+
+    /// Turns the matchup round: the defender is put on display and attacks,
+    /// and the species that was attacking is pinned in its place.
+    fn swap_damage_sides(&mut self) {
+        let (Some(attacker), Some(defender)) = (self.selected_name.clone(), self.pin.clone())
+        else {
+            return;
+        };
+        if attacker == defender || !self.details.contains_key(&defender) {
+            return;
+        }
+        if self.show_species(&defender) {
+            self.pin = Some(attacker);
+            self.damage_cursor = 0;
         }
     }
 
@@ -2143,6 +2311,7 @@ impl App {
             KeyCode::Char('x') | KeyCode::Char('X') => self.toggle_shiny(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.open_random(),
             KeyCode::Char('i') | KeyCode::Char('I') => self.open_stat_card(),
+            KeyCode::Char('h') | KeyCode::Char('H') => self.open_damage(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_lookup(),
             KeyCode::Char('w') | KeyCode::Char('W') => self.open_encounters(),
             KeyCode::Char('n') | KeyCode::Char('N') => self.open_quiz(),
@@ -2698,7 +2867,7 @@ pub(crate) fn loaded(name: &str) -> PokemonDetail {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::models::RosterKind;
     use crate::query::Query;
@@ -2930,12 +3099,13 @@ mod tests {
         // The two lists are kept by hand, and a card missing from
         // `card_open` would take keys while clicks went to the list behind.
         type Flag = fn(&mut App) -> &mut bool;
-        let flags: [Flag; 15] = [
+        let flags: [Flag; 16] = [
             |app| &mut app.language_picker,
             |app| &mut app.quiz_card,
             |app| &mut app.help_card,
             |app| &mut app.ability_card,
             |app| &mut app.moves_card,
+            |app| &mut app.damage_card,
             |app| &mut app.lookup_card,
             |app| &mut app.encounter_card,
             |app| &mut app.team_card,
@@ -3057,6 +3227,135 @@ mod tests {
         app.open_team_card();
         app.handle_key(press(KeyCode::Char('s')));
         assert!(!app.suggest_card);
+    }
+
+    fn damaging(name: &str, type_name: &str, power: u16) -> MoveInfo {
+        MoveInfo {
+            name: name.to_string(),
+            names: HashMap::new(),
+            flavors: HashMap::new(),
+            type_name: type_name.to_string(),
+            damage_class: "physical".to_string(),
+            power: Some(power),
+            accuracy: Some(100),
+            pp: Some(10),
+        }
+    }
+
+    /// Garchomp on display with three moves, every record loaded, and Gengar
+    /// in the list to pin.
+    pub(crate) fn garchomp_attacking() -> App {
+        let mut app = app_listing(&[(94, "gengar"), (445, "garchomp")]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        let stats = |bases: [u16; 6]| {
+            crate::compare::STAT_ORDER
+                .iter()
+                .zip(bases)
+                .map(|(&kind, base)| crate::models::Stat { kind, base })
+                .collect::<Vec<_>>()
+        };
+        let learns = |name: &str| LearnedMove {
+            name: name.to_string(),
+            method: crate::models::LearnMethod::LevelUp,
+            level: 1,
+        };
+        let garchomp = PokemonDetail {
+            dex_number: 445,
+            types: vec!["dragon".to_string(), "ground".to_string()],
+            stats: stats([108, 130, 95, 80, 85, 102]),
+            moves: vec![
+                learns("tackle"),
+                learns("dragon-claw"),
+                learns("earthquake"),
+            ],
+            ..loaded("garchomp")
+        };
+        let gengar = PokemonDetail {
+            dex_number: 94,
+            types: vec!["ghost".to_string(), "poison".to_string()],
+            stats: stats([60, 65, 60, 130, 75, 110]),
+            moves: vec![learns("lick")],
+            ..loaded("gengar")
+        };
+        app.details.insert("garchomp".to_string(), garchomp);
+        app.details.insert("gengar".to_string(), gengar);
+        for info in [
+            damaging("tackle", "normal", 40),
+            damaging("dragon-claw", "dragon", 80),
+            damaging("earthquake", "ground", 100),
+            damaging("lick", "ghost", 30),
+        ] {
+            app.moves.insert(info.name.clone(), info);
+        }
+        app.browser.list_state.select(Some(1));
+        app.selected_name = Some("garchomp".to_string());
+        app
+    }
+
+    fn damage_order(app: &App) -> Vec<&str> {
+        app.damage_rows()
+            .iter()
+            .map(|row| row.learned.name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn the_damage_card_lists_the_attackers_moves_hardest_first() {
+        let mut app = garchomp_attacking();
+        app.pin = Some("gengar".to_string());
+        app.handle_key(press(KeyCode::Char('h')));
+        assert!(app.damage_card);
+        // Earthquake is super effective, Dragon Claw neutral, and Tackle
+        // does nothing to a Ghost.
+        assert_eq!(damage_order(&app), ["earthquake", "dragon-claw", "tackle"]);
+        assert_eq!(app.damage_rows()[2].outcome, Some(Outcome::Immune));
+    }
+
+    #[test]
+    fn the_damage_card_opens_without_a_pin_and_has_no_rows_to_show() {
+        let mut app = garchomp_attacking();
+        app.handle_key(press(KeyCode::Char('h')));
+        assert!(app.damage_card);
+        assert!(app.damage_rows().is_empty());
+    }
+
+    #[test]
+    fn a_move_whose_record_is_not_in_yet_waits_at_the_bottom() {
+        let mut app = garchomp_attacking();
+        app.pin = Some("gengar".to_string());
+        app.moves.remove("earthquake");
+        assert_eq!(damage_order(&app), ["dragon-claw", "tackle", "earthquake"]);
+    }
+
+    #[test]
+    fn changing_a_setting_puts_the_cursor_back_on_the_hardest_hit() {
+        let mut app = garchomp_attacking();
+        app.pin = Some("gengar".to_string());
+        app.damage_card = true;
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.damage_cursor, 1);
+        app.handle_key(press(KeyCode::Char('c')));
+        assert!(app.damage.critical);
+        assert_eq!(app.damage_cursor, 0);
+
+        app.handle_key(press(KeyCode::Down));
+        app.handle_key(press(KeyCode::Char('r')));
+        assert_eq!(app.damage, Setup::default());
+        assert_eq!(app.damage_cursor, 0);
+    }
+
+    #[test]
+    fn swapping_sides_makes_the_defender_the_attacker() {
+        let mut app = garchomp_attacking();
+        app.pin = Some("gengar".to_string());
+        app.damage_card = true;
+        app.handle_key(press(KeyCode::Char('x')));
+
+        assert_eq!(app.selected_name.as_deref(), Some("gengar"));
+        assert!(app.is_pinned("garchomp"));
+        assert_eq!(damage_order(&app), ["lick"]);
+        assert!(app.damage_card, "the card stays open on the other side");
     }
 
     #[test]

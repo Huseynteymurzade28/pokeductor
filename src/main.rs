@@ -15,6 +15,7 @@
 //! - `retry`   : retry classification and backoff policy for network requests.
 //! - `session`: party and preferences carried over from the previous run.
 //! - `showdown`: the party in Pokemon Showdown's team format, both ways.
+//! - `damage`  : what one species' move takes off another, as a range.
 //! - `statcalc`: final stats from level, nature, IVs and EVs.
 //! - `suggest` : who would improve a party, from the built-in tables.
 //! - `typechart`: offline type-effectiveness chart.
@@ -31,6 +32,7 @@ mod cli;
 mod clipboard;
 mod color;
 mod compare;
+mod damage;
 mod i18n;
 mod json;
 mod lookup;

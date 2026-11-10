@@ -351,6 +351,67 @@ whatever it is trained in. Nature names stay in English in every language, the
 way Showdown writes them. The base stats are on the record the info panel
 already shows, so the card needs no network.
 
+### Damage calculator
+
+The head-to-head card stops at the type chart: it says a hit is 2×. `H` says
+what that comes to. Pin the target with `C`, move to the attacker and press
+`H`: the card lists every move the attacker learns against the pinned species,
+hardest hit first, each with the range it takes off as a percentage of the
+target's HP and how many hits a knock-out needs.
+
+```
+ Garchomp  Dragon   Ground   ▶  Gengar  Ghost   Poison
+ [A] 252 Atk/SpA   [D] 0 HP · 0 Def/SpD
+ [L] Level 50   [+ -] Boost +0   [C] Critical hit ○
+ [I] Item —   [W] Weather —
+
+  Move                Type       Cat.   Pow  Damage
+▶ Earthquake          GROUND     Phys   100  191.1–226.6%       OHKO
+  Outrage             DRAGON     Phys   120  114.0–135.5%       OHKO
+  Dragon Rush         DRAGON     Phys   100  95.5–113.3%      1–2HKO
+  Dragon Claw         DRAGON     Phys    80  76.2–91.1%         2HKO
+
+ 258–306 / 135 HP · ×2
+```
+
+`1–2HKO` is a knock-out the roll decides: one hit at the top of the range, two
+at the bottom. The line under the list gives the highlighted hit in hit points.
+
+Each setting has its key beside it on the card:
+
+| Key | Setting |
+|---|---|
+| `A` | The attacker's training in the stat it hits with: none, 252 EVs, or 252 EVs and a boosting nature (`252+`) |
+| `D` | The defender's: nothing, 252 HP, or 252 HP with 252 EVs and a boosting nature in the defending stat |
+| `L` | Level 50 or 100 |
+| `+` `-` | The attacker's stat stage, −6 to +6 |
+| `C` | Critical hit |
+| `I` | Life Orb, a Choice item, or nothing |
+| `W` | Sun, rain, sandstorm, snow, or clear |
+
+Changing any of them puts the cursor back on the hardest hit, since the order
+is by damage and has just changed. `X` turns the matchup round, `R` puts the
+settings back, and `g` `G` step the generation, which changes the type chart
+and the two typings as it does on the other cards. The settings are kept while
+the app is open, so one set of conditions can be read against target after
+target.
+
+The first time a species attacks, the card fetches the record of every move it
+learns, and the list fills in and reorders as they land. Move records are
+cached for good and shared between species, so that happens once.
+
+What it does not model is on the card rather than guessed at:
+
+- **The arithmetic is the current games'.** An older generation changes the
+  chart and the typings, not the formula, the critical-hit multiplier or the
+  split of physical from special, which before Generation IV went by type.
+- **Abilities do nothing**, except where the defender has only one and it is
+  an immunity, as on the matchup card. No Huge Power, no Multiscale.
+- **A multi-hit move is shown for one hit**, and a move whose power depends on
+  something the card cannot know (weight, remaining HP) says `varies`.
+- The fixed-damage moves, Body Press, Foul Play and the Psyshock family read
+  the stats the games have them read.
+
 ### Evolution chains
 
 Chains are laid out as connected sprite cards, each stage labelled with what it
@@ -622,6 +683,7 @@ no refetch:
 | | `A` | Ability card |
 | | `M` | Moves card |
 | | `I` | Stat calculator |
+| | `H` | Damage calculator, against the pinned species |
 | | `V` | Alternate forms card |
 | | `D` | Look up abilities and items |
 | | `W` | Where to find it in the wild |
@@ -669,6 +731,14 @@ no refetch:
 | | `+` `-` | Step the value (EVs by 4) |
 | | `R` | Back to level 50, 31 IVs, no EVs |
 | | `I` · `Esc` | Close |
+| **Damage calculator** | `↑` `↓` · `j` `k` · `PgUp` `PgDn` · `Home` `End` | Move between moves |
+| | `A` · `D` | Cycle the attacker's / defender's training |
+| | `L` · `+` `-` · `C` | Level 50 ↔ 100 · stat stage · critical hit |
+| | `I` · `W` | Cycle the held item / the weather |
+| | `X` | Swap attacker and defender |
+| | `R` | Back to the default settings |
+| | `g` · `G` | Type rules of the next / previous generation |
+| | `H` · `Esc` | Close |
 | **Encounters card** | `←` `→` · `h` `l` | Previous / next game |
 | | `↑` `↓` · `j` `k` | Scroll |
 | | `W` · `Esc` | Close |
@@ -979,6 +1049,7 @@ through to disk.
 | `typechart.rs` | Offline type-effectiveness charts for every generation, and matchup analysis. |
 | `team.rs` | Team-level type analysis built on top of the chart. |
 | `statcalc.rs` | Final stats from level, nature, IVs and EVs, and the calculator card's editing rules. |
+| `damage.rs` | What one species' move takes off another: the damage formula, its modifiers and the settings the card cycles. |
 | `compare.rs` | Head-to-head arithmetic for two species: stat rows, winners, best same-type hit. |
 | `i18n.rs` | `Language` enum and translation tables for the six UI languages. |
 | `theme.rs` | The palettes — PICO-8 and Game Boy DMG — and the per-type accent colours. |

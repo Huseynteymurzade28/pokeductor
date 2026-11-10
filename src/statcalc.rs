@@ -81,6 +81,17 @@ impl Nature {
         (up != down).then_some(NATURE_STATS[down as usize])
     }
 
+    /// A nature that raises `kind`, for callers that care about one stat and
+    /// not about which other one pays for it. HP has none, and gets a neutral
+    /// one.
+    pub fn raising(kind: StatKind) -> Self {
+        match NATURE_STATS.iter().position(|&stat| stat == kind) {
+            // The next column along is never the diagonal.
+            Some(up) => Nature((up * 5 + (up + 1) % 5) as u8),
+            None => Nature::default(),
+        }
+    }
+
     /// The next nature in the games' order, wrapping, `step` places on.
     fn cycled(self, step: i32) -> Self {
         Nature((i32::from(self.0) + step).rem_euclid(NATURES.len() as i32) as u8)
@@ -386,6 +397,16 @@ mod tests {
         for i in 0..25 {
             assert_eq!(final_stat(StatKind::Hp, 108, 31, 0, 50, Nature(i)), plain);
         }
+    }
+
+    #[test]
+    fn a_nature_can_be_asked_for_by_the_stat_it_raises() {
+        for kind in NATURE_STATS {
+            let nature = Nature::raising(kind);
+            assert_eq!(nature.raised(), Some(kind));
+            assert_ne!(nature.lowered(), Some(kind));
+        }
+        assert_eq!(Nature::raising(StatKind::Hp).raised(), None);
     }
 
     #[test]

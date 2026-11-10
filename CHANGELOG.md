@@ -34,6 +34,13 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   resists, the types it hits that nobody does, and the weaknesses it would
   share. `Enter` adds one. Worked out offline from the type chart and the
   built-in table, which now carries every entry's types.
+- A damage calculator. `H` lists every move the species on display learns
+  against the one pinned with `C`, hardest hit first, with the damage range
+  as a percentage of the target's HP and the hits a knock-out takes. The
+  attacker's and defender's training, level, stat stage, critical hits, Life
+  Orb or a Choice item and the weather each have a key on the card, and `X`
+  swaps the two sides. Uses the current games' formula; abilities are not
+  modelled beyond certain immunities.
 
 ### Changed
 

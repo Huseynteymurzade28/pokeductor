@@ -11,6 +11,8 @@ use crate::app::{App, Focus};
 use crate::browser::SortKey;
 use crate::color;
 use crate::compare;
+// As `Hit`: the quiz has an `Outcome` of its own in this file.
+use crate::damage::{Outcome as Hit, Weather};
 use crate::i18n::{self, EvoStrings, Language, Strings};
 use crate::models::{
     egg_group_label, form_label, location_label, title_case, version_label, CatchEase,
@@ -69,6 +71,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     if app.moves_card {
         render_moves(frame, app, &strings, area);
+    }
+    if app.damage_card {
+        render_damage(frame, app, &strings, area);
     }
     if app.team_card {
         render_team(frame, app, &strings, area);
@@ -1685,6 +1690,7 @@ fn render_help(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         ("A", h.act_abilities),
         ("M", h.act_moves),
         ("I", h.act_stat_calc),
+        ("H", h.act_damage),
         ("V", h.act_forms),
         ("D", h.act_lookup),
         ("W", h.act_encounters),
@@ -2939,6 +2945,271 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(hint, rows[1]);
 }
 
+const DAMAGE_CARD_W: u16 = 80;
+/// Widths of the damage card's fixed columns; the move's name takes the rest.
+const DAMAGE_RANGE_W: usize = 15;
+const DAMAGE_KO_W: usize = 8;
+
+/// What the species on display does to the pinned one, move by move, hardest
+/// hit first.
+///
+/// The settings sit above the list with their keys beside them, so the card
+/// documents itself and the foot is left for the keys that are not settings.
+fn render_damage(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = DAMAGE_CARD_W.min(full.width);
+    let text_w = width.saturating_sub(2) as usize;
+    if text_w < 50 || full.height < 14 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            generation_title(s.damage_title, s, app.generation),
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::surface()));
+
+    let Some((attacker, defender)) = app.damage_sides() else {
+        // Nothing pinned, or its record still on the way: say what the card
+        // is waiting for instead of drawing an empty table.
+        let area = card_area(app, width, 5, full);
+        frame.render_widget(Clear, area);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        render_centered_text(frame, inner, s.damage_needs_pin, theme::overlay());
+        return;
+    };
+
+    let rows = app.damage_rows();
+    // A card, not a second screen, as the moves card is.
+    let height = full
+        .height
+        .saturating_sub(2)
+        .min(rows.len().max(1) as u16 + 11);
+    let area = card_area(app, width, height, full);
+    frame.render_widget(Clear, area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let absent = !attacker.exists_in(app.generation) || !defender.exists_in(app.generation);
+    let layout = Layout::vertical([
+        Constraint::Length(6), // the two sides, the settings, column headings
+        Constraint::Min(1),    // the moves
+        Constraint::Length(1), // the highlighted move in full
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    let setup = &app.damage;
+    let key = |text: &str| {
+        Span::styled(
+            format!(" [{text}] "),
+            Style::default()
+                .fg(theme::teal())
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let label =
+        |text: &str| Span::styled(format!("{text} "), Style::default().fg(theme::subtext()));
+    let value = |text: String| Span::styled(text, Style::default().fg(theme::text()));
+
+    let mut sides = vec![Span::styled(
+        format!(" {} ", title_case(&attacker.name)),
+        Style::default()
+            .fg(theme::mauve())
+            .add_modifier(Modifier::BOLD),
+    )];
+    sides.extend(type_chips(attacker.types_in(app.generation), app.language));
+    sides.push(Span::styled(" ▶  ", Style::default().fg(theme::peach())));
+    sides.push(Span::styled(
+        format!("{} ", title_case(&defender.name)),
+        Style::default()
+            .fg(theme::mauve())
+            .add_modifier(Modifier::BOLD),
+    ));
+    sides.extend(type_chips(defender.types_in(app.generation), app.language));
+
+    let (hp_evs, defence_evs) = setup.bulk.labels();
+    let weather = match setup.weather {
+        Weather::Clear => "—",
+        Weather::Sun => s.weather_sun,
+        Weather::Rain => s.weather_rain,
+        Weather::Sand => s.weather_sand,
+        Weather::Snow => s.weather_snow,
+    };
+    let table_w = text_w;
+    let name_w = table_w.saturating_sub(2 + 11 + 6 + 5 + DAMAGE_RANGE_W + DAMAGE_KO_W + 2);
+    let header = vec![
+        Line::from(sides),
+        Line::from(vec![
+            key("A"),
+            value(format!("{} Atk/SpA", setup.offence.label())),
+            Span::raw("  "),
+            key("D"),
+            value(format!("{hp_evs} HP · {defence_evs} Def/SpD")),
+        ]),
+        Line::from(vec![
+            key("L"),
+            label(s.calc_level),
+            value(setup.level.to_string()),
+            Span::raw("  "),
+            key("+ -"),
+            label(s.damage_stage),
+            value(format!("{:+}", setup.stage)),
+            Span::raw("  "),
+            key("C"),
+            label(s.damage_crit),
+            value(if setup.critical { "●" } else { "○" }.to_string()),
+        ]),
+        Line::from(vec![
+            key("I"),
+            label(s.damage_item),
+            value(setup.item.label().to_string()),
+            Span::raw("  "),
+            key("W"),
+            label(s.damage_weather),
+            value(weather.to_string()),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled(
+            format!(
+                "  {:<name_w$} {:<10} {:<5}{:>5}  {:<DAMAGE_RANGE_W$}",
+                s.col_move, s.col_type, s.col_category, s.col_power, s.col_damage
+            ),
+            Style::default().fg(theme::overlay()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(header), layout[0]);
+
+    if absent {
+        frame.render_widget(Paragraph::new(absent_line(s, "  ")), layout[1]);
+    } else if rows.is_empty() {
+        render_centered_text(frame, layout[1], s.moves_empty, theme::overlay());
+    } else {
+        let window = layout[1].height as usize;
+        let first = app
+            .damage_cursor
+            .saturating_sub(window / 2)
+            .min(rows.len().saturating_sub(window));
+        let code = app.language.flavor_code();
+        let lines: Vec<Line> = rows
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(window)
+            .map(|(idx, row)| {
+                let selected = idx == app.damage_cursor;
+                let name = match row.info {
+                    Some(info) => info.name_for(code),
+                    None => title_case(&row.learned.name),
+                };
+                let name_style = if selected {
+                    color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::text())
+                };
+                let mut spans = vec![
+                    Span::styled(
+                        if selected { "▶ " } else { "  " },
+                        Style::default().fg(theme::mauve()),
+                    ),
+                    Span::styled(format!("{:<name_w$} ", truncate(&name, name_w)), name_style),
+                ];
+                let Some(info) = row.info else {
+                    // Its record is still on the way; the name is what the
+                    // species record already answered for.
+                    spans.push(Span::styled("…", Style::default().fg(theme::overlay())));
+                    return Line::from(spans);
+                };
+                spans.push(Span::styled(
+                    format!(
+                        "{:<10} ",
+                        app.language.type_name(&info.type_name).to_uppercase()
+                    ),
+                    Style::default().fg(theme::type_color(&info.type_name)),
+                ));
+                spans.push(Span::styled(
+                    format!(
+                        "{:<5}{:>5}  ",
+                        damage_class_label(s, &info.damage_class),
+                        info.power
+                            .map_or_else(|| "—".to_string(), |p| p.to_string())
+                    ),
+                    Style::default().fg(theme::subtext()),
+                ));
+                let (range, ko, colour) = damage_cells(s, row.outcome);
+                spans.push(Span::styled(
+                    format!("{range:<DAMAGE_RANGE_W$}"),
+                    Style::default().fg(colour),
+                ));
+                spans.push(Span::styled(
+                    format!("{ko:>DAMAGE_KO_W$}"),
+                    Style::default().fg(colour).add_modifier(Modifier::BOLD),
+                ));
+                Line::from(spans)
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), layout[1]);
+
+        // The highlighted hit in hit points, which the percentages above
+        // leave out: what is left after it is the next thing anyone asks.
+        if let Some(Some(Hit::Damage(damage))) = rows.get(app.damage_cursor).map(|row| row.outcome)
+        {
+            let detail = format!(
+                " {}–{} / {} HP · {}",
+                damage.min,
+                damage.max,
+                damage.hp,
+                typechart::multiplier_label(damage.effectiveness)
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    detail,
+                    Style::default().fg(theme::lavender()),
+                ))),
+                layout[2],
+            );
+        }
+    }
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.damage_hint,
+        Style::default().fg(theme::overlay()),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, layout[3]);
+}
+
+/// The damage and knock-out cells of one row, and the colour they share:
+/// green for a hit that knocks out in one, dimmed for one that does nothing.
+fn damage_cells(s: &Strings, outcome: Option<Hit>) -> (String, String, Color) {
+    match outcome {
+        Some(Hit::Damage(damage)) => {
+            let (low, high) = damage.permille();
+            let range = format!("{}.{}–{}.{}%", low / 10, low % 10, high / 10, high % 10);
+            // With the highest roll every time, and with the lowest. One
+            // number when the rolls cannot change it, a span when they can.
+            let ko = match damage.hits_to_ko() {
+                (1, 1) => "OHKO".to_string(),
+                (best, worst) if best == worst => format!("{best}HKO"),
+                (best, worst) => format!("{best}–{worst}HKO"),
+            };
+            let colour = match damage.hits_to_ko() {
+                (1, 1) => theme::green(),
+                (1, _) => theme::yellow(),
+                _ => theme::text(),
+            };
+            (range, ko, colour)
+        }
+        Some(Hit::Immune) => (s.damage_immune.to_string(), String::new(), theme::overlay()),
+        Some(Hit::Varies) => (s.damage_varies.to_string(), String::new(), theme::overlay()),
+        Some(Hit::Status) | None => ("—".to_string(), String::new(), theme::overlay()),
+    }
+}
+
 const SUGGEST_CARD_W: u16 = 64;
 /// Width of the name column on the suggestions card.
 const SUGGEST_NAME_W: usize = 16;
@@ -4145,6 +4416,80 @@ mod tests {
         app.suggest_card = true;
         let frame = screen(&mut app, 120, 40);
         assert!(frame.contains(s.suggest_none), "{frame}");
+    }
+
+    #[test]
+    fn the_damage_card_gives_a_range_and_a_knock_out_for_each_move() {
+        let mut app = crate::app::tests::garchomp_attacking();
+        app.pin = Some("gengar".to_string());
+        app.damage_card = true;
+        let rows = frame_rows(&mut app, 120, 40);
+        let row = |needle: &str| {
+            rows.iter()
+                .find(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("no row with {needle:?}:\n{}", rows.join("\n")))
+                .clone()
+        };
+        // 258–306 of 135 HP, worked through in `damage`'s own tests.
+        let earthquake = row("▶ Earthquake");
+        assert!(earthquake.contains("191.1–226.6%"), "{earthquake}");
+        assert!(earthquake.contains("OHKO"), "{earthquake}");
+        assert!(row("258–306 / 135 HP").contains("×2"));
+        assert!(row("Tackle").contains("immune"));
+    }
+
+    #[test]
+    fn the_damage_card_says_what_it_is_waiting_for_without_a_pin() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = crate::app::tests::garchomp_attacking();
+            app.language = language;
+            app.damage_card = true;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(s.damage_needs_pin),
+                "{language:?} cuts it:\n{frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_damage_card_fits_its_settings_and_hint_in_every_language() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = crate::app::tests::garchomp_attacking();
+            app.language = language;
+            app.pin = Some("gengar".to_string());
+            app.damage_card = true;
+            // The widest each setting gets.
+            app.damage.cycle_weather();
+            app.damage.cycle_weather();
+            app.damage.cycle_weather();
+            app.damage.cycle_item();
+            app.damage.cycle_bulk();
+            app.damage.cycle_bulk();
+            app.damage.cycle_offence();
+            let frame = screen(&mut app, 120, 40);
+            for text in [
+                s.damage_hint,
+                s.weather_sand,
+                s.damage_crit,
+                s.col_damage,
+                "Life Orb",
+                "252 HP · 252+ Def/SpD",
+                "252+ Atk/SpA",
+            ] {
+                assert!(
+                    frame.contains(text),
+                    "{language:?} lacks {text:?}:\n{frame}"
+                );
+            }
+
+            app.damage_card = false;
+            app.help_card = true;
+            let frame = screen(&mut app, 120, 46);
+            assert!(frame.contains(s.help_card.act_damage), "{language:?}");
+        }
     }
 
     #[test]
