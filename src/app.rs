@@ -38,6 +38,7 @@ use crate::quiz::{self, Quiz};
 use crate::session::{self, Session};
 use crate::showdown;
 use crate::statcalc::{self, Calculator};
+use crate::suggest::{self, Suggestion};
 use crate::team;
 use crate::theme::{self, Theme};
 use crate::typechart::Generation;
@@ -48,6 +49,10 @@ use crate::typechart::Generation;
 const MOVE_BAND: usize = 36;
 /// How much of [`MOVE_BAND`] sits above the cursor rather than below it.
 const MOVE_LOOKBEHIND: usize = 4;
+
+/// How many suggestions the party card's suggestions card lists. Enough to
+/// choose between, few enough that the reasons under them still fit.
+const SUGGESTION_LIMIT: usize = 8;
 
 /// How often the loading spinner advances, while there is one to advance.
 const SPINNER_TICK: Duration = Duration::from_millis(120);
@@ -177,6 +182,10 @@ pub struct App {
     /// Whether the team card is open, and which member it highlights.
     pub team_card: bool,
     pub team_cursor: usize,
+    /// Whether the suggestions card is open over the party card, and which
+    /// suggestion it highlights.
+    pub suggest_card: bool,
+    pub suggest_cursor: usize,
     /// Whether the stat calculator is open over the species on display.
     pub stat_card: bool,
     /// The spread the calculator holds. Outlives the card and the species,
@@ -332,6 +341,8 @@ impl App {
             team_loading: HashSet::new(),
             team_card: false,
             team_cursor: 0,
+            suggest_card: false,
+            suggest_cursor: 0,
             stat_card: false,
             calculator: Calculator::default(),
             team_copied: false,
@@ -1059,6 +1070,7 @@ impl App {
             || self.lookup_card
             || self.encounter_card
             || self.team_card
+            || self.suggest_card
             || self.collection_card
             || self.stat_card
             || self.forms_card
@@ -1221,6 +1233,11 @@ impl App {
             self.handle_encounter_key(key);
             return;
         }
+        // Before the party card it opens over, which stays open behind it.
+        if self.suggest_card {
+            self.handle_suggest_key(key);
+            return;
+        }
         if self.team_card {
             self.handle_team_key(key);
             return;
@@ -1342,8 +1359,81 @@ impl App {
             }
             KeyCode::Char('c') | KeyCode::Char('C') => self.pin_or_compare_member(),
             KeyCode::Char('e') | KeyCode::Char('E') => self.copy_team(),
+            KeyCode::Char('s') | KeyCode::Char('S') => self.open_suggestions(),
             code => self.step_generation(code),
         }
+    }
+
+    /// Opens the suggestions card over the party card. An empty party has
+    /// nothing to improve, and the party card already says how to start one.
+    fn open_suggestions(&mut self) {
+        if self.team.is_empty() {
+            return;
+        }
+        self.suggest_cursor = 0;
+        self.suggest_card = true;
+    }
+
+    /// Who would improve the party, out of the list as currently filtered.
+    ///
+    /// The pool is the filtered list for the reason the quiz and `R` read
+    /// it: `gen:1` makes it a Kanto party, and `bst<550` keeps the
+    /// legendaries out of an answer that would otherwise be mostly them.
+    ///
+    /// Worked out when asked rather than kept: it is a pass over the built-in
+    /// table, and the party, the generation and the filter can each change
+    /// under it.
+    pub fn suggestions(&self) -> Vec<Suggestion> {
+        let pool = self
+            .browser
+            .filtered
+            .iter()
+            .filter_map(|&idx| self.browser.all.get(idx));
+        suggest::suggest(
+            &self.team_details(),
+            self.generation,
+            pool,
+            SUGGESTION_LIMIT,
+        )
+    }
+
+    fn handle_suggest_key(&mut self, key: KeyEvent) {
+        let len = self.suggestions().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('s' | 'S' | 'q' | 'Q') => self.suggest_card = false,
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                self.suggest_cursor = (self.suggest_cursor + len - 1) % len;
+            }
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                self.suggest_cursor = (self.suggest_cursor + 1) % len;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.add_suggestion(),
+            code => {
+                self.step_generation(code);
+                // Another generation is another list, and a cursor left
+                // where it was would point at whoever happens to be there.
+                self.suggest_cursor = 0;
+            }
+        }
+    }
+
+    /// Adds the highlighted suggestion to the party. The card stays open on
+    /// the list worked out again for the party as it now is, since filling
+    /// several slots one after another is what it is opened for.
+    fn add_suggestion(&mut self) {
+        if self.team.len() >= team::MAX_MEMBERS {
+            return; // party is full; drop someone first
+        }
+        let Some(name) = self
+            .suggestions()
+            .get(self.suggest_cursor)
+            .map(|suggestion| suggestion.name.clone())
+        else {
+            return;
+        };
+        self.team.push(name.clone());
+        self.request_team_member(name);
+        self.suggest_cursor = 0;
     }
 
     /// `g` moves the type rules on a generation and `G` back one, wrapping at
@@ -2840,7 +2930,7 @@ mod tests {
         // The two lists are kept by hand, and a card missing from
         // `card_open` would take keys while clicks went to the list behind.
         type Flag = fn(&mut App) -> &mut bool;
-        let flags: [Flag; 14] = [
+        let flags: [Flag; 15] = [
             |app| &mut app.language_picker,
             |app| &mut app.quiz_card,
             |app| &mut app.help_card,
@@ -2849,6 +2939,7 @@ mod tests {
             |app| &mut app.lookup_card,
             |app| &mut app.encounter_card,
             |app| &mut app.team_card,
+            |app| &mut app.suggest_card,
             |app| &mut app.collection_card,
             |app| &mut app.stat_card,
             |app| &mut app.forms_card,
@@ -2889,6 +2980,83 @@ mod tests {
         back.restore(stored);
         assert!(back.mouse, "until --mouse says otherwise");
         assert!(!back.snapshot().no_mouse);
+    }
+
+    /// A party of two Dragons over a list holding a Steel type that answers
+    /// what they share, everything loaded so adding fetches nothing.
+    fn two_dragons() -> App {
+        let mut app = app_listing(&[
+            (149, "dragonite"),
+            (445, "garchomp"),
+            (376, "metagross"),
+            (373, "salamence"),
+        ]);
+        app.color_depth = Depth::None;
+        app.recompute_filter();
+        for (name, dex, types) in [
+            ("dragonite", 149, ["dragon", "flying"]),
+            ("garchomp", 445, ["dragon", "ground"]),
+            ("metagross", 376, ["steel", "psychic"]),
+        ] {
+            let detail = PokemonDetail {
+                dex_number: dex,
+                types: types.iter().map(|t| t.to_string()).collect(),
+                ..loaded(name)
+            };
+            app.details.insert(name.to_string(), detail);
+        }
+        app.team = vec!["dragonite".to_string(), "garchomp".to_string()];
+        app
+    }
+
+    #[test]
+    fn the_party_card_suggests_and_enter_adds_the_suggestion() {
+        let mut app = two_dragons();
+        app.open_team_card();
+        app.handle_key(press(KeyCode::Char('s')));
+        assert!(app.suggest_card);
+        assert_eq!(app.suggestions()[0].name, "metagross");
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.team, ["dragonite", "garchomp", "metagross"]);
+        assert!(app.suggest_card, "it stays open for the next slot");
+        assert!(
+            !app.suggestions().iter().any(|s| s.name == "metagross"),
+            "and no longer suggests who was just added"
+        );
+
+        // Esc goes back to the party card rather than out of both.
+        app.handle_key(press(KeyCode::Esc));
+        assert!(!app.suggest_card);
+        assert!(app.team_card);
+    }
+
+    #[test]
+    fn suggestions_come_from_the_list_as_it_is_filtered() {
+        let mut app = two_dragons();
+        app.browser.query = "salamence".to_string();
+        app.recompute_filter();
+        assert!(app.suggestions().is_empty(), "metagross is filtered out");
+    }
+
+    #[test]
+    fn a_full_party_is_not_added_to() {
+        let mut app = two_dragons();
+        app.team = ["dragonite", "garchomp", "a", "b", "c", "d"]
+            .map(String::from)
+            .to_vec();
+        app.suggest_card = true;
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.team.len(), team::MAX_MEMBERS);
+    }
+
+    #[test]
+    fn an_empty_party_opens_no_suggestions() {
+        let mut app = two_dragons();
+        app.team.clear();
+        app.open_team_card();
+        app.handle_key(press(KeyCode::Char('s')));
+        assert!(!app.suggest_card);
     }
 
     #[test]

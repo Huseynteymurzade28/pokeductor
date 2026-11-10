@@ -532,6 +532,37 @@ The party is picked up where it was left: it is written out on exit and
 restored on the next run, along with the language, the palette and the sort
 order. See [Session state](#session-state).
 
+#### Who to add
+
+The card says what is wrong with a team; `S` on it answers who would fix that.
+It opens a second card over the first with the best few candidates and, for
+the one under the cursor, the reasons it is there:
+
+| Reason | What it means |
+|---|---|
+| **Resists** | The party's problem types it resists or is immune to: ones a member is weak to, or that nobody resists. |
+| **Hits hard** | Types nobody in the party hits super-effectively that it does, with a same-type move. |
+| **Shares a weakness** | Types it is weak to that a member already is. Counted against it. |
+
+`Enter` adds the highlighted one, and the card stays open on a list worked out
+again for the party as it now is, so several slots can be filled one after
+another. `Esc` goes back to the party card.
+
+The candidates are the list as it is currently filtered, for the reason `R`
+and the quiz read it: `gen:1` suggests for a Kanto party, and `bst<550` keeps
+the legendaries out of an answer that would otherwise be mostly them. Each
+typing is suggested once, as its strongest species, since everything the card
+says is said of a typing: Pawniard, Bisharp and Kingambit would be one answer
+given three times.
+
+A suggestion is about typing and nothing else. It does not know what a species
+learns, which ability it would run or whether it is any good, and the score
+beside each name only orders the list. It is worked out from the type chart
+and a table built into the binary, so nothing is fetched and it works offline.
+That table holds each species' current typing, so alternate forms are left
+out, and under an [older generation](#older-games) so is any species typed
+with something that generation's chart lacks.
+
 `E` on the party card copies it as a [Pokémon Showdown](https://pokemonshowdown.com/)
 team, ready to paste into Showdown's teambuilder or any damage calculator, and
 [`--import-party`](#showdown-teams) brings a team from there back in. The copy
@@ -620,8 +651,13 @@ no refetch:
 | | `F` · `Esc` | Close |
 | **Party card** | `↑` `↓` · `j` `k` | Move between members |
 | | `C` | Pin the member / compare two |
+| | `S` | Suggest who to add |
 | | `E` | Copy the party as a Showdown team |
 | | `P` · `Esc` | Close |
+| **Suggestions card** | `↑` `↓` · `j` `k` | Move between suggestions |
+| | `Enter` · `Space` | Add to the party |
+| | `g` · `G` | Type rules of the next / previous generation |
+| | `S` · `Esc` | Back to the party card |
 | **Collection card** | `↑` `↓` · `j` `k` | Move between generations |
 | | `Enter` | List what is missing from the generation |
 | | `Z` · `Esc` | Close |
@@ -934,7 +970,8 @@ through to disk.
 | `query.rs` | Search-box syntax (`dex:`, `type:`, `gen:`, `spe>=110`) parsing. |
 | `lookup.rs` | The ability and item lookup card's matching, ranking and cursor. |
 | `quiz.rs` | The quiz's rules: which names an answer is held to, and the streak. |
-| `base_stats.rs` | Every entry's base stats, built in from a table `scripts/base-stats.py` generates. |
+| `base_stats.rs` | Every entry's base stats and types, built in from a table `scripts/base-stats.py` generates. |
+| `suggest.rs` | Who would improve a party: candidates scored against its weaknesses and gaps, from the built-in tables. |
 | `mouse.rs` | What the last frame drew where, so a click can be told what it landed on. |
 | `browser.rs` | The sidebar's state: master list, filter, ordering and cursor — no client, no tasks. |
 | `app.rs` | State machine and `tokio::select!` event loop (input · messages · animation tick). |

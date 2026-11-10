@@ -16,6 +16,7 @@
 //! - `session`: party and preferences carried over from the previous run.
 //! - `showdown`: the party in Pokemon Showdown's team format, both ways.
 //! - `statcalc`: final stats from level, nature, IVs and EVs.
+//! - `suggest` : who would improve a party, from the built-in tables.
 //! - `typechart`: offline type-effectiveness chart.
 //! - `team`    : team-level type analysis built on top of it.
 //! - `app`     : state machine + `tokio::select!` event loop.
@@ -41,6 +42,7 @@ mod retry;
 mod session;
 mod showdown;
 mod statcalc;
+mod suggest;
 mod team;
 mod theme;
 mod typechart;

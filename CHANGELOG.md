@@ -29,6 +29,11 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   open card closes it, and the wheel over a card is `↑` and `↓`. `--no-mouse`
   leaves the mouse to the terminal for selecting text and is remembered until
   `--mouse`. (#56)
+- Party suggestions. `S` on the party card lists who in the filtered list
+  would improve the team most, with the reasons: the problem types each
+  resists, the types it hits that nobody does, and the weaknesses it would
+  share. `Enter` adds one. Worked out offline from the type chart and the
+  built-in table, which now carries every entry's types.
 
 ### Changed
 

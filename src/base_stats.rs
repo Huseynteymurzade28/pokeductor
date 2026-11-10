@@ -1,9 +1,10 @@
-//! Every entry's base stats, built into the binary.
+//! Every entry's base stats and types, built into the binary.
 //!
-//! The master list carries names and ids and nothing else; base stats live on
-//! `/pokemon/{name}`, one request per entry. That is fine for the info panel,
-//! which shows one species, and hopeless for a search term or a sort order,
-//! which has to know all thirteen hundred at once. So the table is generated
+//! The master list carries names and ids and nothing else; base stats and
+//! types live on `/pokemon/{name}`, one request per entry. That is fine for
+//! the info panel, which shows one species, and hopeless for a search term, a
+//! sort order or a party suggestion, which has to know all thirteen hundred
+//! at once. So the table is generated
 //! ahead of time from PokeAPI's own CSV data by `scripts/base-stats.py` and
 //! compiled in, the same way the type chart is: instant, offline, and the same
 //! answer whatever happens to be cached.
@@ -16,7 +17,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// The generated table: a `#` comment header, then one tab-separated row per
-/// entry, `name hp atk def spa spd spe`.
+/// entry, `name hp atk def spa spd spe type1 type2`, with `-` for the second
+/// type of an entry that has one.
 const TABLE: &str = include_str!("base_stats.tsv");
 
 /// One of the six base stats, or their total — anything a stat term or a stat
@@ -69,15 +71,48 @@ impl BaseStats {
     }
 }
 
+/// An entry's typing as the newest games have it: one type or two.
+///
+/// Only the current typing. What Clefairy was before Fairy existed is on its
+/// `/pokemon` record and nowhere cheaper, so anything reading this for an
+/// older generation has to leave out what it cannot vouch for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Typing {
+    pub first: &'static str,
+    pub second: Option<&'static str>,
+}
+
+impl Typing {
+    pub fn iter(self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.first).chain(self.second)
+    }
+}
+
+/// One row of the table.
+#[derive(Debug, Clone, Copy)]
+struct Row {
+    stats: BaseStats,
+    typing: Typing,
+}
+
+fn table() -> &'static HashMap<&'static str, Row> {
+    static PARSED: OnceLock<HashMap<&'static str, Row>> = OnceLock::new();
+    PARSED.get_or_init(|| parse(TABLE))
+}
+
 /// The base stats of the entry PokeAPI calls `name`, alternate forms included.
 pub fn lookup(name: &str) -> Option<BaseStats> {
-    static PARSED: OnceLock<HashMap<&'static str, BaseStats>> = OnceLock::new();
-    PARSED.get_or_init(|| parse(TABLE)).get(name).copied()
+    table().get(name).map(|row| row.stats)
+}
+
+/// The current typing of the entry PokeAPI calls `name`.
+pub fn typing(name: &str) -> Option<Typing> {
+    table().get(name).map(|row| row.typing)
 }
 
 /// Reads the table. A malformed row is skipped rather than fatal; the test
 /// below holds the table to having none.
-fn parse(table: &'static str) -> HashMap<&'static str, BaseStats> {
+fn parse(table: &'static str) -> HashMap<&'static str, Row> {
     table
         .lines()
         .filter(|line| !line.starts_with('#') && !line.is_empty())
@@ -85,14 +120,25 @@ fn parse(table: &'static str) -> HashMap<&'static str, BaseStats> {
         .collect()
 }
 
-fn parse_row(line: &'static str) -> Option<(&'static str, BaseStats)> {
+fn parse_row(line: &'static str) -> Option<(&'static str, Row)> {
     let mut fields = line.split('\t');
     let name = fields.next()?;
     let mut stats = [0u8; 6];
     for stat in &mut stats {
         *stat = fields.next()?.parse().ok()?;
     }
-    fields.next().is_none().then_some((name, BaseStats(stats)))
+    let first = fields
+        .next()
+        .filter(|slug| !slug.is_empty() && *slug != "-")?;
+    let second = match fields.next()? {
+        "-" => None,
+        slug => Some(slug),
+    };
+    let row = Row {
+        stats: BaseStats(stats),
+        typing: Typing { first, second },
+    };
+    fields.next().is_none().then_some((name, row))
 }
 
 #[cfg(test)]
@@ -147,6 +193,29 @@ mod tests {
         let kanto = lookup("raichu").unwrap();
         assert_eq!(alola.get(StatKey::SpecialAttack), 95);
         assert_eq!(kanto.get(StatKey::SpecialAttack), 90);
+    }
+
+    #[test]
+    fn known_species_read_back_their_types() {
+        let typing = |name: &str| typing(name).unwrap().iter().collect::<Vec<_>>();
+        assert_eq!(typing("pikachu"), ["electric"]);
+        assert_eq!(typing("gengar"), ["ghost", "poison"]);
+        assert_eq!(typing("raichu-alola"), ["electric", "psychic"]);
+        assert_eq!(super::typing("missingno"), None);
+    }
+
+    #[test]
+    fn every_type_in_the_table_is_one_the_chart_knows() {
+        // A slug the chart has never heard of reads as neutral to everything,
+        // which a suggestion would then score as a typing with no weaknesses.
+        for (name, row) in table() {
+            for slug in row.typing.iter() {
+                assert!(
+                    crate::typechart::TYPES.contains(&slug),
+                    "{name} has the type {slug:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -73,6 +73,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.team_card {
         render_team(frame, app, &strings, area);
     }
+    // After the party card, which it opens over and goes back to.
+    if app.suggest_card {
+        render_suggestions(frame, app, &strings, area);
+    }
     if app.collection_card {
         render_collection(frame, app, &strings, area);
     }
@@ -1424,7 +1428,7 @@ fn put_cell(frame: &mut Frame, x: u16, y: u16, symbol: &str, color: Color) {
 /// Preferred width of the matchup card, clamped to the terminal.
 const MATCHUP_CARD_W: u16 = 48;
 /// The team card carries names *and* chips, so it needs a little more room.
-const TEAM_CARD_W: u16 = 56;
+const TEAM_CARD_W: u16 = 70;
 /// The ability card holds wrapped prose, so it is wider still.
 const ABILITY_CARD_W: u16 = 60;
 /// The moves card is the widest of them: seven columns, and a description
@@ -1726,6 +1730,7 @@ fn render_help(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
         ("", h.ctx_party),
         ("↑ ↓ · j k", h.act_move),
         ("C", h.act_compare),
+        ("S", h.act_suggest),
         ("E", h.act_copy_team),
         ("", ""),
         ("", h.ctx_forms),
@@ -2934,6 +2939,101 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(hint, rows[1]);
 }
 
+const SUGGEST_CARD_W: u16 = 64;
+/// Width of the name column on the suggestions card.
+const SUGGEST_NAME_W: usize = 16;
+
+/// Who would improve the party: the best few out of the filtered list, and
+/// for the one under the cursor the reasons it is there.
+///
+/// The reasons are the part to read. The score only orders the list, and is
+/// shown so that two entries a long way apart do not look like equals.
+fn render_suggestions(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let width = SUGGEST_CARD_W.min(full.width);
+    let text_w = width.saturating_sub(2) as usize;
+    if text_w < 30 || full.height < 10 {
+        return; // too cramped to be readable; leave the party card alone
+    }
+
+    let suggestions = app.suggestions();
+    let mut lines: Vec<Line> = Vec::new();
+
+    if suggestions.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!(" {}", s.suggest_none),
+            Style::default().fg(theme::overlay()),
+        )));
+        lines.push(Line::raw(""));
+    }
+
+    for (i, suggestion) in suggestions.iter().enumerate() {
+        let selected = i == app.suggest_cursor;
+        let name_style = if selected {
+            color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::text())
+        };
+        let name = truncate(&title_case(&suggestion.name), SUGGEST_NAME_W);
+        let mut row = vec![
+            Span::styled(
+                if selected { "▶ " } else { "  " },
+                Style::default().fg(theme::mauve()),
+            ),
+            Span::styled(format!("{name:<SUGGEST_NAME_W$} "), name_style),
+            Span::styled(
+                format!("{:>+4}  ", suggestion.score),
+                Style::default().fg(theme::green()),
+            ),
+        ];
+        let types: Vec<String> = suggestion.types.iter().map(|t| t.to_string()).collect();
+        row.extend(type_chips(&types, app.language));
+        lines.push(Line::from(row));
+    }
+
+    if let Some(suggestion) = suggestions.get(app.suggest_cursor) {
+        for (heading, types) in [
+            (s.suggest_covers, &suggestion.covers),
+            (s.suggest_hits, &suggestion.hits),
+            (s.suggest_shares, &suggestion.shares),
+        ] {
+            if types.is_empty() {
+                continue;
+            }
+            lines.push(Line::raw(""));
+            lines.push(section_heading(heading));
+            lines.extend(chip_rows("", types, app.language, text_w));
+        }
+    }
+
+    let height = (lines.len() as u16 + 3).min(full.height);
+    let area = card_area(app, width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            generation_title(s.suggest_title, s, app.generation),
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::surface()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = match app.team.len() >= team::MAX_MEMBERS {
+        true => Span::styled(s.suggest_full, Style::default().fg(theme::peach())),
+        false => Span::styled(s.suggest_hint, Style::default().fg(theme::overlay())),
+    };
+    let hint = Paragraph::new(Line::from(hint)).alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
 const COLLECTION_CARD_W: u16 = 60;
 /// Width of the label column on the collection card: the widest generation
 /// tag, a space and `VIII`, with a column to spare.
@@ -3994,6 +4094,57 @@ mod tests {
         assert!(!bold_at("Haunter"), "anything else is not");
         let frame = text.join("\n");
         assert!(frame.contains("★1"), "and the title counts them:\n{frame}");
+    }
+
+    #[test]
+    fn the_suggestions_card_names_who_and_why_in_every_language() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = app_listing(&[(94, "gengar"), (376, "metagross"), (143, "snorlax")]);
+            app.color_depth = Depth::None;
+            app.language = language;
+            app.browser.recompute();
+            app.details.insert("gengar".to_string(), gengar());
+            app.team = vec!["gengar".to_string()];
+            app.team_card = true;
+            app.suggest_card = true;
+
+            let frame = screen(&mut app, 120, 40);
+            let first = app.suggestions().first().cloned().expect("a suggestion");
+            assert!(frame.contains(&title_case(&first.name)), "{frame}");
+            assert!(
+                frame.contains(s.suggest_covers),
+                "{language:?} gives no reason:\n{frame}"
+            );
+            assert!(
+                frame.contains(s.suggest_hint),
+                "{language:?} cuts the hint:\n{frame}"
+            );
+
+            // And the party card behind it names the key that opened this.
+            app.suggest_card = false;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(s.team_close_hint),
+                "{language:?} cuts the party hint:\n{frame}"
+            );
+            app.team_card = false;
+            app.help_card = true;
+            let frame = screen(&mut app, 120, 46);
+            assert!(frame.contains(s.help_card.act_suggest), "{language:?}");
+        }
+    }
+
+    #[test]
+    fn the_suggestions_card_says_so_when_the_list_has_nobody_to_offer() {
+        let s = Language::English.strings();
+        let mut app = showing_gengar();
+        app.team = vec!["gengar".to_string()];
+        app.browser.query = "gengar".to_string();
+        app.browser.recompute();
+        app.suggest_card = true;
+        let frame = screen(&mut app, 120, 40);
+        assert!(frame.contains(s.suggest_none), "{frame}");
     }
 
     #[test]
