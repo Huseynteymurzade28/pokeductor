@@ -184,6 +184,8 @@ you, and `missing: type:dragon` the Dragons you have yet to find. Under either
 filter `O` takes the entry out of the list and leaves the cursor on the next
 one, so `missing:` works as a checklist to run down.
 
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-collection.png" alt="The collection card over a list of ticked Johto species: a progress bar per generation, Generation I complete in green, and the whole Pokédex at 24%" width="900">
+
 `Z` opens the collection card: one bar per generation, with the count and the
 percentage, and the whole Pokédex under them. A finished generation turns
 green. `Enter` on a row closes the card on `gen:N missing:`, or on
@@ -359,20 +361,7 @@ what that comes to. Pin the target with `C`, move to the attacker and press
 hardest hit first, each with the range it takes off as a percentage of the
 target's HP and how many hits a knock-out needs.
 
-```
- Garchomp  Dragon   Ground   ▶  Gengar  Ghost   Poison
- [A] 252 Atk/SpA   [D] 0 HP · 0 Def/SpD
- [L] Level 50   [+ -] Boost +0   [C] Critical hit ○
- [I] Item —   [W] Weather —
-
-  Move                Type       Cat.   Pow  Damage
-▶ Earthquake          GROUND     Phys   100  191.1–226.6%       OHKO
-  Outrage             DRAGON     Phys   120  114.0–135.5%       OHKO
-  Dragon Rush         DRAGON     Phys   100  95.5–113.3%      1–2HKO
-  Dragon Claw         DRAGON     Phys    80  76.2–91.1%         2HKO
-
- 258–306 / 135 HP · ×2
-```
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-damage.png" alt="The damage card for Garchomp attacking Gengar: Earthquake first at 191.1 to 226.6 percent and a one-hit knock-out, the rest of the learnset below it in falling order of damage" width="900">
 
 `1–2HKO` is a knock-out the roll decides: one hit at the top of the range, two
 at the bottom. The line under the list gives the highlighted hit in hit points.
@@ -596,8 +585,10 @@ order. See [Session state](#session-state).
 #### Who to add
 
 The card says what is wrong with a team; `S` on it answers who would fix that.
-It opens a second card over the first with the best few candidates and, for
+It opens a second card in its place with the best few candidates and, for
 the one under the cursor, the reasons it is there:
+
+<img src="https://raw.githubusercontent.com/Huseynteymurzade28/pokeductor/main/assets/ui-suggest.png" alt="Suggestions for a party of Rotom, Charizard, Gyarados and Snorlax: Tinkaton first, with the types it resists, the types it hits hard and the Ground weakness it would share" width="900">
 
 | Reason | What it means |
 |---|---|
@@ -1329,6 +1320,11 @@ manifest changes.
 Everything under `typechart.rs`, `team.rs`, `query.rs` and `models.rs` is pure
 and unit-tested; new logic belongs there rather than in `app.rs` or `ui.rs`
 wherever it can be expressed without a terminal or a network.
+
+The screenshots under `assets/` are taken by `scripts/screenshot.py`, which
+runs the release binary in a detached tmux session, sends it keys and has
+headless Chromium photograph the captured pane, so a shot can be retaken
+after a change without a terminal set up to match. Its header has the usage.
 
 ### Releasing
 
