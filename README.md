@@ -172,6 +172,28 @@ with every other term: `fav: type:ghost` is your favourite Ghost types. Unlike
 `type:`, it needs nothing fetched. Favourites are kept between runs with the
 party.
 
+### Collection
+
+`O` marks the highlighted entry as caught, and `O` again unmarks it. A caught
+entry carries a `✓` between its number and its name, a glyph rather than a
+colour so it survives the Game Boy palette and `--color never`.
+
+`caught:` narrows the list to what is marked and `missing:` to what is not, and
+both combine with every other term: `missing: gen:1` is what Kanto still owes
+you, and `missing: type:dragon` the Dragons you have yet to find. Under either
+filter `O` takes the entry out of the list and leaves the cursor on the next
+one, so `missing:` works as a checklist to run down.
+
+`Z` opens the collection card: one bar per generation, with the count and the
+percentage, and the whole Pokédex under them. A finished generation turns
+green. `Enter` on a row closes the card on `gen:N missing:`, or on
+`gen:N caught:` for a generation with nothing left in it.
+
+The bars count species. An alternate form can be marked like any other entry,
+but it belongs to no generation and a dex is complete without its Megas. Marks
+are written to the session file as they are made rather than on the way out,
+so closing the terminal on a running Pokeductor does not lose them.
+
 ### Species details and abilities
 
 The info panel carries the dex number, genus, typing, abilities, physical
@@ -555,6 +577,8 @@ no refetch:
 | | `R` | Load a random species from the current filter |
 | | `Space` | Add / remove from the party |
 | | `B` | Mark / unmark as a favourite |
+| | `O` | Mark / unmark as caught |
+| | `Z` | Collection card |
 | | `P` | Party card |
 | | `S` | Cycle sort: Pokédex order ↔ A–Z |
 | | `L` | Language picker |
@@ -576,6 +600,9 @@ no refetch:
 | | `C` | Pin the member / compare two |
 | | `E` | Copy the party as a Showdown team |
 | | `P` · `Esc` | Close |
+| **Collection card** | `↑` `↓` · `j` `k` | Move between generations |
+| | `Enter` | List what is missing from the generation |
+| | `Z` · `Esc` | Close |
 | **Forms card** | `↑` `↓` · `j` `k` | Move between forms |
 | | `Enter` | Load the highlighted form |
 | | `V` · `Esc` | Close |
@@ -621,6 +648,9 @@ no refetch:
 | `gen:1 gen:2` | either generation |
 | `gen:1 type:ghost ga` | all three at once |
 | `fav:` | the species marked with `B` (`f:` also works) |
+| `caught:` | the entries marked as caught with `O` (`c:` also works) |
+| `missing:` | the entries not marked as caught (`m:` also works) |
+| `missing: gen:1` | what is left to catch in Generation I |
 | `spe>=110` | base Speed of 110 or more (`speed>=110` also works) |
 | `bst>600` | base stat total over 600 (`total>600` also works) |
 | `hp>100 def>100` | both at once |
@@ -837,7 +867,7 @@ $ pokeductor --json-list 'type:ghost gen:1' | jq -c '[.name, .stats.speed]'
 ```
 
 - Every search term works, including `type:` names in any interface language
-  and `fav:`, which reads the favourites from the session file.
+  and `fav:`, `caught:` and `missing:`, which read the session file.
 - A query that matches nothing prints nothing and exits `0`: an empty list is
   an answer. A name PokeAPI has no roster for (`type:plasma`) counts as
   matching nothing. A network failure is an error, exiting `1`, rather than an
@@ -940,14 +970,15 @@ kept apart from it, under `$XDG_STATE_HOME/pokeductor` (falling back to
 `~/.local/state/pokeductor`):
 
 ```
-session.json              party, favourites, language, sort order, palette, shiny toggle, generation, quiz streaks
+session.json              party, favourites, collection, language, sort order, palette, shiny toggle, generation, quiz streaks
 ```
 
-Written once, as the app exits, and read once, before the first frame. A run
-that is killed rather than quit therefore leaves the previous session in place,
-and of two instances quitting in turn the last one wins — both acceptable for a
-convenience that never holds anything the user cannot rebuild in a few
-keystrokes.
+Written as the app exits, and read once, before the first frame. A run that is
+killed rather than quit therefore leaves the previous session in place, and of
+two instances quitting in turn the last one wins — both acceptable for the
+party and the preferences, which can be rebuilt in a few keystrokes. The
+collection cannot, so marking an entry as caught writes the file there and
+then.
 
 The file is version-stamped and pretty-printed, and read back defensively: it
 sits in a directory users are invited to look inside, so a party longer than

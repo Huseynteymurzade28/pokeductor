@@ -607,6 +607,10 @@ pub struct Strings {
     pub compare_tie: &'static str,
     /// Hint at the foot of the comparison card.
     pub compare_hint: &'static str,
+    /// Title of the collection card.
+    pub collection_title: &'static str,
+    /// Hint at the foot of the collection card.
+    pub collection_hint: &'static str,
     /// Wording for the help overlay.
     pub help_card: HelpStrings,
     /// Wording for evolution requirements.
@@ -653,6 +657,10 @@ pub struct HelpStrings {
     pub act_party_toggle: &'static str,
     /// `B`: mark or unmark the highlighted species as a favourite.
     pub act_favourite: &'static str,
+    /// `O`: mark or unmark the highlighted species as caught.
+    pub act_caught: &'static str,
+    /// `Z`: the collection card.
+    pub act_collection: &'static str,
     pub act_party_card: &'static str,
     pub act_sort: &'static str,
     pub act_language: &'static str,
@@ -668,6 +676,9 @@ pub struct HelpStrings {
     pub act_by_generation: &'static str,
     /// `fav:`: only the species marked with `B`.
     pub act_by_favourite: &'static str,
+    /// `caught:` and `missing:`: the species marked with `O`, and the rest.
+    pub act_by_caught: &'static str,
+    pub act_by_missing: &'static str,
     /// `spe>=100`: a comparison on a base stat.
     pub act_by_stat: &'static str,
     pub act_chain_move: &'static str,
@@ -944,6 +955,8 @@ impl Strings {
             compare_best_hit: "Best same-type hit",
             compare_tie: "level",
             compare_hint: "g G Gen · Esc / C to close",
+            collection_title: " Collection ",
+            collection_hint: "↑ ↓ Select · Enter Show missing · Esc / Z Close",
             help_card: HelpStrings {
                 title: " Help ",
                 ctx_list: "List",
@@ -966,6 +979,8 @@ impl Strings {
                 act_random: "Random from the list",
                 act_party_toggle: "Add / remove from party",
                 act_favourite: "Mark / unmark favourite",
+                act_caught: "Mark / unmark caught",
+                act_collection: "Collection progress",
                 act_party_card: "Party",
                 act_sort: "Sort order",
                 act_language: "Language",
@@ -979,6 +994,8 @@ impl Strings {
                 act_by_egg: "Filter by egg group",
                 act_by_generation: "Filter by generation",
                 act_by_favourite: "Only favourites",
+                act_by_caught: "Only caught",
+                act_by_missing: "Not caught yet",
                 act_by_stat: "Filter by base stat",
                 act_chain_move: "Move between stages",
                 act_chain_jump: "Jump to stage",
@@ -1149,6 +1166,8 @@ impl Strings {
             compare_best_hit: "En sert aynı tipten vuruş",
             compare_tie: "eşit",
             compare_hint: "g G Jen. · Kapatmak için Esc / C",
+            collection_title: " Koleksiyon ",
+            collection_hint: "↑ ↓ Seç · Enter Eksikleri göster · Esc / Z Kapat",
             help_card: HelpStrings {
                 title: " Yardım ",
                 ctx_list: "Liste",
@@ -1171,6 +1190,8 @@ impl Strings {
                 act_random: "Listeden rastgele",
                 act_party_toggle: "Takıma ekle / çıkar",
                 act_favourite: "Favorilere ekle / çıkar",
+                act_caught: "Yakalandı işaretle / kaldır",
+                act_collection: "Koleksiyon ilerlemesi",
                 act_party_card: "Takım",
                 act_sort: "Sıralama",
                 act_language: "Dil",
@@ -1184,6 +1205,8 @@ impl Strings {
                 act_by_egg: "Yumurta grubuna göre süz",
                 act_by_generation: "Jenerasyona göre süz",
                 act_by_favourite: "Sadece favoriler",
+                act_by_caught: "Sadece yakalananlar",
+                act_by_missing: "Henüz yakalanmayanlar",
                 act_by_stat: "Temel değere göre süz",
                 act_chain_move: "Aşamalar arasında gez",
                 act_chain_jump: "Aşamaya atla",
@@ -1355,6 +1378,8 @@ impl Strings {
             compare_best_hit: "Bester Treffer eigenen Typs",
             compare_tie: "gleich",
             compare_hint: "g G Gen. · Esc / C zum Schließen",
+            collection_title: " Sammlung ",
+            collection_hint: "↑ ↓ Wählen · Enter Fehlende zeigen · Esc / Z Schließen",
             help_card: HelpStrings {
                 title: " Hilfe ",
                 ctx_list: "Liste",
@@ -1377,6 +1402,8 @@ impl Strings {
                 act_random: "Zufällig aus der Liste",
                 act_party_toggle: "Team hinzu / entfernen",
                 act_favourite: "Favorit an / aus",
+                act_caught: "Gefangen an / aus",
+                act_collection: "Sammlungsfortschritt",
                 act_party_card: "Team",
                 act_sort: "Sortierung",
                 act_language: "Sprache",
@@ -1390,6 +1417,8 @@ impl Strings {
                 act_by_egg: "Nach Ei-Gruppe filtern",
                 act_by_generation: "Nach Generation filtern",
                 act_by_favourite: "Nur Favoriten",
+                act_by_caught: "Nur gefangene",
+                act_by_missing: "Noch nicht gefangen",
                 act_by_stat: "Nach Werten filtern",
                 act_chain_move: "Zwischen Stufen",
                 act_chain_jump: "Zur Stufe springen",
@@ -1561,6 +1590,8 @@ impl Strings {
             compare_best_hit: "Meilleure attaque de même type",
             compare_tie: "égalité",
             compare_hint: "g G Gén. · Esc / C pour fermer",
+            collection_title: " Collection ",
+            collection_hint: "↑ ↓ Choisir · Entrée Voir les manquants · Esc / Z Fermer",
             help_card: HelpStrings {
                 title: " Aide ",
                 ctx_list: "Liste",
@@ -1583,6 +1614,8 @@ impl Strings {
                 act_random: "Au hasard dans la liste",
                 act_party_toggle: "Ajouter / retirer de l'équipe",
                 act_favourite: "Ajouter / retirer des favoris",
+                act_caught: "Marquer / retirer capturé",
+                act_collection: "Progression de la collection",
                 act_party_card: "Équipe",
                 act_sort: "Tri",
                 act_language: "Langue",
@@ -1596,6 +1629,8 @@ impl Strings {
                 act_by_egg: "Filtrer par groupe d'œufs",
                 act_by_generation: "Filtrer par génération",
                 act_by_favourite: "Favoris seulement",
+                act_by_caught: "Capturés seulement",
+                act_by_missing: "Pas encore capturés",
                 act_by_stat: "Filtrer par stat",
                 act_chain_move: "Entre les stades",
                 act_chain_jump: "Aller au stade",
@@ -1766,6 +1801,8 @@ impl Strings {
             compare_best_hit: "Mejor golpe del mismo tipo",
             compare_tie: "empate",
             compare_hint: "g G Gen. · Esc / C para cerrar",
+            collection_title: " Colección ",
+            collection_hint: "↑ ↓ Elegir · Enter Ver los que faltan · Esc / Z Cerrar",
             help_card: HelpStrings {
                 title: " Ayuda ",
                 ctx_list: "Lista",
@@ -1788,6 +1825,8 @@ impl Strings {
                 act_random: "Al azar de la lista",
                 act_party_toggle: "Añadir / quitar del equipo",
                 act_favourite: "Marcar / quitar favorito",
+                act_caught: "Marcar / quitar capturado",
+                act_collection: "Progreso de la colección",
                 act_party_card: "Equipo",
                 act_sort: "Orden",
                 act_language: "Idioma",
@@ -1801,6 +1840,8 @@ impl Strings {
                 act_by_egg: "Filtrar por grupo huevo",
                 act_by_generation: "Filtrar por generación",
                 act_by_favourite: "Solo favoritos",
+                act_by_caught: "Solo capturados",
+                act_by_missing: "Aún sin capturar",
                 act_by_stat: "Por estadística base",
                 act_chain_move: "Entre etapas",
                 act_chain_jump: "Ir a la etapa",
@@ -1971,6 +2012,8 @@ impl Strings {
             compare_best_hit: "Miglior colpo dello stesso tipo",
             compare_tie: "pari",
             compare_hint: "g G Gen. · Esc / C per chiudere",
+            collection_title: " Collezione ",
+            collection_hint: "↑ ↓ Scegli · Invio Mostra i mancanti · Esc / Z Chiudi",
             help_card: HelpStrings {
                 title: " Aiuto ",
                 ctx_list: "Lista",
@@ -1993,6 +2036,8 @@ impl Strings {
                 act_random: "A caso dalla lista",
                 act_party_toggle: "Metti / togli in squadra",
                 act_favourite: "Metti / togli nei preferiti",
+                act_caught: "Segna / togli catturato",
+                act_collection: "Progresso della collezione",
                 act_party_card: "Squadra",
                 act_sort: "Ordinamento",
                 act_language: "Lingua",
@@ -2006,6 +2051,8 @@ impl Strings {
                 act_by_egg: "Filtra per gruppo uova",
                 act_by_generation: "Filtra per generazione",
                 act_by_favourite: "Solo preferiti",
+                act_by_caught: "Solo catturati",
+                act_by_missing: "Non ancora catturati",
                 act_by_stat: "Filtra per stat base",
                 act_chain_move: "Tra gli stadi",
                 act_chain_jump: "Vai allo stadio",

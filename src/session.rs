@@ -3,7 +3,8 @@
 //! Everything in [`crate::cache`] is a second copy of something PokeAPI
 //! already knows: delete it and the next run refills it. What this module
 //! keeps is the opposite — the choices the user made. The party they
-//! assembled, the species they marked as favourites, the language they read the interface in, the palette and the
+//! assembled, the species they marked as favourites or as caught, the
+//! language they read the interface in, the palette and the
 //! ordering they left the sidebar in. Nothing can reconstruct those, and
 //! losing a six-member party to a stray `q` is what makes a tool feel
 //! disposable.
@@ -15,9 +16,10 @@
 //! on the other side of that line.
 //!
 //! Like the cache, the layer is best-effort: a file that cannot be read is a
-//! fresh session, never an error the user sees. It is written once, on the way
-//! out, so a run that is killed rather than quit leaves the previous session
-//! in place, and two instances quitting in turn means the last one wins.
+//! fresh session, never an error the user sees. It is written on the way out,
+//! and whenever a species is marked as caught, so a run that is killed rather
+//! than quit keeps its collection and otherwise leaves the previous session
+//! in place. Two instances writing in turn means the last one wins.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -71,6 +73,11 @@ pub struct Session {
     pub quiz_streak: u32,
     #[serde(default)]
     pub quiz_best: u32,
+    /// Entries marked as caught, as raw API names. Added without a version
+    /// bump, like favourites: a file from before the collection reads as
+    /// having caught nothing.
+    #[serde(default)]
+    pub caught: Vec<String>,
 }
 
 impl Session {
@@ -87,6 +94,7 @@ impl Session {
         dedupe_names(&mut self.team);
         self.team.truncate(team::MAX_MEMBERS);
         dedupe_names(&mut self.favourites);
+        dedupe_names(&mut self.caught);
         self
     }
 }
@@ -121,7 +129,8 @@ pub async fn load() -> Session {
     }
 }
 
-/// Records `session` for the next run. Called once, as the app exits.
+/// Records `session` for the next run. Called as the app exits, and after
+/// each change to the collection.
 pub async fn store(session: &Session) {
     let Some(path) = path() else {
         return;
@@ -200,6 +209,7 @@ mod tests {
             generation: Some(1),
             quiz_streak: 3,
             quiz_best: 12,
+            caught: vec!["bulbasaur".into(), "mew".into()],
         };
         let bytes = encode(&session).expect("encode");
         assert_eq!(decode(&bytes), session);
@@ -231,6 +241,10 @@ mod tests {
             "a file from before favourites"
         );
         assert_eq!(session.generation, None, "a file from before generations");
+        assert!(
+            session.caught.is_empty(),
+            "a file from before the collection"
+        );
     }
 
     #[test]

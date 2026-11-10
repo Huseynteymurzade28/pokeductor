@@ -71,6 +71,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.team_card {
         render_team(frame, app, &strings, area);
     }
+    if app.collection_card {
+        render_collection(frame, app, &strings, area);
+    }
     if app.stat_card {
         render_stat_calc(frame, app, &strings, area);
     }
@@ -209,8 +212,16 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
             // Alternate forms have no dex number; their column stays blank so
             // the names below still line up.
             let dex = match p.dex_number() {
-                Some(number) => format!("{number:>4} "),
-                None => " ".repeat(5),
+                Some(number) => format!("{number:>4}"),
+                None => " ".repeat(4),
+            };
+            // The caught mark takes the gap between the number and the name,
+            // so it costs the names no column either. A glyph rather than a
+            // colour on the number, for the reason the favourite is bold.
+            let caught = if app.browser.is_caught(&p.name) {
+                "✓"
+            } else {
+                " "
             };
             // Two slots, each with a meaning of its own: the comparison pin on
             // the left, party membership on the right. A species can be both,
@@ -233,6 +244,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, s: &Strings, area: Rect) {
                 Span::styled(pin, Style::default().fg(theme::teal())),
                 Span::styled(party, Style::default().fg(theme::green())),
                 Span::styled(dex, Style::default().fg(theme::overlay())),
+                Span::styled(caught, Style::default().fg(theme::green())),
                 Span::styled(title_case(&p.name), name),
             ]))
         })
@@ -1649,6 +1661,8 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("R", h.act_random),
         ("Space", h.act_party_toggle),
         ("B", h.act_favourite),
+        ("O", h.act_caught),
+        ("Z", h.act_collection),
         ("P", h.act_party_card),
         ("S", h.act_sort),
         ("L", h.act_language),
@@ -1670,6 +1684,8 @@ fn render_help(frame: &mut Frame, s: &Strings, full: Rect) {
         ("held:leftovers", h.act_by_held),
         ("gen:1", h.act_by_generation),
         ("fav:", h.act_by_favourite),
+        ("caught:", h.act_by_caught),
+        ("missing:", h.act_by_missing),
         ("spe>=100", h.act_by_stat),
         ("", ""),
         ("", h.ctx_evolution),
@@ -2890,6 +2906,125 @@ fn render_forms(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
     frame.render_widget(hint, rows[1]);
 }
 
+const COLLECTION_CARD_W: u16 = 60;
+/// Width of the label column on the collection card: the widest generation
+/// tag, a space and `VIII`, with a column to spare.
+const COLLECTION_LABEL_W: usize = 10;
+
+/// How much of each generation is caught, as a bar a row, with the whole dex
+/// under them.
+///
+/// The rows carry a cursor because the count is only half an answer: Enter
+/// on a generation lists what is still missing from it.
+fn render_collection(frame: &mut Frame, app: &App, s: &Strings, full: Rect) {
+    let progress = app.browser.progress();
+    let width = COLLECTION_CARD_W.min(full.width);
+    // Rows, a rule, the total, the hint and the borders.
+    let height = (progress.len() as u16 + 5).min(full.height);
+    if width < 40 || height < 6 {
+        return; // too cramped to be readable; leave the main view alone
+    }
+
+    let area = centered_fixed(width, height, full);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::mauve()))
+        .title(Span::styled(
+            s.collection_title,
+            Style::default()
+                .fg(theme::mauve())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme::surface()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let text_w = inner.width as usize;
+
+    let total = crate::browser::Progress {
+        generation: 0,
+        caught: progress.iter().map(|row| row.caught).sum(),
+        total: progress.iter().map(|row| row.total).sum(),
+    };
+
+    let mut lines: Vec<Line> = Vec::with_capacity(progress.len() + 2);
+    for (i, row) in progress.iter().enumerate() {
+        let label = Generation::new(row.generation).map_or_else(
+            || format!("{} {}", s.generation_tag, row.generation),
+            |generation| format!("{} {}", s.generation_tag, generation.roman()),
+        );
+        lines.push(collection_row(
+            &label,
+            *row,
+            i == app.collection_cursor,
+            text_w,
+        ));
+    }
+    lines.push(Line::from(Span::styled(
+        "─".repeat(text_w),
+        Style::default().fg(theme::overlay()),
+    )));
+    lines.push(collection_row(s.total_label, total, false, text_w));
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        s.collection_hint,
+        Style::default().fg(theme::overlay()),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(hint, rows[1]);
+}
+
+/// One bar of the collection card: a label, the bar, the count and the
+/// percentage. A finished row turns green, bar and numbers alike, so the
+/// generations that are done read as done without their numbers being read.
+fn collection_row(
+    label: &str,
+    row: crate::browser::Progress,
+    selected: bool,
+    width: usize,
+) -> Line<'static> {
+    let count = format!(" {:>4}/{:<4}", row.caught, row.total);
+    let percent = format!("{:>4}% ", row.percent());
+    let bar_w = width.saturating_sub(2 + COLLECTION_LABEL_W + count.len() + percent.len());
+    let filled = match row.total {
+        0 => 0,
+        total => (row.caught * bar_w / total).min(bar_w),
+    };
+    let accent = if row.complete() {
+        theme::green()
+    } else {
+        theme::mauve()
+    };
+    let label_style = if selected {
+        color::highlight(theme::mauve()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::text())
+    };
+    let numbers = if row.complete() {
+        theme::green()
+    } else {
+        theme::subtext()
+    };
+    Line::from(vec![
+        Span::styled(
+            if selected { "▶ " } else { "  " },
+            Style::default().fg(theme::mauve()),
+        ),
+        Span::styled(format!("{label:<COLLECTION_LABEL_W$}"), label_style),
+        Span::styled("█".repeat(filled), Style::default().fg(accent)),
+        Span::styled(
+            "░".repeat(bar_w - filled),
+            Style::default().fg(theme::overlay()),
+        ),
+        Span::styled(count, Style::default().fg(numbers)),
+        Span::styled(percent, Style::default().fg(numbers)),
+    ])
+}
+
 const ENCOUNTER_CARD_W: u16 = 80;
 /// Widths of the encounters card's fixed columns; the location takes the rest.
 const ENCOUNTER_METHOD_W: usize = 18;
@@ -3822,6 +3957,68 @@ mod tests {
         assert!(!bold_at("Haunter"), "anything else is not");
         let frame = text.join("\n");
         assert!(frame.contains("★1"), "and the title counts them:\n{frame}");
+    }
+
+    #[test]
+    fn a_caught_species_is_ticked_between_its_number_and_its_name() {
+        let mut app = showing_gengar();
+        app.browser.caught.insert("haunter".to_string());
+        let frame = screen(&mut app, 100, 30);
+        assert!(frame.contains("93✓Haunter"), "{frame}");
+        assert!(frame.contains("94 Gengar"), "nothing else is:\n{frame}");
+    }
+
+    #[test]
+    fn the_collection_card_counts_each_generation_and_the_whole_dex() {
+        let mut app = app_listing(&[(92, "gastly"), (94, "gengar"), (152, "chikorita")]);
+        app.color_depth = Depth::None;
+        app.browser.recompute();
+        app.browser.caught.insert("gengar".to_string());
+        app.collection_card = true;
+        app.collection_cursor = 1;
+
+        let rows = frame_rows(&mut app, 100, 30);
+        let row = |needle: &str| {
+            rows.iter()
+                .find(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("no row with {needle:?}:\n{}", rows.join("\n")))
+                .clone()
+        };
+        assert!(row("Gen I ").contains("1/2"));
+        assert!(row("Gen I ").contains("50%"));
+        assert!(row("▶ Gen II").contains("0/1"), "the cursor is on Gen II");
+        assert!(row("Total").contains("1/3"));
+    }
+
+    #[test]
+    fn the_collection_card_and_its_help_rows_fit_in_every_language() {
+        for language in Language::ALL {
+            let s = language.strings();
+            let mut app = showing_gengar();
+            app.language = language;
+            app.collection_card = true;
+            let frame = screen(&mut app, 120, 40);
+            assert!(
+                frame.contains(s.collection_hint),
+                "{language:?} cuts the hint:\n{frame}"
+            );
+
+            app.collection_card = false;
+            app.help_card = true;
+            let frame = screen(&mut app, 120, 44);
+            let h = &s.help_card;
+            for label in [
+                h.act_caught,
+                h.act_collection,
+                h.act_by_caught,
+                h.act_by_missing,
+            ] {
+                assert!(
+                    frame.contains(label),
+                    "{language:?} lacks {label:?}:\n{frame}"
+                );
+            }
+        }
     }
 
     #[test]

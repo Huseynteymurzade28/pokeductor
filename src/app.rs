@@ -240,6 +240,14 @@ pub struct App {
     /// Pokemon the quiz found to have no artwork, so it does not ask about
     /// them again this run: without a silhouette there is no question.
     pub quiz_artless: HashSet<String>,
+    /// Whether the collection card is open, and which generation it
+    /// highlights, as an index into [`Browser::progress`].
+    pub collection_card: bool,
+    pub collection_cursor: usize,
+    /// Set when something worth more than a few keystrokes changed, so the
+    /// event loop writes the session now rather than on the way out. See
+    /// [`App::toggle_caught`].
+    session_dirty: bool,
     /// Whether the help overlay is open.
     pub help_card: bool,
     /// Machine-translated flavor blurbs, keyed by `(pokemon name, lang code)`.
@@ -337,6 +345,9 @@ impl App {
             quiz_card: false,
             quiz_loading: None,
             quiz_artless: HashSet::new(),
+            collection_card: false,
+            collection_cursor: 0,
+            session_dirty: false,
             help_card: false,
             translations: HashMap::new(),
             translating: HashSet::new(),
@@ -426,6 +437,13 @@ impl App {
                 }
             }
 
+            // Awaited rather than spawned: two writes racing each other could
+            // land out of order and leave the older snapshot on disk. The file
+            // is a few kilobytes, so the loop does not notice the wait.
+            if std::mem::take(&mut self.session_dirty) {
+                session::store(&self.snapshot()).await;
+            }
+
             // Written between frames, where ratatui is not mid-way through
             // its own output. A terminal that does not understand OSC 52
             // ignores it, which is also why there is no error to report.
@@ -480,6 +498,7 @@ impl App {
             generation: (self.generation != Generation::LATEST).then_some(self.generation.number()),
             quiz_streak: self.quiz.streak,
             quiz_best: self.quiz.best,
+            caught: self.browser.caught.iter().cloned().collect(),
         }
     }
 
@@ -526,6 +545,7 @@ impl App {
         // Before the list arrives, so a `fav:` query from the command line
         // narrows against the restored set rather than an empty one.
         self.browser.favourites = session.favourites.into_iter().collect();
+        self.browser.caught = session.caught.into_iter().collect();
 
         // The party card reads typings out of `details`, which is empty on a
         // cold start, so a restored member contributes nothing to the analysis
@@ -1025,6 +1045,10 @@ impl App {
         }
         if self.team_card {
             self.handle_team_key(key);
+            return;
+        }
+        if self.collection_card {
+            self.handle_collection_key(key);
             return;
         }
         if self.stat_card {
@@ -1842,6 +1866,8 @@ impl App {
             KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort(),
             KeyCode::Char(' ') => self.toggle_team_membership(),
             KeyCode::Char('b') | KeyCode::Char('B') => self.browser.toggle_favourite(),
+            KeyCode::Char('o') | KeyCode::Char('O') => self.toggle_caught(),
+            KeyCode::Char('z') | KeyCode::Char('Z') => self.open_collection(),
             KeyCode::Char('p') | KeyCode::Char('P') => self.open_team_card(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_abilities(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_moves(),
@@ -1855,6 +1881,76 @@ impl App {
             KeyCode::Char('?') => self.help_card = true,
             code => self.step_generation(code),
         }
+    }
+
+    /// Marks the highlighted entry as caught, or unmarks it, and has the
+    /// session written straight away.
+    ///
+    /// Everything else in the session is written once, on the way out, which
+    /// is fine for a party of six: a run that is killed loses a few
+    /// keystrokes. A collection is hundreds of marks made over months, often
+    /// in a pane that is closed with its terminal rather than quit, so each
+    /// mark is kept as it is made.
+    fn toggle_caught(&mut self) {
+        self.browser.toggle_caught();
+        self.session_dirty = true;
+    }
+
+    /// Opens the collection card on the generation of the species under the
+    /// cursor, since that is the one whose count the last mark changed.
+    fn open_collection(&mut self) {
+        let rows = self.browser.progress().len();
+        if rows == 0 {
+            return; // no list yet, so nothing to count
+        }
+        let generation = self
+            .browser
+            .list_state
+            .selected()
+            .and_then(|pos| self.browser.filtered.get(pos))
+            .and_then(|&idx| self.browser.all.get(idx))
+            .and_then(PokemonEntry::generation);
+        self.collection_cursor = generation
+            .map_or(0, |gen| usize::from(gen) - 1)
+            .min(rows - 1);
+        self.collection_card = true;
+    }
+
+    fn handle_collection_key(&mut self, key: KeyEvent) {
+        let len = self.browser.progress().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('z' | 'Z' | 'q' | 'Q') => self.collection_card = false,
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                self.collection_cursor = (self.collection_cursor + len - 1) % len;
+            }
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                self.collection_cursor = (self.collection_cursor + 1) % len;
+            }
+            KeyCode::Enter => self.show_missing_from_generation(),
+            _ => {}
+        }
+    }
+
+    /// Closes the collection card on what is left to catch in the generation
+    /// under its cursor.
+    ///
+    /// An ordinary query written into the search box, as the lookup card's
+    /// is: `gen:3 missing:` can be read, edited and narrowed further with a
+    /// type. A finished generation has nothing missing, so it lists what was
+    /// caught instead of an empty list.
+    fn show_missing_from_generation(&mut self) {
+        let Some(row) = self.browser.progress().get(self.collection_cursor).copied() else {
+            return;
+        };
+        let side = if row.complete() {
+            "caught:"
+        } else {
+            "missing:"
+        };
+        self.browser.query = format!("gen:{} {side}", row.generation);
+        self.recompute_filter();
+        self.collection_card = false;
+        self.focus = Focus::List;
     }
 
     /// Opens the stat calculator over the species on display. Its base stats
@@ -2398,6 +2494,57 @@ mod tests {
         // Ivysaur is loaded, and the chain is out of the way of it.
         assert_eq!(app.selected_name.as_deref(), Some("ivysaur"));
         assert!(!app.evo_card);
+    }
+
+    #[test]
+    fn the_collection_card_opens_on_the_generation_under_the_cursor() {
+        let mut app = app_listing(&[(1, "bulbasaur"), (152, "chikorita"), (252, "treecko")]);
+        app.recompute_filter();
+        app.browser.list_state.select(Some(2)); // treecko, generation 3
+        app.handle_list_key(press(KeyCode::Char('z')));
+        assert!(app.collection_card);
+        assert_eq!(app.collection_cursor, 2);
+    }
+
+    #[test]
+    fn enter_on_a_generation_lists_what_is_missing_from_it() {
+        let mut app = app_listing(&[(1, "bulbasaur"), (4, "charmander"), (152, "chikorita")]);
+        app.recompute_filter();
+        app.browser.caught.insert("bulbasaur".to_string());
+        app.open_collection();
+        app.handle_collection_key(press(KeyCode::Enter));
+
+        assert!(!app.collection_card);
+        assert_eq!(app.browser.query, "gen:1 missing:");
+        assert_eq!(app.current_name().as_deref(), Some("charmander"));
+        assert_eq!(app.browser.filtered.len(), 1);
+    }
+
+    #[test]
+    fn enter_on_a_finished_generation_lists_what_was_caught() {
+        // Its missing list is empty, and an empty list is not an answer.
+        let mut app = app_listing(&[(1, "bulbasaur"), (152, "chikorita")]);
+        app.recompute_filter();
+        app.browser.caught.insert("bulbasaur".to_string());
+        app.open_collection();
+        app.handle_collection_key(press(KeyCode::Enter));
+        assert_eq!(app.browser.query, "gen:1 caught:");
+        assert_eq!(app.current_name().as_deref(), Some("bulbasaur"));
+    }
+
+    #[test]
+    fn what_was_caught_survives_a_restart() {
+        let mut app = app_listing(&[(1, "bulbasaur"), (4, "charmander")]);
+        app.recompute_filter();
+        app.handle_list_key(press(KeyCode::Char('o')));
+        assert!(app.session_dirty, "a mark is written as it is made");
+        let stored = app.snapshot();
+        assert_eq!(stored.caught, ["bulbasaur"]);
+
+        let mut next = app_listing(&[(1, "bulbasaur"), (4, "charmander")]);
+        next.restore(stored);
+        assert!(next.browser.is_caught("bulbasaur"));
+        assert!(!next.browser.is_caught("charmander"));
     }
 
     #[test]

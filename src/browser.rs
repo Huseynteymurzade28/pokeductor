@@ -97,6 +97,37 @@ pub struct Browser {
     /// Species marked as favourites, by raw API name. What `fav:` narrows to.
     /// Ordered so the session file lists them the same way every run.
     pub favourites: BTreeSet<String>,
+    /// Entries marked as caught, by raw API name. What `caught:` narrows to
+    /// and `missing:` narrows away from, and what the collection card counts.
+    ///
+    /// A set of its own rather than a second meaning for favourites: a
+    /// favourite is a species you like, and a living dex is mostly species
+    /// you do not.
+    pub caught: BTreeSet<String>,
+}
+
+/// How much of one generation has been caught.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// The generation, numbered from 1.
+    pub generation: u8,
+    pub caught: usize,
+    pub total: usize,
+}
+
+impl Progress {
+    /// Caught as a whole percentage, rounded down, so 100 is only ever said
+    /// of a generation with nothing left in it.
+    pub fn percent(self) -> usize {
+        match self.total {
+            0 => 0,
+            total => self.caught * 100 / total,
+        }
+    }
+
+    pub fn complete(self) -> bool {
+        self.total > 0 && self.caught == self.total
+    }
 }
 
 impl Browser {
@@ -122,6 +153,9 @@ impl Browser {
                 query.matches_entry(p)
                     && self.in_every_roster(&query, &p.name)
                     && (!query.favourites || self.favourites.contains(&p.name))
+                    && query
+                        .caught
+                        .is_none_or(|caught| self.caught.contains(&p.name) == caught)
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -203,6 +237,65 @@ impl Browser {
 
     pub fn is_favourite(&self, name: &str) -> bool {
         self.favourites.contains(name)
+    }
+
+    /// Marks the highlighted entry as caught, or unmarks it.
+    ///
+    /// Under a `caught:` or `missing:` filter the entry has just left the
+    /// list, which is rebuilt as it is for a favourite. That is what makes
+    /// `missing:` a checklist: marking one off takes it away and puts the
+    /// cursor on the next.
+    pub fn toggle_caught(&mut self) {
+        let Some(name) = self.current_name() else {
+            return;
+        };
+        let position = self.list_state.selected();
+        if !self.caught.remove(&name) {
+            self.caught.insert(name);
+        }
+        if self.parsed.caught.is_some() {
+            self.recompute();
+            // `recompute` sends a cursor whose entry is gone to the top, which
+            // is right for a search and wrong for a checklist being worked
+            // down: the row that moved up into the gap is the next one.
+            if let Some(position) = position {
+                if !self.filtered.is_empty() {
+                    let last = self.filtered.len() - 1;
+                    self.list_state.select(Some(position.min(last)));
+                }
+            }
+        }
+    }
+
+    pub fn is_caught(&self, name: &str) -> bool {
+        self.caught.contains(name)
+    }
+
+    /// How much of each generation is caught, oldest first.
+    ///
+    /// Counts species only. An alternate form can be marked like anything
+    /// else in the list, but it has no generation to be counted under, and a
+    /// dex is complete without its Megas.
+    pub fn progress(&self) -> Vec<Progress> {
+        let mut rows: Vec<Progress> = Vec::new();
+        for entry in &self.all {
+            let Some(generation) = entry.generation() else {
+                continue;
+            };
+            let index = usize::from(generation) - 1;
+            while rows.len() <= index {
+                rows.push(Progress {
+                    generation: rows.len() as u8 + 1,
+                    caught: 0,
+                    total: 0,
+                });
+            }
+            rows[index].total += 1;
+            if self.caught.contains(&entry.name) {
+                rows[index].caught += 1;
+            }
+        }
+        rows
     }
 
     /// Cycles the sort order, keeping the highlighted species under the cursor
@@ -289,6 +382,84 @@ mod tests {
             .iter()
             .map(|&idx| browser.all[idx].name.as_str())
             .collect()
+    }
+
+    #[test]
+    fn caught_and_missing_split_the_list_in_two() {
+        let mut browser = kanto_ghosts();
+        browser.caught.insert("haunter".to_string());
+
+        search(&mut browser, "caught:");
+        assert_eq!(visible(&browser), ["haunter"]);
+        search(&mut browser, "missing:");
+        assert_eq!(visible(&browser), ["pikachu", "gastly", "gengar"]);
+    }
+
+    #[test]
+    fn marking_one_off_a_missing_list_leaves_the_cursor_on_the_next() {
+        // What makes `missing:` a checklist to work down rather than a list
+        // that throws you back to its top after every mark.
+        let mut browser = kanto_ghosts();
+        search(&mut browser, "missing:");
+        browser.list_state.select(Some(1)); // gastly
+        browser.toggle_caught();
+
+        assert!(browser.is_caught("gastly"));
+        assert_eq!(visible(&browser), ["pikachu", "haunter", "gengar"]);
+        assert_eq!(browser.current_name().as_deref(), Some("haunter"));
+
+        // Off the end, the cursor stays on the last row there is.
+        browser.list_state.select(Some(2)); // gengar
+        browser.toggle_caught();
+        assert_eq!(browser.current_name().as_deref(), Some("haunter"));
+    }
+
+    #[test]
+    fn marking_without_a_collection_filter_moves_nothing() {
+        let mut browser = kanto_ghosts();
+        browser.list_state.select(Some(2)); // haunter
+        browser.toggle_caught();
+        assert!(browser.is_caught("haunter"));
+        assert_eq!(browser.current_name().as_deref(), Some("haunter"));
+        browser.toggle_caught();
+        assert!(!browser.is_caught("haunter"), "and a second press unmarks");
+    }
+
+    #[test]
+    fn progress_counts_species_by_generation_and_leaves_forms_out() {
+        let mut browser = browsing(&[
+            (1, "bulbasaur"),
+            (25, "pikachu"),
+            (152, "chikorita"),
+            (10100, "raichu-alola"),
+        ]);
+        browser.caught.insert("pikachu".to_string());
+        browser.caught.insert("raichu-alola".to_string());
+
+        let progress = browser.progress();
+        assert_eq!(progress.len(), 2);
+        assert_eq!((progress[0].caught, progress[0].total), (1, 2));
+        assert_eq!((progress[1].caught, progress[1].total), (0, 1));
+        assert_eq!(progress[0].percent(), 50);
+        assert!(!progress[0].complete());
+    }
+
+    #[test]
+    fn a_percentage_only_reaches_a_hundred_when_nothing_is_left() {
+        let nearly = Progress {
+            generation: 1,
+            caught: 150,
+            total: 151,
+        };
+        assert_eq!(nearly.percent(), 99);
+        assert!(!nearly.complete());
+        let empty = Progress {
+            generation: 1,
+            caught: 0,
+            total: 0,
+        };
+        assert_eq!(empty.percent(), 0, "an empty generation divides nothing");
+        assert!(!empty.complete());
     }
 
     #[test]

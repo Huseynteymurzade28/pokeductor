@@ -17,6 +17,8 @@
 //! gen:1 gen:2          introduced in either generation
 //! gen:1 type:ghost ga  all three, combined
 //! fav:                 the species marked as favourites
+//! caught:              the species marked as caught
+//! missing: gen:1       what is still missing from generation 1
 //! spe>=110             base Speed of at least 110
 //! bst>600 type:dragon  base stat total over 600, and Dragon
 //! ```
@@ -67,6 +69,15 @@ pub struct Query {
     /// favourites to narrow to, and `fav:yes` reading as "no filter" would be
     /// a surprise.
     pub favourites: bool,
+    /// Which side of the collection a `caught:` or `missing:` term asked
+    /// for: `Some(true)` is the species marked as caught, `Some(false)` the
+    /// ones that are not.
+    ///
+    /// Two words rather than `caught:no`, since what is left to catch is the
+    /// question a collection is opened to answer and deserves to be typed
+    /// whole. The last of the two wins: asking for both at once could only
+    /// ever match nothing.
+    pub caught: Option<bool>,
     /// Comparisons on base stats, from terms like `spe>=110`.
     ///
     /// Combined with AND, like the roster terms: `hp>100 def>100` is the
@@ -167,6 +178,8 @@ impl Query {
                     }
                 }
                 Some(("fav" | "f", _)) => query.favourites = true,
+                Some(("caught" | "c", _)) => query.caught = Some(true),
+                Some(("missing" | "m", _)) => query.caught = Some(false),
                 _ => words.push(token),
             }
         }
@@ -554,6 +567,24 @@ mod tests {
             assert_eq!(query.text, "", "{raw} is not a name to search for");
         }
         assert!(!Query::parse("favourite").favourites, "no colon, no term");
+    }
+
+    #[test]
+    fn caught_and_missing_ask_for_opposite_sides_of_the_collection() {
+        assert_eq!(Query::parse("caught:").caught, Some(true));
+        assert_eq!(Query::parse("c:").caught, Some(true));
+        assert_eq!(Query::parse("missing:").caught, Some(false));
+        assert_eq!(Query::parse("m: gen:1").caught, Some(false));
+        assert_eq!(Query::parse("caught").caught, None, "no colon, no term");
+        assert_eq!(Query::parse("gen:1").caught, None);
+    }
+
+    #[test]
+    fn the_last_of_caught_and_missing_wins() {
+        // Both at once could only match nothing, and a list that is empty
+        // for a reason nobody can see is worse than taking the later word.
+        assert_eq!(Query::parse("caught: missing:").caught, Some(false));
+        assert_eq!(Query::parse("missing: caught:").caught, Some(true));
     }
 
     #[test]

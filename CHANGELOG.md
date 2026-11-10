@@ -17,6 +17,12 @@ Tagging began at `0.3.0`, so those two link commit ranges rather than tags.
   streak, or `?` to give up. Answers ignore case, accents and punctuation, and
   are accepted in the interface language where PokeAPI has the name. The
   streak and best streak are kept between runs. (#54)
+- A collection. `O` marks the highlighted entry as caught, shown as a `✓`
+  beside its number; `caught:` and `missing:` narrow the list to either side
+  and combine with every other term, so `missing: gen:1` is what Kanto still
+  owes you. `Z` opens a card with a progress bar per generation and for the
+  whole Pokédex, and `Enter` on a row lists what is missing from it. Marks are
+  written to the session file as they are made.
 
 ### Changed
 

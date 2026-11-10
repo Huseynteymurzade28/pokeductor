@@ -78,11 +78,19 @@ pub async fn run_list(raw: &str) -> anyhow::Result<()> {
     for term in &query.rosters {
         rosters.insert(term.clone(), roster(&client, term).await?);
     }
-    let favourites = match query.favourites {
-        true => session::load().await.favourites.into_iter().collect(),
-        false => BTreeSet::new(),
+    // Only read when a term asks, so a query about types never depends on
+    // whether there is a session file to open.
+    let marks = match query.favourites || query.caught.is_some() {
+        true => {
+            let session = session::load().await;
+            Marks {
+                favourites: session.favourites.into_iter().collect(),
+                caught: session.caught.into_iter().collect(),
+            }
+        }
+        false => Marks::default(),
     };
-    let matches = matching(&entries, raw, rosters, favourites);
+    let matches = matching(&entries, raw, rosters, marks);
 
     let mut progress = Progress::new(matches.len());
     let mut records = futures::stream::iter(&matches)
@@ -132,22 +140,31 @@ async fn roster(client: &reqwest::Client, term: &RosterTerm) -> anyhow::Result<H
     }
 }
 
+/// What the session file has to say about the entries: the two sets the
+/// `fav:`, `caught:` and `missing:` terms are answered from.
+#[derive(Debug, Default)]
+pub struct Marks {
+    pub favourites: BTreeSet<String>,
+    pub caught: BTreeSet<String>,
+}
+
 /// The entries `raw` matches, in Pokedex order, with alternate forms after.
 ///
-/// This is the sidebar's own filter, fed the rosters and favourites it would
+/// This is the sidebar's own filter, fed the rosters and marks it would
 /// have, so the command line and the search box cannot disagree about what a
 /// query means.
 pub fn matching(
     entries: &[PokemonEntry],
     raw: &str,
     rosters: HashMap<RosterTerm, HashSet<String>>,
-    favourites: BTreeSet<String>,
+    marks: Marks,
 ) -> Vec<PokemonEntry> {
     let mut browser = Browser {
         all: entries.to_vec(),
         query: raw.to_string(),
         rosters,
-        favourites,
+        favourites: marks.favourites,
+        caught: marks.caught,
         ..Browser::default()
     };
     browser.recompute();
@@ -905,7 +922,7 @@ mod tests {
             &kanto_and_friends(),
             "type:ghost",
             HashMap::from([ghosts()]),
-            BTreeSet::new(),
+            Marks::default(),
         );
         assert_eq!(
             names(&found),
@@ -919,14 +936,14 @@ mod tests {
             &kanto_and_friends(),
             "type:ghost gen:1 ga",
             HashMap::from([ghosts()]),
-            BTreeSet::new(),
+            Marks::default(),
         );
         assert_eq!(names(&found), ["gastly", "gengar"]);
         let found = matching(
             &kanto_and_friends(),
             "dex:1-93",
             HashMap::new(),
-            BTreeSet::new(),
+            Marks::default(),
         );
         assert_eq!(names(&found), ["bulbasaur", "gastly", "haunter"]);
     }
@@ -937,7 +954,7 @@ mod tests {
             &kanto_and_friends(),
             "type:geist gen:2",
             HashMap::from([ghosts()]),
-            BTreeSet::new(),
+            Marks::default(),
         );
         assert_eq!(names(&found), ["misdreavus"]);
     }
@@ -945,8 +962,25 @@ mod tests {
     #[test]
     fn fav_lists_the_favourites_it_is_given() {
         let favourites = BTreeSet::from(["dragonite".to_string(), "gastly".to_string()]);
-        let found = matching(&kanto_and_friends(), "fav:", HashMap::new(), favourites);
+        let marks = Marks {
+            favourites,
+            ..Marks::default()
+        };
+        let found = matching(&kanto_and_friends(), "fav:", HashMap::new(), marks);
         assert_eq!(names(&found), ["gastly", "dragonite"]);
+    }
+
+    #[test]
+    fn missing_lists_what_the_collection_it_is_given_lacks() {
+        let marks = || Marks {
+            caught: BTreeSet::from(["gastly".to_string()]),
+            ..Marks::default()
+        };
+        let found = matching(&kanto_and_friends(), "caught:", HashMap::new(), marks());
+        assert_eq!(names(&found), ["gastly"]);
+        let found = matching(&kanto_and_friends(), "missing:", HashMap::new(), marks());
+        assert!(!names(&found).contains(&"gastly"));
+        assert_eq!(found.len(), kanto_and_friends().len() - 1);
     }
 
     #[test]
@@ -956,14 +990,14 @@ mod tests {
             &kanto_and_friends(),
             "type:plasma",
             HashMap::from([empty]),
-            BTreeSet::new()
+            Marks::default()
         )
         .is_empty());
         assert!(matching(
             &kanto_and_friends(),
             "agumon",
             HashMap::new(),
-            BTreeSet::new()
+            Marks::default()
         )
         .is_empty());
     }
