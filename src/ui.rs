@@ -75,10 +75,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.damage_card {
         render_damage(frame, app, &strings, area);
     }
-    if app.team_card {
+    // Not behind its own suggestions: the two are centred on the same spot
+    // and differ in size, so the party card would show as a strip of stray
+    // letters down one edge of the card over it.
+    if app.team_card && !app.suggest_card {
         render_team(frame, app, &strings, area);
     }
-    // After the party card, which it opens over and goes back to.
+    // In the party card's place while open, and gives it back on the way out.
     if app.suggest_card {
         render_suggestions(frame, app, &strings, area);
     }
@@ -1668,7 +1671,7 @@ fn chip_rows(
 /// The ability card: each of the species' abilities with what it actually does.
 /// The overlay is two columns wide so the whole key map fits without scrolling
 /// on a standard 24-row terminal.
-const HELP_CARD_W: u16 = 86;
+const HELP_CARD_W: u16 = 94;
 
 /// The help overlay: every binding in one place, grouped by where it applies.
 ///
@@ -4404,6 +4407,18 @@ mod tests {
             let frame = screen(&mut app, 120, 46);
             assert!(frame.contains(s.help_card.act_suggest), "{language:?}");
         }
+    }
+
+    #[test]
+    fn the_suggestions_card_takes_the_party_cards_place_rather_than_covering_it() {
+        let s = Language::English.strings();
+        let mut app = showing_gengar();
+        app.team = vec!["gengar".to_string()];
+        app.team_card = true;
+        app.suggest_card = true;
+        let frame = screen(&mut app, 120, 40);
+        assert!(frame.contains(s.suggest_title.trim()), "{frame}");
+        assert!(!frame.contains(s.team_title.trim()), "{frame}");
     }
 
     #[test]
